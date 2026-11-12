@@ -64,7 +64,6 @@ def main() -> int:
         pass
     temp_dir = tempfile.TemporaryDirectory()
     temp_path = Path(temp_dir.name)
-    db_path = temp_path / "browser_article_test.db"
     uploads_dir = temp_path / "uploads"
     generated_dir = temp_path / "generated"
     storage_dir = temp_path / "private_storage"
@@ -73,7 +72,6 @@ def main() -> int:
     env = os.environ.copy()
     env.update({
         "HANDRAW_PRIVATE_STORAGE": str(storage_dir),
-        "HANDRAW_DB_PATH": str(db_path),
         "HANDRAW_UPLOADS_DIR": str(uploads_dir),
         "HANDRAW_GENERATED_DIR": str(generated_dir),
         "HANDRAW_DEMO_MODE": "1",
@@ -81,16 +79,17 @@ def main() -> int:
         "HANDRAW_ALLOWED_ORIGINS": f"http://127.0.0.1:{PORT},http://localhost:{PORT}",
     })
 
-    from tests.legacy_database import init_legacy_database
+    from tests.browser_postgres import browser_postgres_database
     from backend.server import SESSION_COOKIE_NAME
     from backend.services import register_user
 
-    init_db = init_legacy_database(db_path)
+    init_db = browser_postgres_database()
     user, session_token = register_user(init_db, "art_tester", "Pass123456")
     init_db.close()
 
+    env["HANDRAW_DATABASE_URL"] = init_db._dsn
     server_proc = subprocess.Popen(
-        [sys.executable, "-m", "backend.server", "--port", str(PORT), "--demo-mode", "--db", str(db_path)],
+        [sys.executable, "-m", "backend.server", "--port", str(PORT), "--demo-mode"],
         env=env,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,

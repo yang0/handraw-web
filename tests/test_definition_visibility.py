@@ -41,7 +41,6 @@ class TestDefinitionVisibility(TestCase):
     def setUp(self) -> None:
         self.temp_dir = tempfile.TemporaryDirectory()
         root = Path(self.temp_dir.name)
-        self.db_path = root / "test_def_vis.db"
         self.env = patch.dict(
             os.environ,
             {

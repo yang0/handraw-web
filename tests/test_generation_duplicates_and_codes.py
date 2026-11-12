@@ -34,7 +34,6 @@ class GenerationDuplicatesAndCodesTests(unittest.TestCase):
     def setUp(self) -> None:
         self.temp_dir = tempfile.TemporaryDirectory()
         root = Path(self.temp_dir.name)
-        self.db_path = root / "test_dup_and_codes.db"
         img_cfg = root / "image-service.json"
         img_cfg.write_text(json.dumps({"key": "mock-test-key", "url": "http://127.0.0.1:9999"}))
         self.env = patch.dict(

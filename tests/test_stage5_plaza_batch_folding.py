@@ -20,7 +20,6 @@ from backend.admin_services import admin_moderate_work
 class Stage5PlazaBatchFoldingTests(unittest.TestCase):
     def setUp(self) -> None:
         self.temp_dir = tempfile.mkdtemp()
-        self.db_path = Path(self.temp_dir) / "test_stage5.db"
         self._env = patch.dict(
             os.environ,
             {

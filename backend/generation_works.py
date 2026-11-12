@@ -514,11 +514,10 @@ def _project_generation_impl(
         external_run_id=batch_id or gen_id,
         expected_count=int(row["batch_total"] or 1) if batch_id else 1,
     )
-    if getattr(conn, "dialect", "") == "postgresql":
-        conn.execute(
-            "SELECT id FROM generation_runs WHERE id=? FOR UPDATE",
-            (canonical_run_id,),
-        ).fetchone()
+    conn.execute(
+        "SELECT id FROM generation_runs WHERE id=? FOR UPDATE",
+        (canonical_run_id,),
+    ).fetchone()
     # The author/admin may have deleted this work after a successful run.
     # Never resurrect it on gateway retries, even when the original work row
     # was physically removed and no longer has a moderation status.
@@ -704,8 +703,7 @@ def reconcile_work_topics(conn: PgConnection, *, batch_size: int = 100) -> dict[
     discussion in the publication transaction; this optional operator action
     only fixes an interrupted current-generation linking operation. It never
     modifies existing topic moderation, listing timestamps or replies.
-    Works under PostgreSQL and SQLite, including when called inside a write
-    transaction.
+    Supports existing PostgreSQL write transactions.
     """
     from .resource_discussions import ensure_topic
     limit = max(1, min(1000, int(batch_size)))

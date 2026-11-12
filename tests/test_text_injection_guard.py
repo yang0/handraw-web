@@ -132,7 +132,6 @@ class TextInjectionIntegrationHTTPTests(unittest.TestCase):
     def setUp(self):
         self.temp_dir = tempfile.TemporaryDirectory()
         root = Path(self.temp_dir.name)
-        self.db_path = root / "inject_test.db"
         self.uploads_dir = root / "uploads"
         self.uploads_dir.mkdir(parents=True, exist_ok=True)
         self.generated_dir = root / "generated"

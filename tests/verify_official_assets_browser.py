@@ -24,7 +24,7 @@ from playwright.sync_api import sync_playwright
 REPO_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO_ROOT))
 
-from tests.legacy_database import init_legacy_database
+from tests.browser_postgres import browser_postgres_database
 from backend.server import SESSION_COOKIE_NAME, HandrawRequestHandler
 from backend.services import register_user
 
@@ -39,7 +39,6 @@ def make_test_png_bytes(width: int = 500, height: int = 500) -> bytes:
 def run_browser_verification() -> None:
     temp_dir = tempfile.TemporaryDirectory()
     root = Path(temp_dir.name)
-    db_path = root / "browser_official_test.db"
     uploads_dir = root / "uploads"
     uploads_dir.mkdir(parents=True, exist_ok=True)
     generated_dir = root / "generated"
@@ -49,7 +48,6 @@ def run_browser_verification() -> None:
     local_dir.mkdir(parents=True, exist_ok=True)
 
     env = {
-        "HANDRAW_DB_PATH": str(db_path),
         "HANDRAW_UPLOADS_DIR": str(uploads_dir),
         "HANDRAW_GENERATED_DIR": str(generated_dir),
         "HANDRAW_DATA_DIR": str(root),
@@ -62,7 +60,7 @@ def run_browser_verification() -> None:
         old_env[k] = os.environ.get(k)
         os.environ[k] = v
 
-    db = init_legacy_database(db_path)
+    db = browser_postgres_database()
     httpd = ThreadingHTTPServer(("127.0.0.1", 0), HandrawRequestHandler)
     httpd.channel_role = "main"  # type: ignore[attr-defined]
     httpd.db = db  # type: ignore[attr-defined]
@@ -87,8 +85,8 @@ def run_browser_verification() -> None:
         with db.transaction() as tx:
             tx.execute(
                 """
-                INSERT INTO user_uploads (user_id, image_url, file_path, name_zh, cat, sha256, created_at, updated_at)
-                VALUES (?, '/uploads/official_fe069.png', ?, '官方宋锦封面', 'other', 'dummy_fe069_sha', '2026-11-03T12:00:00Z', '2026-11-03T12:00:00Z')
+                INSERT INTO user_uploads (id, user_id, image_url, file_path, name_zh, cat, sha256, created_at, updated_at)
+                VALUES ('browser-official-upload', ?, '/uploads/official_fe069.png', ?, '官方宋锦封面', 'other', 'dummy_fe069_sha', '2026-11-03T12:00:00Z', '2026-11-03T12:00:00Z')
                 """,
                 (admin_user["id"], str(test_img_path)),
             )

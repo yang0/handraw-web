@@ -18,7 +18,7 @@ if hasattr(sys.stdout, "reconfigure"):
 
 from playwright.sync_api import sync_playwright
 
-from tests.legacy_database import init_legacy_database
+from tests.browser_postgres import browser_postgres_database
 from backend import server as server_module
 from backend.server import create_channel_server
 from backend.services import publish_user_work, register_user
@@ -33,8 +33,7 @@ def run_verification():
     db = None
     srv = None
     try:
-        db_path = Path(temp_dir.name) / "browser_verify.db"
-        db = init_legacy_database(db_path)
+        db = browser_postgres_database()
 
         author, _ = register_user(db, "demo_creator", "password123")
 
@@ -210,6 +209,16 @@ def run_verification():
             mobile_shot = "C:/tmp/works_masonry_mobile.png"
             page_m.screenshot(path=mobile_shot)
             print(f"[OK] Saved mobile screenshot to {mobile_shot}")
+
+            # Independent tablet context also reads the PostgreSQL-backed feed.
+            page_t = browser.new_page(viewport={"width": 820, "height": 1180})
+            page_t.goto(target_url, wait_until="networkidle")
+            page_t.locator(".hw-wb-card").first.wait_for(state="visible")
+            assert page_t.locator(".hw-wb-card").count() >= 24
+            assert page_t.evaluate("document.documentElement.scrollWidth <= innerWidth + 1")
+            page_t.screenshot(path="C:/tmp/works_masonry_tablet.png")
+            print("[OK] Tablet 820 feed rendered without horizontal overflow")
+            page_t.close()
 
             # -------------------------------------------------------------
             # Test C: Resize Stability & Scroll Anchor

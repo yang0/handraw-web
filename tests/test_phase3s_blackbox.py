@@ -19,6 +19,7 @@ Covers:
 10. Performance benchmark on review dataset: fast O(1) column access on boot and workspace.
 """
 from __future__ import annotations
+from tests.postgres_support import open_isolated_postgres
 
 import json
 import os
@@ -33,8 +34,6 @@ from http.server import ThreadingHTTPServer
 from pathlib import Path
 from unittest.mock import patch
 
-from tests.legacy_database import Database
-from tests.legacy_database import init_legacy_database
 from backend.server import SESSION_COOKIE_NAME, HandrawRequestHandler
 from backend.services import (
     ServiceError,
@@ -54,11 +53,9 @@ class Phase3sBlackboxTests(unittest.TestCase):
     def setUp(self) -> None:
         self.temp_dir = tempfile.TemporaryDirectory()
         root = Path(self.temp_dir.name)
-        self.db_path = root / "p3s_test.db"
         self.env = patch.dict(
             os.environ,
             {
-                "HANDRAW_DB_PATH": str(self.db_path),
                 "HANDRAW_UPLOADS_DIR": str(root / "uploads"),
                 "HANDRAW_GENERATED_DIR": str(root / "generated"),
                 "HANDRAW_DEMO_MODE": "1",
@@ -67,7 +64,7 @@ class Phase3sBlackboxTests(unittest.TestCase):
             },
         )
         self.env.start()
-        self.db = init_legacy_database(self.db_path)
+        self.db = open_isolated_postgres(self, seed=True)
         self.httpd = ThreadingHTTPServer(("127.0.0.1", 0), HandrawRequestHandler)
         self.httpd.channel_role = "main"  # type: ignore[attr-defined]
         self.httpd.db = self.db  # type: ignore[attr-defined]
@@ -739,15 +736,15 @@ class Phase3sBlackboxTests(unittest.TestCase):
         applied = self.db.migrate()
         self.assertEqual(applied, [])
 
-        cols_gen = [r["name"] for r in self.db.get_conn().execute("PRAGMA table_info(studio_generations)").fetchall()]
+        cols_gen = [r["name"] for r in self.db.get_conn().execute("SELECT ordinal_position-1 AS cid,column_name AS name FROM information_schema.columns WHERE table_schema='public' AND table_name='studio_generations' ORDER BY ordinal_position").fetchall()]
         self.assertIn("visible_prompt", cols_gen)
         self.assertIn("prompt_masked", cols_gen)
         self.assertIn("system_append_json", cols_gen)
 
-        cols_work = [r["name"] for r in self.db.get_conn().execute("PRAGMA table_info(works)").fetchall()]
+        cols_work = [r["name"] for r in self.db.get_conn().execute("SELECT ordinal_position-1 AS cid,column_name AS name FROM information_schema.columns WHERE table_schema='public' AND table_name='works' ORDER BY ordinal_position").fetchall()]
         self.assertIn("prompt_has_secret", cols_work)
 
-        cols_top = [r["name"] for r in self.db.get_conn().execute("PRAGMA table_info(forum_topics)").fetchall()]
+        cols_top = [r["name"] for r in self.db.get_conn().execute("SELECT ordinal_position-1 AS cid,column_name AS name FROM information_schema.columns WHERE table_schema='public' AND table_name='forum_topics' ORDER BY ordinal_position").fetchall()]
         self.assertIn("recipe_has_secret", cols_top)
 
     def test_recipe_prompt_too_long_cause_clarification(self) -> None:
@@ -1060,8 +1057,8 @@ class Phase3sBlackboxTests(unittest.TestCase):
             )
             tx.execute(
                 """
-                INSERT INTO curation_versions (submission_id, revision, payload_json, created_at)
-                VALUES (?, 1, ?, '2026-10-31T00:00:00Z')
+                INSERT INTO curation_versions (id, submission_id, revision, payload_json, created_at)
+                VALUES (gen_random_uuid()::text, ?, 1, ?, '2026-10-31T00:00:00Z')
                 """,
                 (sub_id, json.dumps(secret_payload, ensure_ascii=False)),
             )
@@ -1410,8 +1407,8 @@ class Phase3sBlackboxTests(unittest.TestCase):
             )
             tx.execute(
                 """
-                INSERT INTO curation_versions (submission_id, revision, payload_json, created_at)
-                VALUES (?, 1, ?, '2026-10-31T00:00:00Z')
+                INSERT INTO curation_versions (id, submission_id, revision, payload_json, created_at)
+                VALUES (gen_random_uuid()::text, ?, 1, ?, '2026-10-31T00:00:00Z')
                 """,
                 (sub_id, json.dumps(secret_payload, ensure_ascii=False)),
             )
@@ -1560,10 +1557,7 @@ class Phase3sBlackboxTests(unittest.TestCase):
         # Ensure short_secret is in catalog_assets for this test so it is detected as secret
         with self.db.transaction() as tx:
             tx.execute(
-                """
-                INSERT OR IGNORE INTO catalog_assets (code, name, kind, source_type, tier, unlock_cost, image_url, author_username, status, secret_blackbox_prompt, published_at_ms, created_at, updated_at)
-                VALUES ('FX-SHORT-SEC', '短词画风', 'style', 'exclusive', 'A', 10, '/img.webp', 'alice', 'published', ?, 1700000000000, '2026-10-31T00:00:00Z', '2026-10-31T00:00:00Z')
-                """,
+                "INSERT INTO catalog_assets (code, name, kind, source_type, tier, unlock_cost, image_url, author_username, status, secret_blackbox_prompt, published_at_ms, created_at, updated_at)\n                VALUES ('FX-SHORT-SEC', '短词画风', 'style', 'exclusive', 'A', 10, '/img.webp', 'alice', 'published', ?, 1700000000000, '2026-10-31T00:00:00Z', '2026-10-31T00:00:00Z') ON CONFLICT DO NOTHING",
                 (short_secret,),
             )
 

@@ -319,8 +319,6 @@ def _accepted_kinds_for(tx, username):
     from .seed import seed_ids
     registry_query = (
         "SELECT 1 FROM information_schema.tables WHERE table_schema='public' AND table_name='cold_start_registry'"
-        if getattr(tx, "dialect", "sqlite") == "postgresql"
-        else "SELECT 1 FROM sqlite_master WHERE type='table' AND name='cold_start_registry'"
     )
     if tx.execute(registry_query).fetchone() and tx.execute("SELECT 1 FROM cold_start_registry WHERE kind='user' AND item_id=?", (username,)).fetchone():
         return set()
@@ -1006,7 +1004,6 @@ def _publish_approved(tx: Any, sub: dict[str, Any], revision: int) -> dict[str, 
     - Uses curation_submissions.target_id (assigned at submit) as the stable key.
     - First publish and every revision: ON CONFLICT DO UPDATE content/status/updated_at,
       preserving interactions, created_at, published_at_ms.
-    - No INSERT OR REPLACE.
     - Writes an immutable version snapshot (payload_json in curation_versions already;
       add curation_publish_snapshots if table exists).
     - Applies publish reward once via event_key tied to stable target_id.
@@ -1252,8 +1249,6 @@ def _publish_approved(tx: Any, sub: dict[str, Any], revision: int) -> dict[str, 
     # Traceable snapshot per revision (table optional; guarded).
     snapshot_query = (
         "SELECT 1 FROM information_schema.tables WHERE table_schema='public' AND table_name='curation_publish_snapshots'"
-        if getattr(tx, "dialect", "") == "postgresql"
-        else "SELECT 1 FROM sqlite_master WHERE type='table' AND name='curation_publish_snapshots'"
     )
     snap_exists = tx.execute(snapshot_query).fetchone()
     if snap_exists:

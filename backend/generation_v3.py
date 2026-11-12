@@ -181,10 +181,9 @@ def reserve_skill_run(
         tx, user_id=user_id, source="skill", external_run_id=external_run_id,
         expected_count=expected_count, request_id=request_id,
     )
-    if getattr(tx, "dialect", "") == "postgresql":
-        tx.execute(
-            "SELECT id FROM generation_runs WHERE id=? FOR UPDATE", (run_id,),
-        ).fetchone()
+    tx.execute(
+        "SELECT id FROM generation_runs WHERE id=? FOR UPDATE", (run_id,),
+    ).fetchone()
     row = tx.execute(
         "SELECT request_hash,original_request FROM generation_runs WHERE id=?",
         (run_id,),
@@ -526,8 +525,7 @@ def cancel_unsubmitted_web_slots(
             "SELECT id,expected_count FROM generation_runs "
             "WHERE user_id=? AND source='web' AND external_run_id=?"
         )
-        if getattr(tx, "dialect", "") == "postgresql":
-            query += " FOR UPDATE"
+        query += " FOR UPDATE"
         run = tx.execute(query, (uid, batch_id)).fetchone()
         if not run:
             raise ServiceError("找不到属于你的生成批次", status=404, code="run_not_found")

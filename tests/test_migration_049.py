@@ -5,16 +5,16 @@ Before 049, a thread mirroring its hidden work carried status_source
 before 047 had no source at all, so a dismissal could never restore them.
 """
 from __future__ import annotations
+from tests.postgres_support import open_isolated_postgres
 
 import unittest
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
-from tests.legacy_database import init_legacy_database
 from backend import server
 from backend.admin_services import admin_resolve_report
 from backend.services import publish_user_work, register_user, submit_abuse_report
-from tests.work_schema import STATUS_ACTOR_BACKFILL_SQL
+from tests.postgres_maintenance import STATUS_ACTOR_BACKFILL_SQL
 
 IMG = "/images/individual/FA/FA-013.webp"
 
@@ -22,7 +22,7 @@ IMG = "/images/individual/FA/FA-013.webp"
 class Migration049BackfillTests(unittest.TestCase):
     def setUp(self):
         self.temp = TemporaryDirectory()
-        self.db = init_legacy_database(Path(self.temp.name) / "m49.db")
+        self.db = open_isolated_postgres(self, seed=True)
         self.author, _ = register_user(self.db, "m49_author", "password-a")
         register_user(self.db, "m49_admin", "password-admin")
         conn = self.db.get_conn()
@@ -54,7 +54,7 @@ class Migration049BackfillTests(unittest.TestCase):
 
     def _backfill(self):
         conn = self.db.get_conn()
-        conn.executescript(STATUS_ACTOR_BACKFILL_SQL)
+        conn.execute(STATUS_ACTOR_BACKFILL_SQL)
         conn.commit()
 
     def _row(self, table, row_id):

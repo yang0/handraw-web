@@ -315,7 +315,6 @@ POST /api/posts        Authorization: Bearer <token>   Idempotency-Key: <request
 
 **生成**
 - **改过的提示词会被重写。** 用户在「调提示词」里改过的内容，生成时会被后端当作「主题」交给文本模型重写一遍（`backend/services.py:3037`），用户最终看到的图与他编辑的提示词对不上。
-- **文本模型调用在写事务里。** 这次调用发生在 `with db.transaction()`（`services.py:2929`，`BEGIN IMMEDIATE`）内部，超时上限 120 秒（`skill_prompt.py:134`）。调用期间，其他写请求最多等待 10 秒，超时就报错。批量生成 5 张时，可能出错的时间段累计最长 10 分钟。
 
 **编辑**
 - **看不到配图位置。** 左侧是 Markdown 源码，配图卡片全部堆在文章末尾，要切到「预览」页才能看到图插在哪里。
@@ -436,7 +435,6 @@ POST /api/posts        Authorization: Bearer <token>   Idempotency-Key: <request
 
 | 问题 | 位置 | 影响 |
 |---|---|---|
-| 生图时，文本模型调用发生在 `BEGIN IMMEDIATE` 写事务内 | `services.py:2929`、`:3037`；`skill_prompt.py:134` 超时 120 秒 | 文本模型响应期间，其他写请求最多等 10 秒（`db.py:45` `busy_timeout`），之后报「database is locked」：点赞、回复、登录、别人生图都可能失败 |
 | `/api/boot` 一次返回所有已发布作品、帖子、回复、作品评论和资源评论，没有 LIMIT | `services.py:789` 起 | 内容增长后首屏变慢；每次点赞后还会重拉一次 |
 | 三张评论表 | `forum_resources.py:432-437` | 见第 2 节 |
 | API Key 明文存储，拥有账号全部权限 | `services.py:286-295`、`admin_services.py:2138` | 见 3.2 |
@@ -453,7 +451,7 @@ POST /api/posts        Authorization: Bearer <token>   Idempotency-Key: <request
 - **接口**：`/api/boot` 只返回当前用户和站点设置。列表与详情各有分页接口：`/api/posts?kind=&sort=&cursor=`、`/api/posts/{id}`。
 - **路由**：按现有 `curation_routes.py` 和 `forum_resource_routes.py` 的方式，把路由按领域拆成独立模块，包括 posts、studio、articles、auth、admin。
 - **AI 调用**：合并为 `backend/ai_client.py`，供导入、规划和提示词生成共用，带超时、重试、日志和用量统计。
-- **数据库**：继续使用 SQLite。WAL 已开启（`db.py:42`），只要写事务足够短，现在的规模够用。等出现写入排队、`database is locked` 报错，或者需要多进程部署时，再评估迁移到 PostgreSQL。
+- **数据库**：统一 PostgreSQL；跨进程并发依赖数据库锁与事务，缓存使用 Redis。运维以 `docs/local-operations.md` 为准。
 
 ### 6.3 两套系统并存
 

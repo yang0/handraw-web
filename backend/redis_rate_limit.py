@@ -3,7 +3,7 @@
 Fixed-window rate limits are stricter than the legacy in-process token buckets.
 Secrets, raw IP addresses, and usernames never appear in Redis keys.
 Redis unavailability fails CLOSED in production to prevent bypassing a shared
-authentication limiter. SQLite/local development retains the original limiter.
+authentication limiter. Local development can explicitly use the process limiter.
 """
 from __future__ import annotations
 

@@ -46,13 +46,10 @@ python -m ops.bootstrap_postgres_v3 --apply
 
 以下是代码提交状态，不等于已在真实环境验收：
 
-1. 清除旧 SQLite 回填：个人素材库不再扫描旧文件或使用 PRAGMA / BEGIN IMMEDIATE 修复旧上传；新数据在写入时设置身份和变化序号。作品讨论帖回填已改成手工运行、PostgreSQL/SQLite 通用的当前作品关联修复。
 2. 统一任务状态：generation_v3.refresh_run_status 只依赖 generation_items，Web 成功、失败退款、部分成功、取消都调用同一套逻辑，避免三份重复状态。
 3. 批次历史删除：用户删除历史时支持 run ID、batch ID 和单次网关执行 ID，并在同一个事务中标记整个批次、隐藏关联作品；账单和退款轨迹保留。
 4. 取消后的迟到请求：网关提交前锁定 run、检查已取消槽位；普通迟到提交返回 409，只有 UI 明确选择重试时允许 retryCancelled 解除取消状态。
 5. 媒体回收：已结算的执行日志不再永久占用旧图片；替换图片时撤销作品和论坛旧授权，媒体 GC 通过权威 media_assets/work_media/generation_items 和仍有效的授权判断是否可以回收。
-6. PostgreSQL SQL 适配：钱包免费额度选择时使用 FOR UPDATE；Seed 中 INSERT OR REPLACE 替换为 ON CONFLICT；资源管理的 sqlite_master 表检测改用 PostgreSQL information_schema；会话展示 ID 改为 token 不可逆哈希而非不存在的 id/SQLite rowid。
-7. 安全读取：启动时绑定当前主数据库，prompt 黑盒安全扫描和画风目录查询不会在 PostgreSQL 模式误连到另一个 SQLite DB；移除旧黑盒历史 backfill 线程。
 8. 空结果处理：上游即使宣称生成 success，若没有保存一张有效图，也进入失败和退款流程，避免成功任务空作品。
 
 核心原则不变：每个逻辑生成任务最多一件多图公开作品；广场和主页只显示一张封面；Web/Skill 共用统一任务和媒体实体；不迁移任何旧数据。
@@ -65,9 +62,9 @@ python -m ops.bootstrap_postgres_v3 --apply
 
 1. `backend/server.py`：服务端 SEO 作品目录和作品详情 Open Graph 图，优先读取 `works.cover_media_id -> media_assets.storage_key`，仅当图片确实属于作品时使用；GIF 在目录和分享图使用静帧缩略图，不更改详情原始 GIF。
 2. `backend/home_scenarios.py`：首页场景推荐、人工置顶及管理预览采用作者选择的封面，不再默认首张图。
-3. 首页推荐缓存使用 Redis 共享 revision；封面编辑和场景管理修改会通知其他进程淘汰旧缓存。Redis 不可用时不提供可能过期的进程内缓存；SQLite 单进程本地开发仍可缓存。
 4. 缓存命中时再核对公开作品当前审核状态和所选封面，防止多进程事务提交时序及审核隐藏后展示旧缓存卡片。
 5. Skill/Web 统一历史接口的 `visibility` 改为依据关联作品**实时审核状态**判定，不再以 `workId` 存在就推断为公开；独立回传 `workStatus` 便于作者辨认审核隐藏作品，保留可追溯的 run/work ID。
-6. Skill 同一个 `externalRunId` 的上传/断点续传在 PostgreSQL 多进程模式使用 **session-level advisory lock** 串行化，避免两个服务进程同时上传同一槽位；不同 run 可并行，锁冲突返回 HTTP 409 `upload_in_progress`，锁释放失败会断开持锁连接。SQLite 开发仍使用原有进程锁。
 
 **仍未完成的验收与架构工作**：Web 全量 Python/Node/浏览器测试，Skill ↔ Web 实际 E2E，PostgreSQL 全业务端到端运行，Redis 与对象存储故障恢复/多进程并发验收，以及进一步审计底层 `studio_generations` 的职责收敛。未把这些标记为完成；Issue 继续保持 Open。
+
+数据库运行时统一 PostgreSQL，使用有界连接池、原生基线与追加迁移。共享缓存、限流及热门分页使用 Redis；实际本地与生产验收结果以对应 Issue 为准。

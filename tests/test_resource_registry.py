@@ -51,7 +51,6 @@ class ResourceRegistryTests(unittest.TestCase):
     def setUp(self) -> None:
         self.temp_dir = tempfile.TemporaryDirectory()
         root = Path(self.temp_dir.name)
-        self.db_path = root / "registry_test.db"
         self.env = patch.dict(
             os.environ,
             {

@@ -26,7 +26,6 @@ class Fix66WorkTopicsTests(unittest.TestCase):
     def setUp(self):
         self.enterContext(patch.dict(os.environ, {"HANDRAW_DEMO_MODE": "0"}))
         self.temp = TemporaryDirectory()
-        self.db_path = Path(self.temp.name) / "test_fix_66.db"
         self.db = open_isolated_postgres(self, seed=True)
         self.author, _ = services.register_user(self.db, "test_author", "Pass1234!")
         self.admin, _ = services.register_user(self.db, "test_admin", "Pass1234!")

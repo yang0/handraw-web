@@ -232,12 +232,11 @@ def ensure_user_uploads_synced(
     *,
     non_blocking: bool = False,
 ) -> bool:
-    """V3 fresh schema: no legacy user-upload migration or SQLite lock polling.
+    """V3 fresh schema: uploads receive identity when written.
 
     New uploads have their immutable asset UID, SHA and change sequence at
     creation time. Nothing is read or rewritten on list/sync requests. This
-    keeps PostgreSQL and SQLite on the same behavior and avoids filesystem
-    scans inside API requests. The parameters remain for existing callers.
+    avoids filesystem scans inside API requests. The parameters remain for existing callers.
     """
     return True
 

@@ -23,6 +23,7 @@ Covers:
 10. publish_work_direct accepts optional subject / recipeId and writes works.subject.
 """
 from __future__ import annotations
+from tests.postgres_support import open_isolated_postgres
 
 import hashlib
 import json
@@ -42,7 +43,6 @@ from backend import skill_prompt
 from backend.curation import publish_work_direct
 from backend.recipe_routes import compute_input_fingerprint
 from backend.resource_discussions import resolve_resource
-from tests.legacy_database import init_legacy_database
 from backend.server import SESSION_COOKIE_NAME, HandrawRequestHandler
 from backend.services import ServiceError, prepare_cloud_generation, register_user
 
@@ -51,11 +51,9 @@ class StudioRecipesTests(unittest.TestCase):
     def setUp(self) -> None:
         self.temp_dir = tempfile.TemporaryDirectory()
         root = Path(self.temp_dir.name)
-        self.db_path = root / "recipes_test.db"
         self.env = patch.dict(
             os.environ,
             {
-                "HANDRAW_DB_PATH": str(self.db_path),
                 "HANDRAW_UPLOADS_DIR": str(root / "uploads"),
                 "HANDRAW_GENERATED_DIR": str(root / "generated"),
                 "HANDRAW_DEMO_MODE": "1",
@@ -64,7 +62,7 @@ class StudioRecipesTests(unittest.TestCase):
             },
         )
         self.env.start()
-        self.db = init_legacy_database(self.db_path)
+        self.db = open_isolated_postgres(self, seed=True)
         self.httpd = ThreadingHTTPServer(("127.0.0.1", 0), HandrawRequestHandler)
         self.httpd.channel_role = "main"  # type: ignore[attr-defined]
         self.httpd.db = self.db  # type: ignore[attr-defined]
@@ -151,7 +149,7 @@ class StudioRecipesTests(unittest.TestCase):
     def test_migrations_applied_and_ordered(self) -> None:
         """Verify schema migrations 060 and 061 exist and added required columns."""
         conn = self.db.get_conn()
-        recipes_cols = {r["name"] for r in conn.execute("PRAGMA table_info(studio_recipes)").fetchall()}
+        recipes_cols = {r["name"] for r in conn.execute("SELECT ordinal_position-1 AS cid,column_name AS name FROM information_schema.columns WHERE table_schema='public' AND table_name='studio_recipes' ORDER BY ordinal_position").fetchall()}
         self.assertIn("id", recipes_cols)
         self.assertIn("user_id", recipes_cols)
         self.assertIn("kind", recipes_cols)
@@ -162,10 +160,10 @@ class StudioRecipesTests(unittest.TestCase):
         self.assertIn("input_fingerprint", recipes_cols)
         self.assertIn("revision", recipes_cols)
 
-        gen_cols = {r["name"] for r in conn.execute("PRAGMA table_info(studio_generations)").fetchall()}
+        gen_cols = {r["name"] for r in conn.execute("SELECT ordinal_position-1 AS cid,column_name AS name FROM information_schema.columns WHERE table_schema='public' AND table_name='studio_generations' ORDER BY ordinal_position").fetchall()}
         self.assertIn("recipe_id", gen_cols)
 
-        works_cols = {r["name"] for r in conn.execute("PRAGMA table_info(works)").fetchall()}
+        works_cols = {r["name"] for r in conn.execute("SELECT ordinal_position-1 AS cid,column_name AS name FROM information_schema.columns WHERE table_schema='public' AND table_name='works' ORDER BY ordinal_position").fetchall()}
         self.assertIn("subject", works_cols)
 
     def test_recipe_crud_and_attribution(self) -> None:
@@ -450,7 +448,7 @@ class StudioRecipesTests(unittest.TestCase):
         with patch("backend.skill_prompt.compose_prompt", side_effect=mock_compose_with_concurrent_write):
             st_c, _ = self._req("POST", f"/api/studio/recipes/{rcp_id}/prompt", cookie=self.cookie_a)
             self.assertEqual(st_c, 200)
-            self.assertTrue(write_success, "Another thread successfully wrote to SQLite while compose_prompt was running")
+            self.assertTrue(write_success, "Another thread successfully wrote to PostgreSQL while compose_prompt was running")
 
         # Test race condition: if another thread updates the recipe revision while AI is running -> 409
         def mock_compose_that_conflicts(*args, **kwargs):

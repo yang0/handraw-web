@@ -1,5 +1,5 @@
-"""Preserve earned reviewer access while supporting both SQL engines."""
-import sqlite3
+"""Preserve earned reviewer access while using PostgreSQL."""
+from tests.postgres_support import open_isolated_postgres
 import unittest
 
 from backend.curation import _accepted_kinds_for
@@ -8,9 +8,9 @@ from backend.seed import seed_ids
 
 class AcceptedKindsTests(unittest.TestCase):
     def test_case_insensitive_authors_and_optional_registry(self):
-        with sqlite3.connect(':memory:') as conn:
-            conn.row_factory = sqlite3.Row
-            conn.executescript('''
+        db = open_isolated_postgres(self, initialize=False)
+        with db.transaction() as conn:
+            conn.execute('''
                 CREATE TABLE catalog_assets(code TEXT,kind TEXT,author_username TEXT,source_type TEXT,status TEXT);
                 CREATE TABLE works(id TEXT,author_username TEXT,status TEXT);
                 INSERT INTO catalog_assets VALUES('personal_style','style','MixedUser','community','published');
@@ -26,9 +26,9 @@ class AcceptedKindsTests(unittest.TestCase):
             self.assertEqual(_accepted_kinds_for(conn, 'mixeduser'), set())
 
     def test_seed_contributions_do_not_confer_access(self):
-        with sqlite3.connect(':memory:') as conn:
-            conn.row_factory = sqlite3.Row
-            conn.executescript('''
+        db = open_isolated_postgres(self, initialize=False)
+        with db.transaction() as conn:
+            conn.execute('''
                 CREATE TABLE catalog_assets(code TEXT,kind TEXT,author_username TEXT,source_type TEXT,status TEXT);
                 CREATE TABLE works(id TEXT,author_username TEXT,status TEXT);
             ''')

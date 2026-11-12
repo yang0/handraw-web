@@ -3,32 +3,6 @@
 
 CREATE EXTENSION IF NOT EXISTS citext WITH SCHEMA public;
 
-CREATE FUNCTION public.json_array_length(t text) RETURNS integer
-    LANGUAGE plpgsql IMMUTABLE
-    AS $$
-BEGIN
-  IF t IS NULL OR NOT (t IS JSON) THEN RETURN 0; END IF;
-  RETURN json_array_length(t::json);
-EXCEPTION WHEN OTHERS THEN RETURN 0;
-END $$;
-
-CREATE FUNCTION public.json_each(t text) RETURNS TABLE(value text)
-    LANGUAGE plpgsql IMMUTABLE
-    AS $$
-BEGIN
-  IF t IS NULL OR NOT (t IS JSON) THEN RETURN; END IF;
-  RETURN QUERY SELECT elem FROM json_array_elements_text(t::json) AS elem;
-EXCEPTION WHEN OTHERS THEN RETURN;
-END $$;
-
-CREATE FUNCTION public.json_valid(t text) RETURNS integer
-    LANGUAGE plpgsql IMMUTABLE
-    AS $$
-BEGIN
-  IF t IS NULL THEN RETURN 0; END IF;
-  RETURN CASE WHEN t IS JSON THEN 1 ELSE 0 END;
-END $$;
-
 CREATE FUNCTION public.v3_guard_cover_media_delete() RETURNS trigger
     LANGUAGE plpgsql
     AS $$
@@ -1618,51 +1592,51 @@ CREATE UNIQUE INDEX pg_idx_works_run_id ON public.works USING btree (run_id) WHE
 
 CREATE INDEX pg_idx_works_status_pub ON public.works USING btree (status, published_at_ms);
 
-CREATE UNIQUE INDEX pg_sqlite_autoindex_api_tokens_2 ON public.api_tokens USING btree (token_hash);
+CREATE UNIQUE INDEX uq_api_tokens_token_hash ON public.api_tokens USING btree (token_hash);
 
-CREATE UNIQUE INDEX pg_sqlite_autoindex_curation_assignments_2 ON public.curation_assignments USING btree (submission_id, revision, reviewer_username);
+CREATE UNIQUE INDEX uq_curation_assignments_submission_revision_reviewer ON public.curation_assignments USING btree (submission_id, revision, reviewer_username);
 
-CREATE UNIQUE INDEX pg_sqlite_autoindex_curation_requests_2 ON public.curation_requests USING btree (owner_username, request_id);
+CREATE UNIQUE INDEX uq_curation_requests_owner_username_request_id ON public.curation_requests USING btree (owner_username, request_id);
 
-CREATE UNIQUE INDEX pg_sqlite_autoindex_curation_submissions_2 ON public.curation_submissions USING btree (kind, target_id);
+CREATE UNIQUE INDEX uq_curation_submissions_kind_target_id ON public.curation_submissions USING btree (kind, target_id);
 
-CREATE UNIQUE INDEX pg_sqlite_autoindex_curation_versions_2 ON public.curation_versions USING btree (submission_id, revision);
+CREATE UNIQUE INDEX uq_curation_versions_submission_revision ON public.curation_versions USING btree (submission_id, revision);
 
-CREATE UNIQUE INDEX pg_sqlite_autoindex_curation_votes_2 ON public.curation_votes USING btree (assignment_id);
+CREATE UNIQUE INDEX uq_curation_votes_assignment_id ON public.curation_votes USING btree (assignment_id);
 
-CREATE UNIQUE INDEX pg_sqlite_autoindex_device_codes_2 ON public.device_codes USING btree (user_code);
+CREATE UNIQUE INDEX uq_device_codes_user_code ON public.device_codes USING btree (user_code);
 
-CREATE UNIQUE INDEX pg_sqlite_autoindex_dm_conversations_1 ON public.dm_conversations USING btree (user_low_id, user_high_id);
+CREATE UNIQUE INDEX uq_dm_conversations_user_low_id_user_high_id ON public.dm_conversations USING btree (user_low_id, user_high_id);
 
-CREATE UNIQUE INDEX pg_sqlite_autoindex_dm_messages_1 ON public.dm_messages USING btree (sender_id, client_message_id);
+CREATE UNIQUE INDEX uq_dm_messages_sender_id_client_message_id ON public.dm_messages USING btree (sender_id, client_message_id);
 
-CREATE UNIQUE INDEX pg_sqlite_autoindex_forum_moderators_1 ON public.forum_moderators USING btree (username, category);
+CREATE UNIQUE INDEX uq_forum_moderators_username_category ON public.forum_moderators USING btree (username, category);
 
-CREATE UNIQUE INDEX pg_sqlite_autoindex_generation_items_2 ON public.generation_items USING btree (run_id, "position");
+CREATE UNIQUE INDEX uq_generation_items_run_id_position ON public.generation_items USING btree (run_id, "position");
 
-CREATE UNIQUE INDEX pg_sqlite_autoindex_generation_runs_2 ON public.generation_runs USING btree (user_id, source, external_run_id);
+CREATE UNIQUE INDEX uq_generation_runs_user_id_source_external_run_id ON public.generation_runs USING btree (user_id, source, external_run_id);
 
-CREATE UNIQUE INDEX pg_sqlite_autoindex_ledgers_1 ON public.ledgers USING btree (user_id, event_key);
+CREATE UNIQUE INDEX uq_ledgers_user_id_event_key ON public.ledgers USING btree (user_id, event_key);
 
-CREATE UNIQUE INDEX pg_sqlite_autoindex_media_assets_2 ON public.media_assets USING btree (owner_user_id, storage_key);
+CREATE UNIQUE INDEX uq_media_assets_owner_user_id_storage_key ON public.media_assets USING btree (owner_user_id, storage_key);
 
-CREATE UNIQUE INDEX pg_sqlite_autoindex_media_public_grants_2 ON public.media_public_grants USING btree (media_url, target_type, target_id);
+CREATE UNIQUE INDEX uq_media_public_grants_media_url_target_type_target_id ON public.media_public_grants USING btree (media_url, target_type, target_id);
 
-CREATE UNIQUE INDEX pg_sqlite_autoindex_oauth_identities_2 ON public.oauth_identities USING btree (provider, user_id);
+CREATE UNIQUE INDEX uq_oauth_identities_provider_user_id ON public.oauth_identities USING btree (provider, user_id);
 
-CREATE UNIQUE INDEX pg_sqlite_autoindex_studio_generation_media_2 ON public.studio_generation_media USING btree (generation_id, media_url);
+CREATE UNIQUE INDEX uq_studio_generation_media_generation_id_media_url ON public.studio_generation_media USING btree (generation_id, media_url);
 
-CREATE UNIQUE INDEX pg_sqlite_autoindex_unlocks_1 ON public.unlocks USING btree (user_id, target_type, target_id);
+CREATE UNIQUE INDEX uq_unlocks_user_id_target_type_target_id ON public.unlocks USING btree (user_id, target_type, target_id);
 
-CREATE UNIQUE INDEX pg_sqlite_autoindex_users_1 ON public.users USING btree (username);
+CREATE UNIQUE INDEX uq_users_username ON public.users USING btree (username);
 
-CREATE UNIQUE INDEX pg_sqlite_autoindex_users_2 ON public.users USING btree (email);
+CREATE UNIQUE INDEX uq_users_email ON public.users USING btree (email);
 
-CREATE UNIQUE INDEX pg_sqlite_autoindex_users_3 ON public.users USING btree (invite_code);
+CREATE UNIQUE INDEX uq_users_invite_code ON public.users USING btree (invite_code);
 
-CREATE UNIQUE INDEX pg_sqlite_autoindex_users_4 ON public.users USING btree (api_key);
+CREATE UNIQUE INDEX uq_users_api_key ON public.users USING btree (api_key);
 
-CREATE UNIQUE INDEX pg_sqlite_autoindex_work_media_2 ON public.work_media USING btree (work_id, "position");
+CREATE UNIQUE INDEX uq_work_media_work_id_position ON public.work_media USING btree (work_id, "position");
 
 CREATE TRIGGER v3_cover_media_delete BEFORE DELETE ON public.work_media FOR EACH ROW EXECUTE FUNCTION public.v3_guard_cover_media_delete();
 

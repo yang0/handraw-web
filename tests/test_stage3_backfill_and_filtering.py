@@ -29,7 +29,6 @@ from backend.post_routes import _is_topic_visible, _resolve_ref_to_topic_id
 class Stage3BackfillAndFilteringTests(unittest.TestCase):
     def setUp(self) -> None:
         self.temp_dir = tempfile.mkdtemp()
-        self.db_path = Path(self.temp_dir) / "test_stage3.db"
         self._env = patch.dict(
             os.environ,
             {

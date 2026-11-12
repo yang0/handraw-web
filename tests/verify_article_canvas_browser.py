@@ -56,7 +56,6 @@ def wait_for_server(url: str, timeout: float = 12.0) -> bool:
 def main() -> int:
     temp_dir = tempfile.TemporaryDirectory()
     temp_path = Path(temp_dir.name)
-    db_path = temp_path / "browser_article_canvas_test.db"
     uploads_dir = temp_path / "uploads"
     generated_dir = temp_path / "generated"
     storage_dir = temp_path / "private_storage"
@@ -65,13 +64,16 @@ def main() -> int:
     env = os.environ.copy()
     env.update({
         "HANDRAW_PRIVATE_STORAGE": str(storage_dir),
-        "HANDRAW_DB_PATH": str(db_path),
         "HANDRAW_UPLOADS_DIR": str(uploads_dir),
         "HANDRAW_GENERATED_DIR": str(generated_dir),
         "HANDRAW_DEMO_MODE": "1",
     })
 
     print(f"Starting server on port {PORT} with isolated storage: {storage_dir}...")
+    from tests.browser_postgres import browser_postgres_database
+    db = browser_postgres_database()
+    env["HANDRAW_DATABASE_URL"] = db._dsn
+    db.close()
     server_proc = subprocess.Popen(
         [sys.executable, "-m", "backend.server", "--port", str(PORT), "--demo-mode"],
         env=env,

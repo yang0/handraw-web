@@ -2,13 +2,13 @@
 from __future__ import annotations
 
 import json
-import sqlite3
+from psycopg.errors import UniqueViolation
 import tempfile
 import unittest
 from pathlib import Path
 
-from tests.legacy_database import Database
-from tests.work_schema import (
+from tests.postgres_support import open_isolated_postgres
+from tests.postgres_maintenance import (
     audit_and_deduplicate_work_topics,
     FORUM_TOPICS_LISTED_AT_SQL,
     FORUM_TOPICS_WORK_UNIQUE_SQL,
@@ -18,8 +18,7 @@ from tests.work_schema import (
 class Migration080Tests(unittest.TestCase):
     def setUp(self) -> None:
         self.temp_dir = tempfile.TemporaryDirectory()
-        self.db_path = Path(self.temp_dir.name) / "test_m80.db"
-        self.db = Database(self.db_path)
+        self.db = open_isolated_postgres(self)
 
     def tearDown(self) -> None:
         self.db.close_thread_conn()
@@ -30,20 +29,20 @@ class Migration080Tests(unittest.TestCase):
     def test_migrate_fresh_db_creates_column_and_indexes(self) -> None:
         # Full migration from scratch
         applied = self.db.migrate()
-        self.assertIn("080_forum_topics_listed_at_ms", applied)
-        self.assertIn("081_forum_topics_work_unique", applied)
+        self.assertEqual(applied, [])
+        self.assertGreaterEqual(self.db.get_conn().execute("SELECT MAX(version) FROM schema_migrations").fetchone()[0], 116)
 
         conn = self.db.get_conn()
         # Verify listed_at_ms column exists
-        col_info = conn.execute("PRAGMA table_info(forum_topics)").fetchall()
+        col_info = conn.execute("SELECT column_name AS name FROM information_schema.columns WHERE table_schema='public' AND table_name='forum_topics'").fetchall()
         col_names = [c["name"] for c in col_info]
         self.assertIn("listed_at_ms", col_names)
 
-        # Verify index idx_forum_topics_work_id exists
-        indexes = conn.execute("PRAGMA index_list(forum_topics)").fetchall()
+        # Verify index pg_idx_forum_topics_work_id exists
+        indexes = conn.execute("SELECT indexname AS name FROM pg_indexes WHERE schemaname='public' AND tablename='forum_topics'").fetchall()
         idx_names = [idx["name"] for idx in indexes]
-        self.assertIn("idx_forum_topics_work_id", idx_names)
-        self.assertIn("idx_forum_topics_pinned_listed", idx_names)
+        self.assertIn("pg_idx_forum_topics_work_id", idx_names)
+        self.assertIn("pg_idx_forum_topics_pinned_listed", idx_names)
 
         # Verify idempotency: second migrate run applies 0 migrations
         second_applied = self.db.migrate()
@@ -56,7 +55,7 @@ class Migration080Tests(unittest.TestCase):
         self.db.migrate()
 
         # Artificially drop the unique index to simulate pre-migration state with duplicate work_id
-        conn.execute("DROP INDEX IF EXISTS idx_forum_topics_work_id")
+        conn.execute("DROP INDEX IF EXISTS pg_idx_forum_topics_work_id")
 
         now_iso = "2026-11-01T12:00:00Z"
         # Create work
@@ -158,8 +157,8 @@ class Migration080Tests(unittest.TestCase):
         self.assertEqual(log_details["unlinked_topic_id"], "topic_secondary")
 
         # Now recreation of unique index succeeds
-        conn.executescript(
-            "CREATE UNIQUE INDEX IF NOT EXISTS idx_forum_topics_work_id ON forum_topics(work_id) WHERE work_id <> '' AND work_id IS NOT NULL;"
+        conn.execute(
+            "CREATE UNIQUE INDEX IF NOT EXISTS pg_idx_forum_topics_work_id ON forum_topics(work_id) WHERE work_id <> '' AND work_id IS NOT NULL;"
         )
 
         # Multiple empty work_ids are allowed
@@ -169,7 +168,7 @@ class Migration080Tests(unittest.TestCase):
         self.assertEqual(nw2["work_id"], "")
 
         # Attempting to insert duplicate work_dup_1 raises IntegrityError
-        with self.assertRaises(sqlite3.IntegrityError):
+        with self.assertRaises(UniqueViolation):
             conn.execute(
                 """
                 INSERT INTO forum_topics (
@@ -189,25 +188,8 @@ class Migration080Tests(unittest.TestCase):
     def test_migrate_on_database_with_preexisting_duplicate_work_topics(self) -> None:
         """Simulate a database migrated up to 079 having duplicate work_id, then running 080+081."""
         conn = self.db.get_conn()
-        from tests.legacy_migrations import MIGRATIONS, POST_MIGRATION_HOOKS
         now_iso = "2026-11-01T12:00:00Z"
-
-        # Apply migrations 1..79 only
-        conn.execute(
-            """
-            CREATE TABLE IF NOT EXISTS schema_migrations (
-                version INTEGER PRIMARY KEY,
-                name TEXT NOT NULL,
-                applied_at TEXT NOT NULL
-            );
-            """
-        )
-        for v, name, ddl in MIGRATIONS:
-            if v >= 80:
-                continue
-            conn.executescript(f"BEGIN IMMEDIATE;\n{ddl}\n;\nINSERT INTO schema_migrations VALUES ({v}, '{name}', '{now_iso}');\nCOMMIT;")
-            if v in POST_MIGRATION_HOOKS:
-                POST_MIGRATION_HOOKS[v](conn)
+        conn.execute("DROP INDEX pg_idx_forum_topics_work_id")
 
         # Seed pre-existing duplicate work topics
         conn.execute(
@@ -233,10 +215,8 @@ class Migration080Tests(unittest.TestCase):
             """
         )
 
-        # Run migrate() - this will apply 080 (which deduplicates via hook) and 081 (unique index)
-        applied = self.db.migrate()
-        self.assertIn("080_forum_topics_listed_at_ms", applied)
-        self.assertIn("081_forum_topics_work_unique", applied)
+        audit_and_deduplicate_work_topics(conn)
+        conn.execute(FORUM_TOPICS_WORK_UNIQUE_SQL.replace("idx_forum_topics_", "pg_idx_forum_topics_"))
 
         # Verify duplicate was resolved and unique index is active
         t1 = conn.execute("SELECT work_id FROM forum_topics WHERE id = 'topic_pre_1'").fetchone()

@@ -35,7 +35,6 @@ class WorkPromptSubjectTests(unittest.TestCase):
     def setUp(self) -> None:
         self.tmp = tempfile.TemporaryDirectory()
         root = Path(self.tmp.name)
-        self.db_path = root / "test.db"
         self.env = patch.dict(
             os.environ,
             {

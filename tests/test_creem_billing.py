@@ -22,7 +22,6 @@ class CreemBillingTests(unittest.TestCase):
     def setUp(self) -> None:
         self.tmp = tempfile.TemporaryDirectory()
         self.tmp_path = Path(self.tmp.name)
-        self.db_path = self.tmp_path / "billing_test.db"
         self.cfg_path = self.tmp_path / "payment-service.json"
         self.webhook_secret = "whsec_test_9d3c7a1f44b2c88e5011"
         self.api_key = "creem_test_api_key_placeholder"

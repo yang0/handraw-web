@@ -208,11 +208,10 @@ def apply_wallet_delta(
     """Atomically apply credit delta and write append-only ledger. Returns (new_balance, applied)."""
     now = utc_now_iso()
     # PostgreSQL transactions must lock the wallet row before reading its
-    # balance. A process-local SQLite RLock does not protect separate workers.
+    # balance. The database lock protects separate worker processes.
     # The ledger and balance update remain in the same database transaction.
     wallet_sql = "SELECT balance, locked FROM wallets WHERE user_id = ?"
-    if getattr(tx, "dialect", "") == "postgresql":
-        wallet_sql += " FOR UPDATE"
+    wallet_sql += " FOR UPDATE"
     w = tx.execute(wallet_sql, (user_id,)).fetchone()
     if not w:
         tx.execute(
@@ -271,7 +270,7 @@ def _count_user_published_items(conn: PgConnection, username: str) -> int:
     asset_filter, asset_ids = _seed_filter("code", "assets")
     w_cnt = int(
         conn.execute(
-            f"SELECT COUNT(*) FROM works WHERE author_username = ? AND status = 'published' AND images_json IS NOT NULL AND TRIM(images_json) NOT IN ('', '[]', 'null') AND json_valid(images_json) = 1 AND {work_filter}",
+            f"SELECT COUNT(*) FROM works WHERE author_username = ? AND status = 'published' AND images_json IS NOT NULL AND TRIM(images_json) NOT IN ('', '[]', 'null') AND (images_json IS JSON ARRAY) AND {work_filter}",
             (username, *work_ids),
         ).fetchone()[0]
     )
@@ -376,7 +375,7 @@ def authenticate_request(db: Database, headers: dict[str, str]) -> dict[str, Any
 
             # Explicit exception to the "GET does not write to database" rule:
             # We track last_used_at for token auditing in user device management UI.
-            # To prevent SQLite write lock contention on frequent read queries (e.g. Skill sync),
+            # To reduce writes on frequent read queries (e.g. Skill sync),
             # this update is throttled to at most once every 5 minutes (300 seconds).
             last_used = tok_row["last_used_at"] or ""
             should_update = True
@@ -764,9 +763,8 @@ _SECRETS_CACHE: dict[str, Any] = {
 }
 _LAST_SCANNED_SECRETS_HASH = ""
 
-# Only the running server binds this object. Avoid silently opening a second
-# SQLite database when production uses PostgreSQL, especially during private
-# prompt/black-box scans (a security-sensitive operation).
+# The running server binds its database for private prompt/black-box scans.
+# Security-sensitive reads must use the same authority as request handling.
 _RUNTIME_DB: Any | None = None
 
 
@@ -1735,7 +1733,7 @@ def compute_public_asset_counts_and_creators(conn: PgConnection) -> tuple[dict[s
             rec["hasFresh"] = True
 
     work_rows = conn.execute(
-        f"SELECT author_username, author_name, styles_json, layout_code, cheers, likes, favorites, forks, is_new_release, published_at_ms FROM works WHERE status = 'published' AND images_json IS NOT NULL AND TRIM(images_json) NOT IN ('', '[]', 'null') AND json_valid(images_json) = 1 AND {work_filter}",
+        f"SELECT author_username, author_name, styles_json, layout_code, cheers, likes, favorites, forks, is_new_release, published_at_ms FROM works WHERE status = 'published' AND images_json IS NOT NULL AND TRIM(images_json) NOT IN ('', '[]', 'null') AND (images_json IS JSON ARRAY) AND {work_filter}",
         work_ids,
     ).fetchall()
     total_works = len(work_rows)
@@ -2102,7 +2100,7 @@ def build_boot_payload(db: Database, current_user: dict[str, Any] | None) -> dic
         WHERE w.status = 'published'
               AND w.images_json IS NOT NULL
               AND TRIM(w.images_json) NOT IN ('', '[]', 'null')
-              AND json_valid(w.images_json) = 1
+              AND (w.images_json IS JSON ARRAY)
               AND {work_filter}
         ORDER BY featured DESC, published_at_ms DESC, id DESC
         """,
@@ -2611,8 +2609,7 @@ def attach_generation_social_counts(
 def _lock_social_wallet(tx, user_id: int) -> int:
     # Serialize changes from the same actor before reading their interaction state.
     query = "SELECT balance FROM wallets WHERE user_id = ?"
-    if getattr(tx, "dialect", "") == "postgresql":
-        query += " FOR UPDATE"
+    query += " FOR UPDATE"
     row = tx.execute(query, (user_id,)).fetchone()
     return int(row["balance"]) if row else 0
 
@@ -6249,8 +6246,7 @@ def prepare_cloud_generation(
         # FOR UPDATE, two PostgreSQL workers can both spend the same daily
         # quota slot and overwrite each other's counter.
         wallet_query = "SELECT * FROM wallets WHERE user_id = ?"
-        if getattr(tx, "dialect", "") == "postgresql":
-            wallet_query += " FOR UPDATE"
+        wallet_query += " FOR UPDATE"
         w = tx.execute(wallet_query, (uid,)).fetchone()
         used = int(w["free_quota_used"]) if (w and w["free_quota_date"] == today) else 0
         if used < max_free:
@@ -6400,11 +6396,10 @@ def prepare_cloud_generation(
             # Serialize remote-submission reservation against cancellation.
             # The cancellation endpoint locks the SAME run before writing a
             # cancelled slot, so a late client request cannot bypass it.
-            if getattr(tx, "dialect", "") == "postgresql":
-                tx.execute(
-                    "SELECT id FROM generation_runs WHERE id=? FOR UPDATE",
-                    (canonical_run_id,),
-                ).fetchone()
+            tx.execute(
+                "SELECT id FROM generation_runs WHERE id=? FOR UPDATE",
+                (canonical_run_id,),
+            ).fetchone()
             slot_position = batch_index * 1000
             prior_slot = tx.execute(
                 "SELECT status FROM generation_items WHERE run_id=? AND position=?",

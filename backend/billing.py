@@ -446,8 +446,7 @@ def _settle_paid_order_tx(
     meta_patch: dict[str, Any] | None = None,
 ) -> tuple[dict[str, Any], int, bool]:
     query = "SELECT * FROM payment_orders WHERE id = ?"
-    if getattr(tx, "dialect", "") == "postgresql":
-        query += " FOR UPDATE"
+    query += " FOR UPDATE"
     order = tx.execute(query, (order_id,)).fetchone()
     if not order:
         raise ServiceError("充值订单不存在", status=404, code="order_not_found")
@@ -531,13 +530,11 @@ def _refund_order_tx(
     clean_poid = str(provider_order_id or "").strip()
     query = "SELECT * FROM payment_orders WHERE provider = ? AND provider_order_id = ?"
     params: tuple[Any, ...] = (provider, clean_poid)
-    if getattr(tx, "dialect", "") == "postgresql":
-        query += " FOR UPDATE"
+    query += " FOR UPDATE"
     order = tx.execute(query, params).fetchone() if clean_poid else None
     if not order and order_id_hint:
         q2 = "SELECT * FROM payment_orders WHERE id = ?"
-        if getattr(tx, "dialect", "") == "postgresql":
-            q2 += " FOR UPDATE"
+        q2 += " FOR UPDATE"
         order = tx.execute(q2, (order_id_hint,)).fetchone()
     if not order:
         return None, None, False

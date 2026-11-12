@@ -38,7 +38,7 @@ def _is_topic_visible(conn: Any, t_row: Any, user: dict[str, Any] | None = None)
 
 def _resolve_ref_to_topic_id(db: Any, ref: str, user: dict[str, Any] | None = None) -> str | None:
     # Route handlers pass Database; utility callers/tests also pass an open
-    # SQLite connection. Both use the same read-only resolution path.
+    # PostgreSQL connection. Both use the same read-only resolution path.
     conn = db.get_conn() if hasattr(db, "get_conn") else db
     ref = ref.strip()
     if not ref:

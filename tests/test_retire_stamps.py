@@ -35,7 +35,6 @@ from backend.services import (
 class RetireStampsBackendTests(unittest.TestCase):
     def setUp(self) -> None:
         self.temp_dir = TemporaryDirectory()
-        self.db_path = Path(self.temp_dir.name) / "test_stamps.db"
         self.db = open_isolated_postgres(self, seed=True)
         self.user_a, self.token_a = register_user(self.db, "alice_stamp", "Pass1234!")
         self.user_b, self.token_b = register_user(self.db, "bob_stamp", "Pass1234!")

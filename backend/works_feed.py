@@ -213,7 +213,7 @@ def get_works_feed(
         seed_clause,
         "w.images_json IS NOT NULL",
         "TRIM(w.images_json) NOT IN ('', '[]', 'null')",
-        "json_valid(w.images_json) = 1",
+        "(w.images_json IS JSON ARRAY)",
     ]
     base_params: list[Any] = list(seed_params)
 
@@ -280,8 +280,8 @@ def get_works_feed(
         {cte_sql}
         SELECT
             COUNT(*) AS all_cnt,
-            SUM(CASE WHEN json_valid(images_json) = 1 AND json_array_length(images_json) = 1 THEN 1 ELSE 0 END) AS single_cnt,
-            SUM(CASE WHEN json_valid(images_json) = 1 AND json_array_length(images_json) > 1 THEN 1 ELSE 0 END) AS multi_cnt
+            SUM(CASE WHEN (images_json IS JSON ARRAY) AND (CASE WHEN images_json IS JSON ARRAY THEN jsonb_array_length(images_json::jsonb) ELSE 0 END) = 1 THEN 1 ELSE 0 END) AS single_cnt,
+            SUM(CASE WHEN (images_json IS JSON ARRAY) AND (CASE WHEN images_json IS JSON ARRAY THEN jsonb_array_length(images_json::jsonb) ELSE 0 END) > 1 THEN 1 ELSE 0 END) AS multi_cnt
         FROM ranked_works
         WHERE {candidate_filter}
     """
@@ -297,9 +297,9 @@ def get_works_feed(
 
     # Format-specific clause
     if fmt == "single":
-        fmt_clause = "json_valid(images_json) = 1 AND json_array_length(images_json) = 1"
+        fmt_clause = "(images_json IS JSON ARRAY) AND (CASE WHEN images_json IS JSON ARRAY THEN jsonb_array_length(images_json::jsonb) ELSE 0 END) = 1"
     elif fmt == "multi":
-        fmt_clause = "json_valid(images_json) = 1 AND json_array_length(images_json) > 1"
+        fmt_clause = "(images_json IS JSON ARRAY) AND (CASE WHEN images_json IS JSON ARRAY THEN jsonb_array_length(images_json::jsonb) ELSE 0 END) > 1"
     else:
         fmt_clause = "1 = 1"
 

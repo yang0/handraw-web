@@ -1,7 +1,7 @@
 """Browser verification script for issue #62 (Article deletion).
 
 Verifies:
-1. Editor delete: opens editor, confirms deletion via modal, redirects, reloads to verify article is gone.
+1. Studio list delete: confirms deletion via modal and reloads to verify the article is gone.
 2. Profile list delete: deletes article card in real-time without full page reload.
 3. History pagination delete: deletes article, re-logs in to verify it does not return, and checks empty state when last article deleted.
 All screenshots saved to C:/tmp/
@@ -52,7 +52,6 @@ def wait_for_server(url: str, timeout: float = 12.0) -> bool:
 def main() -> int:
     temp_dir = tempfile.TemporaryDirectory()
     temp_path = Path(temp_dir.name)
-    db_path = temp_path / "browser_article_del_test.db"
     uploads_dir = temp_path / "uploads"
     generated_dir = temp_path / "generated"
     storage_dir = temp_path / "private_storage"
@@ -61,18 +60,17 @@ def main() -> int:
     env = os.environ.copy()
     env.update({
         "HANDRAW_PRIVATE_STORAGE": str(storage_dir),
-        "HANDRAW_DB_PATH": str(db_path),
         "HANDRAW_UPLOADS_DIR": str(uploads_dir),
         "HANDRAW_GENERATED_DIR": str(generated_dir),
         "HANDRAW_DEMO_MODE": "0",
         "HANDRAW_ALLOWED_ORIGINS": f"http://127.0.0.1:{PORT},http://localhost:{PORT}",
     })
 
-    from tests.legacy_database import init_legacy_database
+    from tests.browser_postgres import browser_postgres_database
     from backend.server import SESSION_COOKIE_NAME
     from backend.services import register_user, sync_user_studio_articles
 
-    init_db = init_legacy_database(db_path)
+    init_db = browser_postgres_database()
     user, session_token = register_user(init_db, "su_editorial", "Pass123456", display_name="主编苏")
 
     # Seed 3 articles
@@ -105,8 +103,9 @@ def main() -> int:
     sync_user_studio_articles(init_db, user, articles)
     init_db.close()
 
+    env["HANDRAW_DATABASE_URL"] = init_db._dsn
     server_proc = subprocess.Popen(
-        [sys.executable, "-m", "backend.server", "--port", str(PORT), "--db", str(db_path)],
+        [sys.executable, "-m", "backend.server", "--port", str(PORT)],
         env=env,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
@@ -129,15 +128,15 @@ def main() -> int:
             page = context.new_page()
 
             # -------------------------------------------------------------
-            # Scenario 1: Editor delete
+            # Scenario 1: Studio article list delete
             # -------------------------------------------------------------
-            print("\n--- Scenario 1: Editor Delete ---")
-            editor_url = f"{BASE_URL}/studio/?entry=article&articleId=art_test_editor&subview=editor"
+            print("\n--- Scenario 1: Studio List Delete ---")
+            editor_url = f"{BASE_URL}/studio/?view=articles-all"
             page.goto(editor_url, wait_until="networkidle")
-            page.wait_for_selector("#editor-btn-delete-article", timeout=8000)
+            page.wait_for_selector('[data-del-art-id="art_test_editor"]', timeout=8000)
 
-            # Click delete button in editor
-            page.click("#editor-btn-delete-article")
+            # Click delete on the current Studio article list
+            page.click('[data-del-art-id="art_test_editor"]')
             page.wait_for_selector("#hw-active-modal", timeout=5000)
             page.screenshot(path=str(SCREENSHOT_DIR / "01_editor_delete_modal.png"))
             print("✓ Screenshot saved: 01_editor_delete_modal.png")
@@ -162,7 +161,7 @@ def main() -> int:
 
             body_text = page.content()
             assert "art_test_editor" not in body_text, "Deleted article still visible after refresh!"
-            print("✓ Scenario 1 passed: Editor delete confirmed and verified gone after refresh.")
+            print("✓ Scenario 1 passed: Studio list delete confirmed and verified gone after refresh.")
 
             # -------------------------------------------------------------
             # Scenario 2: Profile articles list delete

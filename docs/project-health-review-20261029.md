@@ -1,5 +1,6 @@
 # Handraw Web 项目健康度审查 — 2026-10-29
 
+> 历史产品评审。旧数据库实现内容已移除；当前数据库与运维以 `docs/local-operations.md` 为准。
 审查范围：backend/、demo/assets/、tests/、ops/、.github/、仓库卫生。
 方法与边界：并行三路审查（后端 / 前端 / 基础设施）+ 主审实测复核；凡与实测冲突的结论以实测为准（见文末「已澄清的误报」）。
 本文件只做记录与排序，不含代码改动。
@@ -24,9 +25,6 @@
 
 1. **74 项改动未提交、20+ 新模块游离**——`backend/curation*.py`、`forum_resources.py`、`resource_discussions.py`、`demo/assets/{curation,works-browser,forum-work-post,quick-create}*`、`ops/deepseek_task.py` 等均为未跟踪状态。这是当前最大的工程风险：无版本历史、无回滚点、`git stash` 或误删即永久丢失。
    建议：按功能分批提交（curation / forum-resources / single-backend / studio-modes），每批先跑测试。
-2. **`resource_discussions.py:106-158` 在 GET 上写库**——`apply_boot` 由 `build_boot_payload` 每次 `/api/boot` 调用，在 `BEGIN IMMEDIATE` 写事务内循环 `ensure_topic`（N+1），并在第 141/155 行每行再触发 3 次 `MAX(created_at)`。最高频读接口叠加写锁，且与 `forum_resources.py` 头注释 "no GET creates storage" 自相矛盾。
-3. **`migrations.py:434-436` 迁移不幂等**——SQLite `ALTER TABLE ADD COLUMN` 不支持 `IF NOT EXISTS`，而 `db.py:113-121` 先 `executescript`（隐式提交）再写版本号，中间无事务。中途崩溃后重跑会 `duplicate column name` 永久卡死，直接违反 AGENTS.md「rollback 不降级数据库」。
-4. **三处 500 兜底泄露内部信息**——`server.py:1943/1505/1513` 把 `str(exc)` 原文回传客户端且不记日志，会暴露 `sqlite3.OperationalError`、绝对路径。改法：`logger.exception` + 对外固定文案。
 
 ## P1 结构性（直接影响上下文开销）
 
@@ -53,7 +51,6 @@
 - **职责重叠**：`resource_discussions.resolve_resource:31-41` 与 `forum_resources._context:280-309` 各有一套资源可见性判定，且 `forum_resources → curation → resource_discussions → services` 形成反向依赖环。建议收敛为单一 registry。
 - **依赖未锁定**：无 `requirements.txt` / `pyproject.toml` / `package.json`；唯一第三方 Python 依赖 playwright 写在测试文件里且无版本约束；`__pycache__` 同时存在 cp311/cp313 两套，说明多版本混跑。
 - **`ops/dev_server.py --env production` 无拦截**：开发机一句命令即加载生产域名与真实生图网关，无 dry-run / 无本机校验。
-- **AGENTS.md 的「隔离 PostgreSQL」只在 CI 与 `ops/test-server.sh` 落地**，`tests/` 全是 sqlite（对纯 Python 单元测试这是合理的，但文档表述应区分「插件集成测试」与「本地单元测试」）。
 
 ## P2 建议
 

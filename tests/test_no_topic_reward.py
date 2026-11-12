@@ -8,23 +8,23 @@ Verifies:
 5. Admin settings update for economy enforces topic_publish_credits == 0.
 """
 from __future__ import annotations
+from tests.postgres_support import open_isolated_postgres
 
 import json
 import unittest
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
-from tests.legacy_database import init_legacy_database
 from backend import server as server_module
 from backend.admin_services import admin_update_settings
 from backend.services import get_site_settings, publish_forum_reply_post, publish_forum_topic_post, register_user
-from tests.work_schema import ZERO_TOPIC_PUBLISH_CREDITS_SQL, zero_topic_publish_credits_hook
+from tests.postgres_maintenance import ZERO_TOPIC_PUBLISH_CREDITS_SQL, zero_topic_publish_credits_hook
 
 
 class NoTopicRewardTests(unittest.TestCase):
     def setUp(self):
         self.temp = TemporaryDirectory()
-        self.db = init_legacy_database(Path(self.temp.name) / "test_no_reward.db")
+        self.db = open_isolated_postgres(self, seed=True)
         self.author, _ = register_user(self.db, "test_author", "password123")
         self.admin, _ = register_user(self.db, "test_admin", "password123")
 
@@ -175,7 +175,7 @@ class NoTopicRewardTests(unittest.TestCase):
         self.assertEqual(json.loads(row["value_json"])["topic_publish_credits"], 5)
 
         # Run migration 075 SQL
-        conn.executescript(ZERO_TOPIC_PUBLISH_CREDITS_SQL)
+        conn.execute(ZERO_TOPIC_PUBLISH_CREDITS_SQL)
         conn.commit()
 
         # Verify value is now 0

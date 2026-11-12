@@ -177,8 +177,6 @@ def resolve(
                 # 4. user_resources (if table exists)
                 table_query = (
                     "SELECT 1 FROM information_schema.tables WHERE table_schema='public' AND table_name='user_resources'"
-                    if getattr(conn, "dialect", "") == "postgresql"
-                    else "SELECT 1 FROM sqlite_master WHERE type='table' AND name='user_resources'"
                 )
                 has_ur = conn.execute(table_query).fetchone()
                 if has_ur:

@@ -99,6 +99,7 @@ psql -X -d 'service=handraw' -1 -v ON_ERROR_STOP=1 -f backend/postgres_113_forum
 psql -X -d 'service=handraw' -1 -v ON_ERROR_STOP=1 -f backend/postgres_114_growth_events.sql
 psql -X -d 'service=handraw' -1 -v ON_ERROR_STOP=1 -f backend/postgres_115_published_author_feed.sql
 psql -X -d 'service=handraw' -1 -v ON_ERROR_STOP=1 -f backend/postgres_116_wallet_notifications.sql
+psql -X -d 'service=handraw' -1 -v ON_ERROR_STOP=1 -f backend/postgres_117_unique_index_names.sql
 ```
 
 服务启动前需完成 111。此前已建好支付表并登记 111 的库可直接启动，也可重复运行迁移。

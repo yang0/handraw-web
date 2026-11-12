@@ -2923,8 +2923,7 @@ def admin_delete_user(
         # Erase dependent rows before the account. Older implementations
         # only removed a subset of FK children; growth/security records added
         # in later migrations then caused user deletion to return HTTP 500.
-        # Keep foreign-key enforcement enabled: never work around it with
-        # PRAGMA foreign_keys=OFF.
+        # Keep foreign-key enforcement enabled throughout account deletion.
         # Direct messages and announcements contain FK references to both
         # sides of a conversation. Clear their children first, then parents.
         tx.execute(

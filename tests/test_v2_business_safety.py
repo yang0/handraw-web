@@ -1,6 +1,6 @@
 """Business-data regression tests for the local Handraw 2.0 service.
 
-These tests use temporary SQLite files only.  Demo fixtures are enabled in the
+These tests use disposable PostgreSQL databases only.  Demo fixtures are enabled in the
 individual tests that need named users; the production-boot test deliberately
 uses the default-safe flag values.
 """
@@ -14,7 +14,8 @@ from contextlib import contextmanager
 from pathlib import Path
 from unittest.mock import patch
 
-from tests.legacy_database import Database
+from backend.postgres_db import PostgresDatabase
+from tests.postgres_support import isolated_pg_dsn
 from backend.db import local_today_str
 from backend.seed import ensure_seeded
 from backend.services import (
@@ -37,9 +38,9 @@ from backend.security import hash_password
 
 @contextmanager
 def temporary_database(*, demo: bool):
-    with tempfile.TemporaryDirectory(prefix="handraw-business-") as temp_dir:
+    with isolated_pg_dsn() as dsn:
         with patch.dict(os.environ, {"HANDRAW_DEMO_MODE": "1" if demo else "0"}, clear=False):
-            db = Database(Path(temp_dir) / "isolated.db")
+            db = PostgresDatabase(dsn)
             ensure_seeded(db)
             try:
                 yield db
@@ -70,9 +71,9 @@ class HandrawBusinessSafetyTests(unittest.TestCase):
             self.assertGreater(conn.execute("SELECT COUNT(*) FROM users").fetchone()[0], 0)
             self.assertGreater(conn.execute("SELECT COUNT(*) FROM works").fetchone()[0], 0)
 
-        with tempfile.TemporaryDirectory(prefix="handraw-business-flag-") as temp_dir:
+        with isolated_pg_dsn() as dsn:
             with patch.dict(os.environ, {"HANDRAW_DEMO_MODE": "true"}, clear=False):
-                db = Database(Path(temp_dir) / "isolated.db")
+                db = PostgresDatabase(dsn)
                 ensure_seeded(db)
                 self.assertEqual(db.get_conn().execute("SELECT COUNT(*) FROM users").fetchone()[0], 0)
                 db.close()

@@ -81,8 +81,7 @@ def drain_media_gc(db: Any, *, limit: int = 20) -> dict[str, int]:
                 "WHERE next_attempt_at<=? AND claim_until<? "
                 "ORDER BY next_attempt_at,media_url LIMIT 1"
             )
-            if getattr(tx, "dialect", "") == "postgresql":
-                sql += " FOR UPDATE SKIP LOCKED"
+            sql += " FOR UPDATE SKIP LOCKED"
             row = tx.execute(sql, (now, now)).fetchone()
             if not row:
                 break

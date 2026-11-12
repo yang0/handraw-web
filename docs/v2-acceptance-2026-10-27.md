@@ -46,7 +46,6 @@ R07（演示数据混入）在本轮核对中未复现：后端 `_seed_filter` �
 ```bash
 # 演示模式（可登录演示账号、可验收全部治理功能）
 HANDRAW_DEMO_MODE=1 \
-HANDRAW_DB_PATH=.local/demo.sqlite3 \
 HANDRAW_UPLOADS_DIR=.local/uploads \
 HANDRAW_GENERATED_DIR=.local/generated \
 python -m backend.server --port 3080

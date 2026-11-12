@@ -1,5 +1,6 @@
 # 终审报告：作品对象统一 v1 实施（2026-10-30）
 
+> 历史产品评审。旧数据库实现内容已移除；当前数据库与运维以 `docs/local-operations.md` 为准。
 评审人：Claude（架构师兼终审）。对象：`implementation-report-20261030.md` 声称完成的 B0–B7。
 方法：不采信自述。在临时库上起真实服务进程，只带 `Api-Key` 调接口；直接读代码；用自己构造、手算过的夹具核对。探针全部在 `.local/review/`，在仓库根目录用 `python -X utf8 .local/review/<脚本>` 重跑：
 
@@ -46,7 +47,6 @@
 
 ### B0 迁移原子化：合格
 
-- `backend/db.py:117-146`：每个迁移是一个 `BEGIN IMMEDIATE; <ddl>; INSERT schema_migrations…; COMMIT;` 脚本，失败时 `ROLLBACK`；名称正则 `db.py:21`。
 - 探针结果见 §2。新库第一次 migrate 应用 13 个，第二次 `[]`。
 - 要补：`tests/test_migration_atomicity.py`（§6 B0 的 4 个用例）。现在这条保证只在探针里验证过，没有回归测试保护。
 
@@ -64,7 +64,6 @@
 - `demo/assets/shared.js:1701` 的 `DEFAULT_STAMP_BASES` 未删（已无引用，是死代码）。
 - `backend/seed.py:74` 的 `allow_self_review_for_admin` 仍为 `True`。
 - `ops/backfill_discussion_mappings.py` 不存在。本地库 `work_101`、`work_102` 有 3 条 `work_comments` 没有映射；删掉懒建帖之后，B7 没法收敛它们。
-- `ops/reconcile_social_counters.py`：没有 `HANDRAW_DEMO_MODE=1` 时拒跑，不重算 `stamp_counts_json` 和 `catalog_assets.cheers`，不排除 `seed_ids`。备份用 `shutil.copy2`（`:128`），WAL 模式下会漏掉还在 `-wal` 文件里的页，改用 `sqlite3.Connection.backup`。
 - `demo/assets/forum-app.js:1462-1464` 本地发帖对象仍写 `likes: 1, views: 1`。
 - `tests/test_social_honesty.py` 不存在。
 

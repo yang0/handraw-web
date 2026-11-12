@@ -76,7 +76,6 @@ class SessionClient:
 class HandrawV2PlatformAndAdminTests(unittest.TestCase):
     def setUp(self) -> None:
         self.temp_dir = tempfile.TemporaryDirectory()
-        self.db_path = Path(self.temp_dir.name) / "isolated_v2_test.db"
         self.uploads_dir = Path(self.temp_dir.name) / "uploads"
         self.generated_dir = Path(self.temp_dir.name) / "generated"
         self.uploads_dir.mkdir(parents=True, exist_ok=True)

@@ -36,7 +36,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from playwright.sync_api import sync_playwright
 
 from backend.config import SESSION_COOKIE_NAME
-from tests.legacy_database import init_legacy_database
+from tests.browser_postgres import browser_postgres_database
 from backend.server import HandrawRequestHandler
 from backend.services import apply_wallet_delta, register_user
 from http.server import ThreadingHTTPServer
@@ -57,14 +57,12 @@ def main():
     print(f"=== Starting verification server on port {PORT} ===")
     temp_dir = tempfile.TemporaryDirectory()
     root = Path(temp_dir.name)
-    db_path = root / "tips_verify.db"
     uploads_dir = root / "uploads"
     uploads_dir.mkdir(parents=True, exist_ok=True)
     generated_dir = root / "generated"
     generated_dir.mkdir(parents=True, exist_ok=True)
 
     env_patch = {
-        "HANDRAW_DB_PATH": str(db_path),
         "HANDRAW_UPLOADS_DIR": str(uploads_dir),
         "HANDRAW_GENERATED_DIR": str(generated_dir),
         "HANDRAW_DEMO_MODE": "1",
@@ -79,7 +77,7 @@ def main():
     db = None
     httpd = None
     try:
-        db = init_legacy_database(db_path)
+        db = browser_postgres_database()
         author_user, token_author = register_user(db, "author_demo", "AuthorPass123!", display_name="原创画师小李")
         viewer_user, token_viewer = register_user(db, "viewer_demo", "ViewerPass123!", display_name="赞赏测试员")
         payee_user, token_payee = register_user(db, "payee_demo", "PayeePass123!", display_name="官方收款代表")
@@ -88,7 +86,7 @@ def main():
         with db.transaction() as tx:
             # Configure official tip payee
             tx.execute(
-                "INSERT OR REPLACE INTO site_settings (key, value_json, updated_by, updated_at) VALUES ('economy', json_object('official_tip_payee', 'payee_demo'), 'system', ?)",
+                "INSERT INTO site_settings (key, value_json, updated_by, updated_at) VALUES ('economy', jsonb_build_object('official_tip_payee', 'payee_demo')::text, 'system', ?) ON CONFLICT (key) DO UPDATE SET value_json = excluded.value_json, updated_by = excluded.updated_by, updated_at = excluded.updated_at",
                 (now_iso,),
             )
             # Give viewer 100 credits

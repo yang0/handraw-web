@@ -1,8 +1,8 @@
 # 第四轮终审报告（2026-10-30）
 
+> 历史产品评审。旧数据库实现内容已移除；当前数据库与运维以 `docs/local-operations.md` 为准。
 评审人：Claude（架构师兼终审）。对象：`fix-report-round4-20261030.md`，以及网站仓库 `0944f99..6f34e8e`（8 个提交）、skill 仓库 `cdb46f2..0ea944a`（3 个提交）。
 
-方法：不采信自述。临时库上起真实服务进程，只用 `Api-Key` 调接口；生图走本地模拟网关的真实 HTTP；HEAD 用独立 `git worktree` 检出验证；本地库只用 `sqlite3.backup` 读取；未改产品代码和本地库。评审期间工程师又提交了 `ddadf1f`（SSR 测试）、`6f34e8e`（进度文档）和 skill 的 `0ea944a`（回读）。我在 02:15 冻结了代码快照，02:28 核对工作区的 `backend/ ops/ tests/ demo/` 与快照逐文件一致，所以下面的结论对应当前工作区。
 
 探针在 `.local/review/round4/`，在仓库根目录执行 `python -X utf8 .local/review/round4/<脚本>`，输出已存为同名 `.txt`：
 
@@ -87,7 +87,6 @@
 构造的库：1 条真实复刻，加 5 条脏数据（空 generation id、伪造的 id、**借用他人成功生成的 id**、**用自己成功生成的 id 但属于另一件父作品**、不存在的用户）。
 
 - 退出码 0，删除 3 条，`works.forks` 重算为 **3，应为 1**。借用的两条留下了，因为 `plan` 只检查 generation 是否存在且成功，没有检查它是否属于同一用户、是否指向同一件父作品（`ops/purge_publish_time_forks.py:33-43`）。
-- **备份不可用。** 服务进程持有连接、写入还在 WAL 里时（实测 WAL 1.6MB），`shutil.copy2` 只复制主文件（`:89`）。得到的备份只有 4096 字节、0 张表，脚本仍打印「已备份」。对一个会删数据的脚本来说，这意味着没有可用的回退。应改用 `sqlite3.Connection.backup`。
 - `:36` 的 `first_generation_id = ''` 被后面的 `NOT EXISTS` 包含，是冗余条件，不影响结果。
 - 在 042 之前的旧库上运行会抛 `no such table: work_forks`。影响小。
 - `PurgeScriptTests` 直接调用 `plan`/`apply`，只造了 1 条空 id 的行，没有运行命令行，所以测不到上面两个问题。
@@ -186,7 +185,6 @@ ddadf1f test: prove paid recipes are absent from every server-rendered route  �
 1. **让 HEAD 能运行（#1）。** 创始人决定未跟踪的 4 个后端模块和 4 个前端资源怎么处理，然后在**干净检出**上跑通三套测试，再谈上线。今后报告里的测试数字，请注明是在哪个提交的干净检出上跑的。
 2. **复刻计数（#2）。** 还是上轮的二选一：(a) 前端没有复刻入口之前，把 `forks` 从热门分里拿掉；(b) 保留的话，只对消耗了积分的生成计数，或者限制账号注册天数。这一项做法最简单的是 (a)，改一个公式加一条 parity 测试。
 3. **治理（#3、#4，建议连同 #5、#6、#10）。** 根本原因是系统不知道某个 paused 或 hidden 是谁造成的。要么记录来源（例如增加 `moderation_source` 字段，或在恢复前查 `audit_logs` 里最近一次状态变化是不是 `moderation.auto_pause`），驳回时只恢复由举报造成的暂停；要么改成驳回从不自动恢复，交给人工 publish。`set_work_visibility` 同步主帖时，只覆盖当时与作品状态一致的主帖。`feature`/`boost_new` 不应修改 status，或者只允许从 published 执行。测试要走真实路径：管理员 pause → 举报 → 驳回仍为 paused；只隐藏主帖 → 举报作品 3 次 → 驳回后主帖仍 hidden。
-4. **清理脚本（#7）。** 上线前如果生产库里有 `work_forks` 行就要跑，所以要先改：备份改用 `sqlite3` backup API；`plan` 要求 `g.user_id = f.user_id AND g.fork_work_id = f.work_id`；补一条命令行测试，用 WAL 下的数据验证备份能打开。
 
 可以排到下一批的：#8、#9（编辑一次就破坏原样存储，建议本批顺手修）、#11-#19。
 

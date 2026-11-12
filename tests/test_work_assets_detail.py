@@ -1,6 +1,6 @@
 """Generated work detail metadata contracts: singular style, batch and read-only recovery."""
 import json
-import sqlite3
+from tests.postgres_support import open_isolated_postgres
 import unittest
 
 from backend.generation_works import (
@@ -12,9 +12,9 @@ from backend.generation_works import (
 
 class GenerationWorkAssetDetailTests(unittest.TestCase):
     def setUp(self):
-        self.conn = sqlite3.connect(":memory:")
-        self.conn.row_factory = sqlite3.Row
-        self.conn.executescript("""
+        self.db = open_isolated_postgres(self, initialize=False)
+        self.conn = self.db.get_conn()
+        self.conn.execute("""
             CREATE TABLE generation_runs (
                 id TEXT PRIMARY KEY, user_id INTEGER, source TEXT, external_run_id TEXT
             );

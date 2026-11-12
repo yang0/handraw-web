@@ -16,7 +16,7 @@
 6. 作品隐藏/删除由审核状态控制；某个批次子请求失败或被删除不能自动隐藏剩余成功图片；管理员隐藏不能被后续子任务自动取消。
 7. 失败必须显式记录并可恢复，存储成功但作品写入失败不能静默返回成功。
 
-## 2. 规范化数据模型（已提交的 SQLite 开发实现）
+## 2. 规范化数据模型（PostgreSQL）
 
 ```text
 users
@@ -39,7 +39,7 @@ users
 - `generation_items` 保留失败槽位与错误码；成功且有媒体 ID 的槽位才能出现在公开作品中。
 - 原图、GIF 二进制不存入 SQL；文件存储与独立私有素材授权仍由现有服务管理。
 
-**V3 不创建旧版 `generation_works`、`skill_generation_runs`、`skill_generation_work_items`、`skill_history_publications` 表。** 旧版历史补录管理接口及数据库 backfill hook 已移除。SQLite 迁移编号仍为内部初始化机制，**不是旧用户数据升级承诺**。
+**V3 不创建旧版 `generation_works`、`skill_generation_runs`、`skill_generation_work_items`、`skill_history_publications` 表。** 旧版历史补录管理接口及数据库 backfill hook 已移除。新库使用原生 PostgreSQL 基线与追加迁移初始化。
 
 ## 3. 写入与读取流程
 
@@ -71,14 +71,14 @@ users
 
 网站核心的 `studio_generations`、`studio_generation_media` 和 `media_public_grants` 仍承担执行计费、媒体上传归属与公开读权限；不应与 `generation_runs` 的**逻辑任务**混淆。其功能拆分以后可以进一步收敛，但不要为了减少表名而破坏退款、授权或恢复机制。
 
-现有 `works.images_json` 仅为公开列表缓存；直接手动修改会被数据库约束拒绝。正式上线如果切换 PostgreSQL，必须把这些 SQLite trigger/DDL 改写成 PostgreSQL 的 FK/约束/触发器或事务服务，不可直接照搬 SQLite SQL。
+现有 `works.images_json` 仅为公开列表缓存；PostgreSQL 外键和触发器保护规范化媒体关系与公开投影，直接手动修改会被数据库约束拒绝。
 
 ## 5. 质量与上线门槛（尚未全部满足）
 
 - 已新增/更新隔离测试：独立任务一次生成多图；多路乱序到达；重复请求/上传；跨用户媒体归属；封面约束；列表缓存一致性；3 成功 2 失败的槽位保留；Skill 断点续传；单卡瀑布流和作品详情。
 - 仍须实际运行 Python 全量单元测试、Node 交互回归、Web ↔ Skill 真实上传 E2E 与跨进程并发测试。**Web GitHub Actions 当前在 Runner 作业步骤开始前失败，没有可信全绿结果。**
 - PostgreSQL 原生 V3 schema 与完整运行时适配、对象存储持久性与授权测试仍需单独完成；当前不可称为 PostgreSQL 生产部署就绪。
-- 没有旧数据可迁移，因此不做数据转换脚本、旧数据修复 UI、历史图片回填。开发机已有 SQLite 测试库也不能自动覆盖；重建前由操作者确认数据库位置并清空。
+- 新库初始化拒绝覆盖任何已有业务表；历史数据修复与新库创建分别执行，不自动清空数据库。
 - 未达到全部门槛前，Issue #84 保持开放，不能宣称全部完成或已部署。
 
 > 本文件覆盖 `docs/skill-web-unification-v1.md` 及旧 V1 实施说明中所有“历史私有默认/逐图发布/二次发布/旧数据回填”的过时表述。

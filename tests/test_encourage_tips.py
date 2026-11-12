@@ -33,7 +33,6 @@ from backend.services import (
 class TestEncourageTips(unittest.TestCase):
     def setUp(self):
         self.temp_dir = tempfile.TemporaryDirectory()
-        self.db_path = Path(self.temp_dir.name) / "test_tips.db"
         self.db = open_isolated_postgres(self, seed=True)
 
         # Register users

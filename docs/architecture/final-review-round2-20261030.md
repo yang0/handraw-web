@@ -1,7 +1,7 @@
 # 第二轮终审报告（2026-10-30）
 
+> 历史产品评审。旧数据库实现内容已移除；当前数据库与运维以 `docs/local-operations.md` 为准。
 评审人：Claude（架构师兼终审）。对象：`fix-report-round2-20261030.md`。
-方法：不采信自述。临时库上起真实服务进程，只带 `Api-Key` 调接口；skill 用它自己的 `prepare_draft → publish_draft`；直接读代码；以攻击者身份构造反例。默认库只读（`sqlite3.backup` 复制后再测），没有改动产品代码和默认库。
 
 探针都在 `.local/review/round2/`，在仓库根目录用 `python -X utf8 .local/review/round2/<脚本>` 重跑：
 
@@ -73,7 +73,6 @@ skill 仓库本轮没有任何文件改动（修改时间都早于上一轮终�
 
 ### 第 3 条 复刻伪造：未修复
 
-`count_fork_if_new` 只在 `complete_cloud_generation` 调用、排除作者、要求有图，这些属实。漏洞在发布路径：`_record_fork`（`curation.py:1542-1553`）仍然对客户端给的 `forkOf` 执行 `INSERT OR IGNORE INTO work_forks`。它只是不更新 `works.forks` 缓存，但事实表已经被写入，而计数用的是 `COUNT(*) FROM work_forks`（`:1573-1576`）。
 
 | 攻击 | 结果（`works.forks`, `COUNT(work_forks)`） | 应为 |
 |---|---|---|

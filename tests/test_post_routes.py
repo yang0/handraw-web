@@ -43,7 +43,6 @@ class PostRoutesHTTPTests(unittest.TestCase):
         cls._env = patch.dict(os.environ, {"HANDRAW_ALLOWED_ORIGINS": "http://trusted.test", "HANDRAW_DEMO_MODE": "1"})
         cls._env.start()
         cls.temp = TemporaryDirectory()
-        cls.db_path = Path(cls.temp.name) / "post_routes.db"
         cls.db = open_isolated_postgres(cls, seed=True)
 
         # Register users

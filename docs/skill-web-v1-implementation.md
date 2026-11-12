@@ -29,12 +29,12 @@
 
 ## 3. 数据库与运行时边界
 
-- SQLite 新数据库初始化包含 V3 规范化 Schema；旧 `generation_works`、`skill_generation_runs`、`skill_generation_work_items`、`skill_history_publications` 不再创建。
+- PostgreSQL 新库基线包含 V3 规范化 Schema；旧 `generation_works`、`skill_generation_runs`、`skill_generation_work_items`、`skill_history_publications` 不再创建。
 - `studio_generations` 仍专用于云端网关**执行、扣费、失败退款及任务恢复**，不再代表公开作品身份。
 - `works.images_json` 是作品广场列表读取的缓存。同步写入规范化媒体后在同一数据库事务刷新，数据库触发器拒绝不一致；详情直接读取规范化媒体。
 - `studio_generation_media`、`media_public_grants` 仍参与上传归属和媒体公开授权。隐藏作品时需要同时校验授权目标的公开状态。
 - Redis 只承担缓存/限流/任务租约，不能成为生成历史或作品的权威数据库。
-- PostgreSQL 的原生 V3 DDL、现有 Python 业务 SQL 适配和实际生产集成测试尚未全部完成；目前不能将 SQLite 新 Schema 当作 PG 可直接部署的版本。
+- 原生 PostgreSQL DDL 与本地集成测试已接入；实际生产部署与验收仍需单独完成。
 
 ## 4. 验收清单
 

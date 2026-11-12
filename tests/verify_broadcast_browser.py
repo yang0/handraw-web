@@ -27,7 +27,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from playwright.sync_api import sync_playwright
 
-from tests.legacy_database import init_legacy_database
+from tests.browser_postgres import browser_postgres_database
 from backend.server import HandrawRequestHandler, SESSION_COOKIE_NAME
 from backend.services import register_user
 
@@ -47,14 +47,12 @@ def main():
     print("Setting up temporary environment and database for message broadcast browser verification...")
     temp_dir = tempfile.TemporaryDirectory()
     root = Path(temp_dir.name)
-    db_path = root / "browser_broadcast_verify.db"
     uploads_dir = root / "uploads"
     uploads_dir.mkdir(parents=True, exist_ok=True)
     generated_dir = root / "generated"
     generated_dir.mkdir(parents=True, exist_ok=True)
 
     env_patch = {
-        "HANDRAW_DB_PATH": str(db_path),
         "HANDRAW_UPLOADS_DIR": str(uploads_dir),
         "HANDRAW_GENERATED_DIR": str(generated_dir),
         "HANDRAW_DEMO_MODE": "1",
@@ -69,7 +67,7 @@ def main():
     db = None
     httpd = None
     try:
-        db = init_legacy_database(db_path)
+        db = browser_postgres_database()
         admin, token_admin = register_user(db, "admin_user", "AdminPass123!", display_name="超级管理员")
         with db.transaction() as tx:
             tx.execute("UPDATE users SET role = 'admin' WHERE id = ?", (admin["id"],))

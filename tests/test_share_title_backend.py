@@ -1,12 +1,11 @@
+from tests.postgres_support import open_isolated_postgres
 """Unit tests for backend handling of share titles and generation subjects (Issue #5)."""
 
 import json
-import sqlite3
 import tempfile
 import unittest
 from pathlib import Path
 
-from tests.legacy_database import init_legacy_database
 from backend.runtime_policy import sanitize_plain_text
 from backend.services import (
     ServiceError,
@@ -21,8 +20,7 @@ from backend.services import (
 class TestShareTitleBackend(unittest.TestCase):
     def setUp(self):
         self.tmp_dir = tempfile.TemporaryDirectory()
-        db_path = Path(self.tmp_dir.name) / "test_share_title.db"
-        self.test_db = init_legacy_database(db_path)
+        self.test_db = open_isolated_postgres(self, seed=True)
 
     def tearDown(self):
         self.test_db.close()
@@ -82,7 +80,7 @@ class TestShareTitleBackend(unittest.TestCase):
         res = record_user_studio_history(self.test_db, user, entry)
         self.assertTrue(res.get("ok"))
 
-        # Check direct SQLite row
+        # Check direct PostgreSQL row
         conn = self.test_db.get_conn()
         row = conn.execute("SELECT id, tab_title, subject FROM studio_generations WHERE id = ?", ("gen_rainy_bookstore",)).fetchone()
         self.assertIsNotNone(row)

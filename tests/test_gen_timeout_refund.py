@@ -193,7 +193,6 @@ class StudioGenerateTimeoutRefundHTTPTests(unittest.TestCase):
     def setUpClass(cls):
         cls.temp_dir = tempfile.TemporaryDirectory()
         root = Path(cls.temp_dir.name)
-        cls.db_path = root / "test_timeout_refund.db"
         cls.img_cfg = root / "image-service.json"
         cls.img_cfg.write_text(json.dumps({"key": "mock-test-key", "base_url": "http://127.0.0.1:9999"}))
 

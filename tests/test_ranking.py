@@ -5,13 +5,12 @@ formula also has to run in the browser.  This test pins the contract from the
 Python side so a change to one implementation cannot silently drift.
 """
 from __future__ import annotations
+from tests.postgres_support import open_isolated_postgres
 
-import sqlite3
 import unittest
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
-from tests.legacy_database import Database
 from backend.ranking import (
     asset_popular_score,
     normalize_sort,
@@ -63,7 +62,7 @@ class RankingFormulaTests(unittest.TestCase):
 class RankingParityTests(unittest.TestCase):
     def test_sql_expression_matches_python_helper(self):
         with TemporaryDirectory() as tmp:
-            db = Database(Path(tmp) / "rank.db")
+            db = open_isolated_postgres(self)
             db.migrate()
             conn = db.get_conn()
             try:
@@ -84,7 +83,7 @@ class RankingParityTests(unittest.TestCase):
                 db.close()
 
     @staticmethod
-    def _insert_fixtures(conn: sqlite3.Connection) -> None:
+    def _insert_fixtures(conn: object) -> None:
         fixtures = [
             ("w1", 1, 2, 3, 4),
             ("w2", 0, 0, 0, 0),

@@ -1,7 +1,7 @@
 # 第三轮终审报告（2026-10-30）
 
+> 历史产品评审。旧数据库实现内容已移除；当前数据库与运维以 `docs/local-operations.md` 为准。
 评审人：Claude（架构师兼终审）。对象：`fix-report-round3-20261030.md`。
-方法：不采信自述。临时库上起真实服务进程，只带 `Api-Key` 调接口；生图路径接一个本地模拟网关走真实 HTTP；skill 用它自己的 `prepare_draft → publish_draft`；默认库只用 `sqlite3.backup` 复制后测，未改产品代码和默认库。
 
 探针在 `.local/review/round3/`，仓库根目录执行 `python -X utf8 .local/review/round3/<脚本>`，输出已存为同名 `.txt`：
 
@@ -61,7 +61,6 @@ R：`complete_cloud_generation` 的状态更新带了 `status NOT IN ('refunded'
 
 清理工具 `ops/purge_publish_time_forks.py`：
 
-- **`--apply` 一有数据就崩。** `probe_purge.py` 造 1 条空 `first_generation_id` 的行后执行命令行：打印「已备份」后抛 `sqlite3.OperationalError: no such column: work_id`，退出码 1，0 行被删，forks 仍为 3。原因是 `:35-37` 的 `WHERE id IN (SELECT DISTINCT work_id FROM works)`，`works` 表没有 `work_id` 列。
 - **识别规则有漏洞。** 旧的发布路径把客户端传来的 `generationId` 原样写进 `first_generation_id`（调用点 `curation.py:1546` 仍在传），所以伪造过 `generationId` 的历史行不是空串，`:27`、`:33` 的 `first_generation_id = ''` 找不到它们。应改为"`first_generation_id` 不对应任何一条 `studio_generations` 记录"。
 - 两个本地库当前都是 0 行，所以这个脚本从来没有在有数据的库上跑过。
 

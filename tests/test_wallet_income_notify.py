@@ -6,7 +6,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from tests.legacy_database import Database
+from tests.postgres_support import open_isolated_postgres
 from backend.services import (
     accept_forum_bounty_reply,
     apply_wallet_delta,
@@ -19,8 +19,7 @@ from backend.services import (
 class WalletIncomeNotifyMigrationTests(unittest.TestCase):
     def setUp(self) -> None:
         self.temp_dir = tempfile.TemporaryDirectory()
-        self.db_path = Path(self.temp_dir.name) / "test_income_notify.db"
-        self.db = Database(self.db_path)
+        self.db = open_isolated_postgres(self)
         self.db.migrate()
 
         self.user_a, _ = register_user(self.db, "user_a", "Pass1234!", "a@example.com", "User A", "inv_a")

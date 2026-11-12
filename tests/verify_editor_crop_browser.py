@@ -14,7 +14,7 @@ sys.path.insert(0, str(REPO_ROOT))
 from http.server import ThreadingHTTPServer
 from playwright.sync_api import sync_playwright
 
-from tests.legacy_database import init_legacy_database
+from tests.browser_postgres import browser_postgres_database
 from backend.server import HandrawRequestHandler, SESSION_COOKIE_NAME
 from backend.services import register_user
 
@@ -91,7 +91,6 @@ def run_browser_verification():
     print(f"=== Starting Issue #44 Browser Quantitative Verification on port {PORT} ===")
     temp_dir = tempfile.TemporaryDirectory()
     root = Path(temp_dir.name)
-    db_path = root / "browser_crop_test.db"
     uploads_dir = root / "uploads"
     uploads_dir.mkdir(parents=True, exist_ok=True)
     generated_dir = root / "generated"
@@ -100,7 +99,6 @@ def run_browser_verification():
     img_cfg = root / "image-service.json"
     img_cfg.write_text(json.dumps({"key": "mock-test-key", "url": f"http://127.0.0.1:{PORT}"}))
 
-    os.environ["HANDRAW_DB_PATH"] = str(db_path)
     os.environ["HANDRAW_UPLOADS_DIR"] = str(uploads_dir)
     os.environ["HANDRAW_GENERATED_DIR"] = str(generated_dir)
     os.environ["HANDRAW_IMAGE_CONFIG"] = str(img_cfg)
@@ -124,7 +122,7 @@ def run_browser_verification():
     url_4_1 = "/assets/temp_crop_test_4_1.png"
     url_1_1 = "/assets/temp_crop_test_1_1.png"
 
-    db = init_legacy_database(db_path)
+    db = browser_postgres_database()
     user, session_token = register_user(db, "crop_tester", "Pass1234!")
 
     # Seed works with these test images so card picker and gallery can display them

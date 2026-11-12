@@ -38,7 +38,7 @@ if hasattr(sys.stdout, "reconfigure"):
 from playwright.sync_api import sync_playwright
 
 from backend.db import utc_now_iso
-from tests.legacy_database import init_legacy_database
+from tests.browser_postgres import browser_postgres_database
 from backend.server import HandrawRequestHandler
 from backend.services import register_user
 
@@ -59,8 +59,7 @@ def run_browser_verification():
     os.environ["HANDRAW_PRIVATE_STORAGE"] = temp_dir.name
     os.environ["HANDRAW_DEMO_MODE"] = "1"
 
-    db_path = Path(temp_dir.name) / "browser_verify.db"
-    db = init_legacy_database(db_path)
+    db = browser_postgres_database()
 
     author, _ = register_user(db, "author_demo", "password123")
     now_iso = utc_now_iso()

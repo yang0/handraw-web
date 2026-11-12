@@ -1,6 +1,6 @@
 """Playwright browser verification for Issue #47:
 - Clear form in 做图 view clears both form fields AND downstream generation results.
-- Preserves generation history in user profile and SQLite.
+- Preserves generation history in user profile and PostgreSQL.
 - Page refresh does NOT restore cleared results.
 - Confirm dialog displays updated copy:
   "清空后，当前表单将恢复默认，并清除本工作区的生成结果；生图历史仍保留。确定清空吗？"

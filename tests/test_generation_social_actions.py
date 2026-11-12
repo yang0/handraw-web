@@ -2,6 +2,7 @@
 Comprehensive tests for Issue #40: Social actions (Collect, Like, Fork) for generation history.
 """
 from __future__ import annotations
+from tests.postgres_support import open_isolated_postgres
 
 import json
 import os
@@ -13,7 +14,6 @@ import urllib.request
 from pathlib import Path
 from unittest.mock import patch
 
-from tests.legacy_database import init_legacy_database
 from backend.server import HandrawRequestHandler
 from backend.services import (
     register_user,
@@ -32,13 +32,11 @@ class GenerationSocialActionsTests(unittest.TestCase):
     def setUp(self) -> None:
         self.temp_dir = tempfile.TemporaryDirectory()
         root = Path(self.temp_dir.name)
-        self.db_path = root / "history_social_test.db"
         img_cfg = root / "image-service.json"
         img_cfg.write_text(json.dumps({"key": "mock-test-key", "url": "http://127.0.0.1:9999"}))
         self.env = patch.dict(
             os.environ,
             {
-                "HANDRAW_DB_PATH": str(self.db_path),
                 "HANDRAW_UPLOADS_DIR": str(root / "uploads"),
                 "HANDRAW_GENERATED_DIR": str(root / "generated"),
                 "HANDRAW_DEMO_MODE": "1",
@@ -48,7 +46,7 @@ class GenerationSocialActionsTests(unittest.TestCase):
             },
         )
         self.env.start()
-        self.db = init_legacy_database(self.db_path)
+        self.db = open_isolated_postgres(self, seed=True)
 
         self.alice, _ = register_user(self.db, "alice", "SecretPass123!")
         self.bob, _ = register_user(self.db, "bob", "SecretPass123!")
@@ -170,7 +168,7 @@ class GenerationSocialActionsTests(unittest.TestCase):
     def test_migration_and_no_extra_count_columns(self):
         """Verify schema migration 73 added fork columns and NO count columns were added to studio_generations."""
         conn = self.db.get_conn()
-        columns = [row[1] for row in conn.execute("PRAGMA table_info(studio_generations)").fetchall()]
+        columns = [row[1] for row in conn.execute("SELECT ordinal_position-1 AS cid,column_name AS name FROM information_schema.columns WHERE table_schema='public' AND table_name='studio_generations' ORDER BY ordinal_position").fetchall()]
         self.assertIn("fork_generation_id", columns)
         self.assertIn("fork_item_id", columns)
         # Ensure NO count columns on studio_generations
@@ -605,15 +603,7 @@ class GenerationSocialActionsTests(unittest.TestCase):
         """Verify generating from a forked draft with locked paid resource fails with 403 asset_locked."""
         with self.db.transaction() as tx:
             tx.execute(
-                """
-                INSERT OR REPLACE INTO catalog_assets (
-                    code, name, kind, unlock_cost, status, source_type, image_url,
-                    published_at_ms, created_at, updated_at
-                ) VALUES (
-                    'FA-999', '付费画风', 'style', 30, 'published', 'community', 'https://example.com/asset.webp',
-                    1700000000000, '2026-11-01T10:00:00Z', '2026-11-01T10:00:00Z'
-                )
-                """
+                "INSERT INTO catalog_assets (\n                    code, name, kind, unlock_cost, status, source_type, image_url,\n                    published_at_ms, created_at, updated_at\n                ) VALUES (\n                    'FA-999', '付费画风', 'style', 30, 'published', 'community', 'https://example.com/asset.webp',\n                    1700000000000, '2026-11-01T10:00:00Z', '2026-11-01T10:00:00Z'\n                ) ON CONFLICT (code) DO UPDATE SET name = excluded.name, kind = excluded.kind, unlock_cost = excluded.unlock_cost, status = excluded.status, source_type = excluded.source_type, image_url = excluded.image_url, published_at_ms = excluded.published_at_ms, created_at = excluded.created_at, updated_at = excluded.updated_at"
             )
         self._insert_generation(
             self.alice["id"],

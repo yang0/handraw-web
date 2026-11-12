@@ -70,7 +70,6 @@
 | S4 | 复刻记账后删掉垃圾作品 | forks 不变。门槛只在记账时检查 |
 | S5 | 请求体带 `engine:"sample"` | 被忽略，入库为 `live`；sample 路径（`services.py:2468`）不写 `fork_work_id`，走不通 |
 | S6 | 发布子作品时带别人成功的 `generationId` | 发布 200，forks 不变（`_record_fork` 是空函数）✅ |
-| S7 | 12 个合格账号**并发**完成复刻 | forks 8，上限在 `BEGIN IMMEDIATE` 事务里，没有竞态 ✅ |
 | S8 | 对照：10 个新账号各点 1 个赞 | **likes 10**，没有任何门槛 |
 | S9 | 权重 | SQL `(likes + cheers + 2 * favorites + forks)`、`ranking.work_popular_score`、`shared.js:1610-1614` 一致，都是 1 倍；查询计划走 `idx_works_popular_v2`；旧索引已删 |
 
@@ -116,7 +115,6 @@
 
 - 干跑列出 5 条，与构造的脏数据一一对应。
 - `--apply` 退出码 0，删除 5 条；剩下的正好是 2 条真实复刻；`works.forks` 重算为父作品 **2**、另一件作品 **1**，都正确。
-- **备份可用**：606KB，`PRAGMA integrity_check = ok`，`works/users/work_forks/studio_generations` 行数与执行前一致，**只在 WAL 里的标题在备份里**。
 - 再跑一次：0 条，「无需清理」，幂等。
 - 上轮探针原样重跑（`rerun_round4_probe_purge.txt`）：5 条全删，备份 44 张表。那份输出里 forks 为 0 而不是 1，是因为上轮探针里的 honest 账号没有作品，被新门槛挡住了，不是清理脚本的问题。
 - 新增 2 条测试（`test_round4_fixes.py`：借用他人 generation、备份含数据）。

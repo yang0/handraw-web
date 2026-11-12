@@ -23,7 +23,6 @@ class Fix65SmallDesignGapsTests(unittest.TestCase):
     def setUp(self):
         self.enterContext(patch.dict(os.environ, {"HANDRAW_DEMO_MODE": "0"}))
         self.temp = TemporaryDirectory()
-        self.db_path = Path(self.temp.name) / "test_fix_65.db"
         self.db = open_isolated_postgres(self, seed=True)
         self.author, _ = services.register_user(self.db, "author_65", "Pass1234!")
         self.user_b, _ = services.register_user(self.db, "solver_65", "Pass1234!")

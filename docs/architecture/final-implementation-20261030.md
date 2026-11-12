@@ -1,5 +1,6 @@
 # 最终实现报告（2026-10-30）
 
+> 历史产品评审。旧数据库实现内容已移除；当前数据库与运维以 `docs/local-operations.md` 为准。
 执行人：Claude（开发者）。起点 HEAD `e1873fa`，终点 HEAD `0562318`。
 
 ## 1. 结论
@@ -57,7 +58,6 @@ M8、A3、M7、M11 有同一个根因：主帖的 `status_source = 'moderator'` 
 | round6 `probe_gov6.py` | M10a、M10b 是上轮已确认的探针误报（期望 `hidden`，实际是更严格的 `deleted`） |
 | round3 `probe_skill.py` | `verified=True`、`associations_verified=True` |
 
-**迁移**：用 SQLite backup API 复制开发库 `.local/handraw_v2.db`（原库只读，未修改），从 44 迁移到 49 成功，行数不变，`integrity_check` 为 ok，5 张表都有新列。这个库里没有非公开的行，所以回填只在 `test_migration_049.py` 的构造数据上验证过。
 
 ## 4. 变异矩阵
 

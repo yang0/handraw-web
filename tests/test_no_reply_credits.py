@@ -10,13 +10,13 @@ Verifies:
 7. Admin settings update for economy enforces reply_publish_credits == 0 and reply_daily_cap == 0.
 """
 from __future__ import annotations
+from tests.postgres_support import open_isolated_postgres
 
 import json
 import unittest
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
-from tests.legacy_database import init_legacy_database
 from backend import server as server_module
 from backend.admin_services import admin_update_settings
 from backend.services import (
@@ -27,13 +27,13 @@ from backend.services import (
     publish_forum_topic_post,
     register_user,
 )
-from tests.work_schema import ZERO_REPLY_PUBLISH_CREDITS_SQL, zero_reply_publish_credits_hook
+from tests.postgres_maintenance import ZERO_REPLY_PUBLISH_CREDITS_SQL, zero_reply_publish_credits_hook
 
 
 class NoReplyCreditsTests(unittest.TestCase):
     def setUp(self):
         self.temp = TemporaryDirectory()
-        self.db = init_legacy_database(Path(self.temp.name) / "test_no_reply_credits.db")
+        self.db = open_isolated_postgres(self, seed=True)
         self.author, _ = register_user(self.db, "test_author", "password123")
         self.replier, _ = register_user(self.db, "test_replier", "password123")
         self.admin, _ = register_user(self.db, "test_admin", "password123")
@@ -270,7 +270,7 @@ class NoReplyCreditsTests(unittest.TestCase):
         self.assertEqual(data["reply_daily_cap"], 5)
 
         # Run migration 077 SQL
-        conn.executescript(ZERO_REPLY_PUBLISH_CREDITS_SQL)
+        conn.execute(ZERO_REPLY_PUBLISH_CREDITS_SQL)
         conn.commit()
 
         # Verify values are now 0

@@ -35,7 +35,6 @@ class TestGenerationWorksSync(unittest.TestCase):
     def setUp(self):
         self.enterContext(patch.dict(os.environ, {"HANDRAW_DEMO_MODE": "0"}))
         self.temp_dir = tempfile.TemporaryDirectory()
-        self.db_path = Path(self.temp_dir.name) / "test_gen_works.db"
         self.db = open_isolated_postgres(self, seed=True)
         self.user_author, self.token_author = register_user(self.db, "author_yang", "Pass1234!", display_name="杨凌")
         self.user_reader, self.token_reader = register_user(self.db, "reader_lin", "Pass1234!", display_name="小林")

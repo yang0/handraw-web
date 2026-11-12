@@ -12,7 +12,7 @@ sys.path.insert(0, str(REPO_ROOT))
 from http.server import ThreadingHTTPServer
 from playwright.sync_api import sync_playwright
 
-from tests.legacy_database import init_legacy_database
+from tests.browser_postgres import browser_postgres_database
 from backend.server import HandrawRequestHandler, SESSION_COOKIE_NAME
 from backend.services import register_user, publish_forum_topic_post, publish_forum_reply_post
 
@@ -28,7 +28,6 @@ def run_browser_verification():
     print(f"Setting up test server on port {PORT}...")
     temp_dir = tempfile.TemporaryDirectory()
     root = Path(temp_dir.name)
-    db_path = root / "browser_inject_guard_test.db"
     uploads_dir = root / "uploads"
     uploads_dir.mkdir(parents=True, exist_ok=True)
     generated_dir = root / "generated"
@@ -37,14 +36,13 @@ def run_browser_verification():
     img_cfg = root / "image-service.json"
     img_cfg.write_text(json.dumps({"key": "mock-test-key", "url": f"http://127.0.0.1:{PORT}"}))
 
-    os.environ["HANDRAW_DB_PATH"] = str(db_path)
     os.environ["HANDRAW_UPLOADS_DIR"] = str(uploads_dir)
     os.environ["HANDRAW_GENERATED_DIR"] = str(generated_dir)
     os.environ["HANDRAW_IMAGE_CONFIG"] = str(img_cfg)
     os.environ["HANDRAW_ALLOWED_ORIGINS"] = f"http://127.0.0.1:{PORT}"
     os.environ["HANDRAW_DEMO_MODE"] = "1"
 
-    db = init_legacy_database(db_path)
+    db = browser_postgres_database()
     httpd = None
 
     try:

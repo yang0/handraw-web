@@ -14,6 +14,7 @@ Covers:
 11. Migration 064 idempotence and legacy database upgrade safety.
 """
 from __future__ import annotations
+from tests.postgres_support import open_isolated_postgres
 
 import base64
 import concurrent.futures
@@ -37,9 +38,7 @@ from unittest.mock import patch
 from PIL import Image
 
 from backend.config import SESSION_COOKIE_NAME
-from tests.legacy_database import Database
 from backend.db import utc_now_iso
-from tests.legacy_database import init_legacy_database
 from backend.server import HandrawRequestHandler
 from backend.services import register_user, get_studio_workspace
 from backend.user_library import (
@@ -78,7 +77,6 @@ class UserLibrarySyncTests(unittest.TestCase):
     def setUp(self) -> None:
         self.temp_dir = tempfile.TemporaryDirectory()
         root = Path(self.temp_dir.name)
-        self.db_path = root / "library_sync_test.db"
         self.uploads_dir = root / "uploads"
         self.uploads_dir.mkdir(parents=True, exist_ok=True)
         self.generated_dir = root / "generated"
@@ -87,7 +85,6 @@ class UserLibrarySyncTests(unittest.TestCase):
         self.env = patch.dict(
             os.environ,
             {
-                "HANDRAW_DB_PATH": str(self.db_path),
                 "HANDRAW_UPLOADS_DIR": str(self.uploads_dir),
                 "HANDRAW_GENERATED_DIR": str(self.generated_dir),
                 "HANDRAW_DEMO_MODE": "1",
@@ -96,7 +93,7 @@ class UserLibrarySyncTests(unittest.TestCase):
             },
         )
         self.env.start()
-        self.db = init_legacy_database(self.db_path)
+        self.db = open_isolated_postgres(self, seed=True)
 
         self.httpd = ThreadingHTTPServer(("127.0.0.1", 0), HandrawRequestHandler)
         self.httpd.channel_role = "main"  # type: ignore[attr-defined]
@@ -955,22 +952,23 @@ class UserLibrarySyncTests(unittest.TestCase):
         s_foreign, err_foreign, _ = self._request("PUT", f"/api/library/assets/{u_conv}", {"name": "Bob Hijack", "dataUrl": d_bob}, cookie=self.cookie_b)
         self.assertEqual(s_foreign, 404)
 
-        # Rate limit hard cap (10000 keys)
-        _token_rate_logs.clear()
-        now = time.time()
-        for i in range(MAX_RATE_LIMIT_KEYS):
-            _token_rate_logs[f"token_{i}"] = [now]
+        with patch.dict(os.environ, {"HANDRAW_REDIS_URL": "", "HANDRAW_REDIS_REQUIRED": "0"}):
+            # Rate limit hard cap (10000 keys)
+            _token_rate_logs.clear()
+            now = time.time()
+            for i in range(MAX_RATE_LIMIT_KEYS):
+                _token_rate_logs[f"token_{i}"] = [now]
 
-        # 10001st key fails check_token_rate_limit
-        self.assertFalse(check_token_rate_limit("token_overflow_10001"))
+            # 10001st key fails check_token_rate_limit
+            self.assertFalse(check_token_rate_limit("token_overflow_10001"))
 
-        # When caller uses a token that exceeds map capacity, server returns 429
-        tok_overflow = self._create_token(self.user_a["id"], ["library"], "OverflowToken")
-        s_429, err_429, _ = self._request("GET", "/api/library/assets", bearer=tok_overflow)
-        self.assertEqual(s_429, 429)
-        self.assertIn(err_429.get("code"), ("rate_limited", "rate_limit_capacity_exceeded"))
+            # When caller uses a token that exceeds map capacity, server returns 429
+            tok_overflow = self._create_token(self.user_a["id"], ["library"], "OverflowToken")
+            s_429, err_429, _ = self._request("GET", "/api/library/assets", bearer=tok_overflow)
+            self.assertEqual(s_429, 429)
+            self.assertIn(err_429.get("code"), ("rate_limited", "rate_limit_capacity_exceeded"))
 
-        _token_rate_logs.clear()
+            _token_rate_logs.clear()
 
     def test_21_historical_duplicate_uploads_backfill_safe(self):
         """Fresh V3 skips unsynced rows, and deduplicates valid new uploads."""
@@ -1133,7 +1131,7 @@ class UserLibrarySyncTests(unittest.TestCase):
         # 6. Test fail-safe on query error: is_media_referenced returns True if query fails
         class BrokenConn:
             def execute(self, sql, params=None):
-                raise sqlite3.OperationalError("Simulated DB error")
+                raise RuntimeError("Simulated DB error")
 
         self.assertTrue(is_media_referenced(BrokenConn(), "/uploads/any.png", "C:/tmp/any.png"))
 
@@ -1318,7 +1316,7 @@ class UserLibrarySyncTests(unittest.TestCase):
         def failing_transaction():
             with orig_transaction() as tx:
                 yield tx
-                raise sqlite3.OperationalError("Simulated COMMIT failure")
+                raise RuntimeError("Simulated COMMIT failure")
 
         u_fail = _uid("commit_fail")
         self.db.transaction = failing_transaction
@@ -1392,10 +1390,7 @@ class UserLibrarySyncTests(unittest.TestCase):
 
         with self.db.transaction() as tx:
             tx.execute(
-                """
-                INSERT OR IGNORE INTO studio_generations (id, user_id, created_at)
-                VALUES ('gen_01', ?, '2026-01-01T00:00:00Z')
-                """,
+                "INSERT INTO studio_generations (id, user_id, created_at)\n                VALUES ('gen_01', ?, '2026-01-01T00:00:00Z') ON CONFLICT DO NOTHING",
                 (self.user_a["id"],),
             )
             tx.execute(
@@ -1547,7 +1542,7 @@ class UserLibrarySyncTests(unittest.TestCase):
             )
 
         # Run Migration 066 logic (first run)
-        from tests.work_schema import normalize_historical_asset_uids
+        from tests.postgres_maintenance import normalize_historical_asset_uids
         conn = self.db.get_conn()
         normalize_historical_asset_uids(conn)
 

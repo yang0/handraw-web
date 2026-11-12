@@ -219,7 +219,6 @@ class OpenAIImageGatewayHTTPTests(unittest.TestCase):
     def setUpClass(cls) -> None:
         cls.temp_dir = tempfile.TemporaryDirectory()
         root = Path(cls.temp_dir.name)
-        cls.db_path = root / "openai_gw_test.db"
         cls.img_cfg = root / "image-service.json"
 
         cls.gw_state = _MockOpenAIGatewayState()

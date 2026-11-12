@@ -53,7 +53,7 @@ SORT_KEYS = ("newest", "popular", "active")
 
 
 def work_popular_score(row: Any) -> int:
-    """Popularity of a work row (sqlite3.Row or dict)."""
+    """Popularity of a work row (named result row or dict)."""
     return (
         int(_get(row, "likes") or 0)
         + 2 * int(_get(row, "favorites") or 0)

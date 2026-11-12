@@ -23,8 +23,8 @@ for name in filter(None, paths):
     }:
         issues.append(f"Private/runtime file tracked: {name}")
     suffix = path.suffix.lower()
-    if suffix in {".pem", ".key", ".zip", ".gz", ".db", ".dump", ".sqlite", ".sqlite3"} or (
-        suffix == ".sql" and name not in schema_sources
+    if suffix in {".pem", ".key", ".zip", ".gz", ".db", ".dump"} or (
+        suffix.startswith(".sql") and (suffix != ".sql" or name not in schema_sources)
     ):
         issues.append(f"Sensitive/generated artifact tracked: {name}")
     if not path.is_file():

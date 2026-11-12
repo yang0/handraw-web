@@ -18,7 +18,6 @@ from backend.services import publish_forum_reply_post, register_user, ServiceErr
 class Stage2TopicWritesTests(unittest.TestCase):
     def setUp(self) -> None:
         self.temp_dir = tempfile.TemporaryDirectory()
-        self.db_path = Path(self.temp_dir.name) / "test_stage2.db"
         self.db = open_isolated_postgres(self, seed=True)
         self.author, _ = register_user(self.db, "test_author", "pass-author-123")
         self.commenter, _ = register_user(self.db, "test_commenter", "pass-comment-123")

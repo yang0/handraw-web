@@ -2,6 +2,7 @@
 Integration tests for Phase 1B: Creator Profile Generation History and Global Rename.
 """
 from __future__ import annotations
+from tests.postgres_support import open_isolated_postgres
 
 import json
 import os
@@ -14,7 +15,6 @@ import urllib.request
 from pathlib import Path
 from unittest.mock import patch
 
-from tests.legacy_database import init_legacy_database
 from backend.server import HandrawRequestHandler
 from backend.services import (
     ServiceError,
@@ -71,13 +71,11 @@ class ProfileGenerationHistoryTests(unittest.TestCase):
     def setUp(self) -> None:
         self.temp_dir = tempfile.TemporaryDirectory()
         root = Path(self.temp_dir.name)
-        self.db_path = root / "history_p1b_test.db"
         img_cfg = root / "image-service.json"
         img_cfg.write_text(json.dumps({"key": "mock-test-key", "url": "http://127.0.0.1:9999"}))
         self.env = patch.dict(
             os.environ,
             {
-                "HANDRAW_DB_PATH": str(self.db_path),
                 "HANDRAW_UPLOADS_DIR": str(root / "uploads"),
                 "HANDRAW_GENERATED_DIR": str(root / "generated"),
                 "HANDRAW_DEMO_MODE": "1",
@@ -87,7 +85,7 @@ class ProfileGenerationHistoryTests(unittest.TestCase):
             },
         )
         self.env.start()
-        self.db = init_legacy_database(self.db_path)
+        self.db = open_isolated_postgres(self, seed=True)
 
         self.creator_alice, _ = register_user(self.db, "alice", "SecretPass123!")
         self.creator_bob, _ = register_user(self.db, "bob", "SecretPass123!")
@@ -186,7 +184,8 @@ class ProfileGenerationHistoryTests(unittest.TestCase):
             )
         conn.commit()
         from backend.generation_works import project_generation_to_works
-        self.assertEqual(len(project_generation_to_works(conn, "public_batch_2")), 1)
+        with self.db.transaction():
+            self.assertEqual(len(project_generation_to_works(conn, "public_batch_2")), 1)
         result = get_user_public_generations(self.db, "alice", limit=1)
         self.assertEqual(result["total"], 1)
         self.assertFalse(result["hasMore"])
@@ -207,11 +206,11 @@ class ProfileGenerationHistoryTests(unittest.TestCase):
 
     def test_schema_visibility_and_index(self):
         conn = self.db.get_conn()
-        columns = [row[1] for row in conn.execute("PRAGMA table_info(studio_generations)").fetchall()]
+        columns = [row[1] for row in conn.execute("SELECT ordinal_position-1 AS cid,column_name AS name FROM information_schema.columns WHERE table_schema='public' AND table_name='studio_generations' ORDER BY ordinal_position").fetchall()]
         self.assertIn("visibility", columns)
 
-        indexes = [row[1] for row in conn.execute("PRAGMA index_list(studio_generations)").fetchall()]
-        self.assertIn("idx_studio_gen_user_vis_created", indexes)
+        indexes = [row[1] for row in conn.execute("SELECT 0 AS seq,indexname AS name FROM pg_indexes WHERE schemaname='public' AND tablename='studio_generations'").fetchall()]
+        self.assertIn("pg_idx_studio_gen_user_vis_created", indexes)
 
     def test_get_user_public_generations_anonymous_whitelist(self):
         self._insert_generation(
@@ -277,7 +276,7 @@ class ProfileGenerationHistoryTests(unittest.TestCase):
     def test_cursor_pagination_and_sorting(self):
         # Insert 15 generations with distinct timestamps
         for i in range(15):
-            ts = f"2026-11-01T{10 + i:02d}:00:00Z"
+            ts = f"2026-11-01T10:{i:02d}:00Z"
             self._insert_generation(
                 self.creator_bob["id"],
                 f"gen_bob_{i:02d}",

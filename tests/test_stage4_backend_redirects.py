@@ -19,7 +19,6 @@ from backend.services import register_user, utc_now_iso
 class Stage4BackendRedirectsTests(unittest.TestCase):
     def setUp(self) -> None:
         self.temp_dir = tempfile.mkdtemp()
-        self.db_path = Path(self.temp_dir) / "test_stage4_be.db"
         self._env = patch.dict(
             os.environ,
             {

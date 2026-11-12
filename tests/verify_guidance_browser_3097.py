@@ -20,7 +20,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from playwright.sync_api import sync_playwright
 
-from tests.legacy_database import init_legacy_database
+from tests.browser_postgres import browser_postgres_database
 from backend.server import HandrawRequestHandler, SESSION_COOKIE_NAME
 from backend.services import register_user
 from http.server import ThreadingHTTPServer
@@ -41,7 +41,6 @@ def main():
     print(f"=== Starting verification server on port {PORT} ===")
     temp_dir = tempfile.TemporaryDirectory()
     root = Path(temp_dir.name)
-    db_path = root / "guidance_verify.db"
     uploads_dir = root / "uploads"
     uploads_dir.mkdir(parents=True, exist_ok=True)
     generated_dir = root / "generated"
@@ -52,7 +51,6 @@ def main():
     img_cfg.write_text(json.dumps({"key": "mock-test-key", "url": f"http://127.0.0.1:{PORT}"}))
 
     env_patch = {
-        "HANDRAW_DB_PATH": str(db_path),
         "HANDRAW_UPLOADS_DIR": str(uploads_dir),
         "HANDRAW_GENERATED_DIR": str(generated_dir),
         "HANDRAW_IMAGE_SERVICE_FILE": str(img_cfg),
@@ -68,7 +66,7 @@ def main():
     db = None
     httpd = None
     try:
-        db = init_legacy_database(db_path)
+        db = browser_postgres_database()
         user, session_token = register_user(db, "guidance_tester", "SecretPass123!")
 
         httpd = ThreadingHTTPServer(("127.0.0.1", PORT), HandrawRequestHandler)

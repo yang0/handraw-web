@@ -60,7 +60,6 @@ class TestOfficialAssets(unittest.TestCase):
     def setUp(self) -> None:
         self.temp_dir = tempfile.TemporaryDirectory()
         self.root = Path(self.temp_dir.name)
-        self.db_path = self.root / "test_official_assets.db"
         self.uploads_dir = self.root / "uploads"
         self.uploads_dir.mkdir(parents=True, exist_ok=True)
         self.generated_dir = self.root / "generated"

@@ -256,13 +256,6 @@ class PostgresDatabase:
             if missing_triggers:
                 raise RuntimeError("Native V3 integrity triggers missing or disabled: " + ", ".join(missing_triggers))
             cursor.execute("""
-                SELECT to_regprocedure('public.json_valid(text)'),
-                       to_regprocedure('public.json_array_length(text)'),
-                       to_regprocedure('public.json_each(text)')
-            """)
-            if not all(cursor.fetchone()):
-                raise RuntimeError("PostgreSQL V3 JSON functions are missing. Check the native schema installation.")
-            cursor.execute("""
                 SELECT to_regclass('public.payment_orders') IS NOT NULL
                    AND to_regclass('public.payment_webhook_events') IS NOT NULL
                    AND EXISTS (

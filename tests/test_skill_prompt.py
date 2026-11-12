@@ -5,11 +5,11 @@ model from a style label — the Skill resolves the style's traits and the
 layout's composition rules first.
 """
 from __future__ import annotations
+from tests.postgres_support import open_isolated_postgres
 
 import unittest
 from pathlib import Path
 
-from tests.legacy_database import init_legacy_database
 from backend import skill_paths, skill_prompt
 from backend.services import _compose_skill_prompt
 
@@ -127,7 +127,7 @@ class SkillPromptTests(unittest.TestCase):
 
         with TemporaryDirectory() as temp_dir:
             db_path = Path(temp_dir) / "test.db"
-            db = init_legacy_database(db_path)
+            db = open_isolated_postgres(self, seed=True)
             user, _ = register_user(db, "test_prompt_user", "password123")
 
             call_checked = False
@@ -137,12 +137,14 @@ class SkillPromptTests(unittest.TestCase):
                 call_checked = True
                 conn = db.get_conn()
                 self.assertFalse(conn.in_transaction, "Database connection must not be in an open write transaction")
-                test_conn = db._connect()
+                from backend.postgres_db import PostgresDatabase
+                other_db = PostgresDatabase(db._dsn)
+                test_conn = other_db.get_conn()
                 try:
-                    test_conn.execute("BEGIN IMMEDIATE;")
+                    test_conn.execute("BEGIN;")
                     test_conn.execute("COMMIT;")
                 finally:
-                    test_conn.close()
+                    other_db.close()
                 return "Skill Prompt Mocked: Hand-drawn masterpiece"
 
             with patch("backend.services._compose_skill_prompt", side_effect=mocked_compose):
@@ -189,7 +191,7 @@ class SkillPromptTests(unittest.TestCase):
 
         with TemporaryDirectory() as temp_dir:
             db_path = Path(temp_dir) / "test_inflight.db"
-            db = init_legacy_database(db_path)
+            db = open_isolated_postgres(self, seed=True)
             user, _ = register_user(db, "inflight_user", "password123")
 
             res1 = prepare_cloud_generation(
@@ -231,7 +233,7 @@ class SkillPromptTests(unittest.TestCase):
 
         with TemporaryDirectory() as temp_dir:
             db_path = Path(temp_dir) / "test_concurrent.db"
-            db = init_legacy_database(db_path)
+            db = open_isolated_postgres(self, seed=True)
             user, _ = register_user(db, "concurrent_user", "password123")
 
             compose_call_count = 0
@@ -302,11 +304,10 @@ class SkillPromptTests(unittest.TestCase):
 
             with patch.dict(os.environ, {
                 "HANDRAW_DEMO_MODE": "1",
-                "HANDRAW_DB_PATH": str(db_path),
                 "HANDRAW_UPLOADS_DIR": str(uploads_dir),
                 "HANDRAW_GENERATED_DIR": str(generated_dir),
             }):
-                db = init_legacy_database(db_path)
+                db = open_isolated_postgres(self, seed=True)
                 httpd = ThreadingHTTPServer(("127.0.0.1", 0), HandrawRequestHandler)
                 httpd.channel_role = "main"
                 httpd.db = db
@@ -422,11 +423,10 @@ class SkillPromptTests(unittest.TestCase):
 
             with patch.dict(os.environ, {
                 "HANDRAW_DEMO_MODE": "1",
-                "HANDRAW_DB_PATH": str(db_path),
                 "HANDRAW_UPLOADS_DIR": str(uploads_dir),
                 "HANDRAW_GENERATED_DIR": str(generated_dir),
             }):
-                db = init_legacy_database(db_path)
+                db = open_isolated_postgres(self, seed=True)
                 httpd = ThreadingHTTPServer(("127.0.0.1", 0), HandrawRequestHandler)
                 httpd.channel_role = "main"
                 httpd.db = db
@@ -496,7 +496,7 @@ class SkillPromptTests(unittest.TestCase):
 
         with TemporaryDirectory() as temp_dir:
             db_path = Path(temp_dir) / "test_prompt_ready_1.db"
-            db = init_legacy_database(db_path)
+            db = open_isolated_postgres(self, seed=True)
             u1, _ = register_user(db, "ready_user_1", "password123")
             u2, _ = register_user(db, "ready_user_2", "password123")
 
@@ -531,7 +531,7 @@ class SkillPromptTests(unittest.TestCase):
 
         with TemporaryDirectory() as temp_dir:
             db_path = Path(temp_dir) / "test_reconcile_stale.db"
-            db = init_legacy_database(db_path)
+            db = open_isolated_postgres(self, seed=True)
 
             now_dt = datetime.now(timezone.utc)
             old_time = (now_dt - timedelta(minutes=11)).strftime("%Y-%m-%dT%H:%M:%SZ")

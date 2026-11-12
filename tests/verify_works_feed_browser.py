@@ -17,7 +17,7 @@ if hasattr(sys.stdout, "reconfigure"):
 
 from playwright.sync_api import sync_playwright
 
-from tests.legacy_database import init_legacy_database
+from tests.browser_postgres import browser_postgres_database
 from backend import server as server_module
 from backend.server import create_channel_server
 from backend.services import publish_user_work, register_user
@@ -29,8 +29,7 @@ def run_verification():
     os.environ["HANDRAW_ALLOWED_ORIGINS"] = "http://trusted.test"
     os.environ["HANDRAW_PRIVATE_STORAGE"] = temp_dir.name
 
-    db_path = Path(temp_dir.name) / "browser_verify.db"
-    db = init_legacy_database(db_path)
+    db = browser_postgres_database()
 
     author, _ = register_user(db, "demo_creator", "password123")
 

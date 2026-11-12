@@ -279,16 +279,11 @@ def _publish_skill_run_images(
 def _skill_run_upload_guard(db: Any, user_id: int, external_id: str):
     """Serialize retries of ONE Skill run across PostgreSQL web workers.
 
-    A thread RLock only protects SQLite development and cannot serialize
-    multiple PostgreSQL processes. A PG session advisory lock spans the
+    A PostgreSQL session advisory lock spans the
     deliberate short transactions and the durable object upload. Different
     runs are independent and may upload in parallel.
     """
     conn = db.get_conn()
-    if getattr(conn, "dialect", "") != "postgresql":
-        with db._write_lock:
-            yield
-        return
 
     token = hashlib.sha256(
         f"handraw:skill-run:{user_id}:{external_id}".encode("utf-8")
