@@ -16,13 +16,14 @@ import unittest
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
+from tests.legacy_database import init_legacy_database
 from backend import curation as C
 from backend import forum_resources as R
 from backend import server as server_module
 from backend import services as S
 from backend.admin_services import admin_moderate_work
 from backend.features import edit_owned_content
-from backend.work_schema import RESET_WORKS_PRICE_SQL
+from tests.work_schema import RESET_WORKS_PRICE_SQL
 
 IMG = "/images/individual/FA/FA-013.webp"
 
@@ -30,7 +31,7 @@ IMG = "/images/individual/FA/FA-013.webp"
 class RemoveWorkPricingAcceptanceTests(unittest.TestCase):
     def setUp(self):
         self.temp = TemporaryDirectory()
-        self.db = server_module.init_database(Path(self.temp.name) / "test_pricing.db")
+        self.db = init_legacy_database(Path(self.temp.name) / "test_pricing.db")
         self.author, _ = S.register_user(self.db, "work_artist", "password123")
         self.buyer, _ = S.register_user(self.db, "work_buyer", "password123")
         self.admin, _ = S.register_user(self.db, "work_admin", "password123")

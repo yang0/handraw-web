@@ -1,9 +1,8 @@
-"""Additive schema migrations for Handraw Web 2.0.
+"""Historical schema migrations used by file-backed tests.
 
 Per AGENTS.md:
 - Database changes are strictly additive.
 - A code rollback must never roll back database migrations.
-- Stored in Python rather than .sql files so ops/check_release.py treats zero source files as DB dumps.
 """
 from __future__ import annotations
 
@@ -756,7 +755,7 @@ MIGRATIONS.extend(WORK_MIGRATIONS)
 
 # Direct Messages (migration block 070+).
 try:
-    from .messaging import DM_MIGRATIONS
+    from .legacy_feature_schemas import DM_MIGRATIONS
 except ImportError:  # pragma: no cover - compatibility for staged rollouts
     DM_MIGRATIONS = []
 
@@ -764,7 +763,7 @@ MIGRATIONS.extend(DM_MIGRATIONS)
 
 # Home Scenarios (migration block 086+).
 try:
-    from .home_scenarios import SCENARIOS_MIGRATIONS, SCENARIOS_POST_MIGRATION_HOOKS
+    from .legacy_feature_schemas import SCENARIOS_MIGRATIONS, SCENARIOS_POST_MIGRATION_HOOKS
     POST_MIGRATION_HOOKS.update(SCENARIOS_POST_MIGRATION_HOOKS)
     MIGRATIONS.extend(SCENARIOS_MIGRATIONS)
 except ImportError:  # pragma: no cover - compatibility for staged rollouts
@@ -776,7 +775,7 @@ MIGRATIONS.extend(SKILL_WEB_MIGRATIONS)
 
 # Handraw V3 is built on a fresh database; there is no old user content to
 # backfill. The unified generation/media model is part of initial setup.
-from .generation_v3 import V3_MIGRATIONS
+from .legacy_feature_schemas import V3_MIGRATIONS
 MIGRATIONS.extend(V3_MIGRATIONS)
 
 MIGRATIONS.append(

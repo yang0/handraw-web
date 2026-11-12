@@ -18,6 +18,7 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 from unittest.mock import patch
 
+from tests.legacy_database import init_legacy_database
 from backend import server as server_module
 from backend.config import SESSION_COOKIE_NAME
 from backend.server import create_channel_server
@@ -33,7 +34,7 @@ class PrecedenceTests(unittest.TestCase):
         cls._env = patch.dict(os.environ, {"HANDRAW_ALLOWED_ORIGINS": ORIGIN})
         cls._env.start()
         cls.temp = TemporaryDirectory()
-        cls.db = server_module.init_database(Path(cls.temp.name) / "precedence.db")
+        cls.db = init_legacy_database(Path(cls.temp.name) / "precedence.db")
         conn = cls.db.get_conn()
         cls.author, _ = register_user(cls.db, "pc_author", "password-a")
         for name, role in (("pc_admin", "admin"), ("pc_oper", "operator"), ("pc_mod", None)):

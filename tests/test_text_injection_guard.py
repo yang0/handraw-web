@@ -21,7 +21,8 @@ from backend.runtime_policy import (
     sanitize_rich_html,
     sanitize_submission_body,
 )
-from backend.server import HandrawRequestHandler, init_database, SESSION_COOKIE_NAME
+from tests.legacy_database import init_legacy_database
+from backend.server import HandrawRequestHandler, SESSION_COOKIE_NAME
 from backend.services import register_user, publish_forum_topic_post, publish_forum_reply_post
 
 
@@ -148,7 +149,7 @@ class TextInjectionIntegrationHTTPTests(unittest.TestCase):
             },
         )
         self.env.start()
-        self.db = init_database(self.db_path)
+        self.db = init_legacy_database(self.db_path)
         self.httpd = ThreadingHTTPServer(("127.0.0.1", 0), HandrawRequestHandler)
         self.httpd.channel_role = "main"  # type: ignore[attr-defined]
         self.httpd.db = self.db  # type: ignore[attr-defined]

@@ -17,6 +17,11 @@ jobs:
       - run: node tests/test_task_journey.cjs
       - run: node --check demo/assets/article-generation-guard.js && node tests/test_article_generation_guard.cjs
       - run: node --check demo/assets/article-review.js && node tests/test_article_review.cjs
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+      - run: python -m pip install -r requirements.txt
       - run: python -m unittest discover -s tests -p 'test_article_versions.py' -v
   # Keep the complete unittest suite, but run each module on exactly one
   # worker. Historical timings balance slow HTTP/integration modules.
@@ -190,18 +195,33 @@ jobs:
           tests.test_social_counters_postgres tests.test_v2_operations tests.test_ops_convergence tests.test_cold_start
           tests.test_home_scenarios tests.test_unified_replies tests.test_resource_topic_visibility
           tests.test_round4_fixes tests.test_seed_starter_library
+          tests.test_v2_single_backend tests.test_collection_canonical_response
+          tests.test_comment_led_forum tests.test_cover_image
+          tests.test_article_plan tests.test_batch_plan tests.test_batch_size_mismatch
 
   creation-workspace-browser:
     runs-on: ubuntu-latest
     timeout-minutes: 10
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: handraw_pg_staging
+        ports: ['5432:5432']
+        options: --health-cmd "pg_isready -U postgres -d handraw_pg_staging" --health-interval 5s --health-timeout 5s --health-retries 10
+    env:
+      HANDRAW_PG_STAGING_URL: postgresql://postgres:postgres@127.0.0.1:5432/handraw_pg_staging
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
-      - run: python -m pip install playwright==1.58.0
+      - run: python -m pip install -r requirements.txt playwright==1.58.0
       - run: python -m playwright install --with-deps chromium
       - run: python tests/verify_creation_workspace_browser.py
+      - run: python -m unittest -v tests.test_browser_render
       - uses: actions/upload-artifact@v4
         if: always()
         with:

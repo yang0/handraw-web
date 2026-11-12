@@ -36,6 +36,7 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 from unittest.mock import patch
 
+from tests.legacy_database import init_legacy_database
 from backend.server import (
     HandrawRequestHandler,
     GenerationReconciler,
@@ -43,7 +44,6 @@ from backend.server import (
     _gateway_failure_is_definite,
     _parse_created_at_dt,
     create_channel_server,
-    init_database,
 )
 from backend.services import (
     complete_cloud_generation,
@@ -143,7 +143,7 @@ class RecordCloudGenerationTaskIdTests(unittest.TestCase):
 
     def setUp(self):
         self.temp = TemporaryDirectory()
-        self.db = init_database(Path(self.temp.name) / "task_id_test.db")
+        self.db = init_legacy_database(Path(self.temp.name) / "task_id_test.db")
         self.user, _ = register_user(self.db, "record_user", "password-123")
         self.uid = self.user["id"]
 
@@ -209,7 +209,7 @@ class StudioGenerateTimeoutRefundHTTPTests(unittest.TestCase):
             },
         )
         cls.env.start()
-        cls.db = init_database(cls.db_path)
+        cls.db = init_legacy_database(cls.db_path)
         cls.user, _ = register_user(cls.db, "gen_tester", "Password123!")
 
         cls.server = create_channel_server(0, "main", cls.db)
@@ -585,7 +585,7 @@ class ReconcilerUnreceivedTaskRefundTests(unittest.TestCase):
 
     def setUp(self):
         self.temp = TemporaryDirectory()
-        self.db = init_database(Path(self.temp.name) / "reconciler_test.db")
+        self.db = init_legacy_database(Path(self.temp.name) / "reconciler_test.db")
         self.user, _ = register_user(self.db, "reconcile_user", "password-123")
         self.uid = self.user["id"]
 

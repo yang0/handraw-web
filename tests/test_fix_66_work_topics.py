@@ -17,6 +17,7 @@ from unittest.mock import patch
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
+from tests.legacy_database import init_legacy_database
 from backend import server, services
 from backend.curation import publish_work_direct
 from backend.resource_discussions import ensure_topic
@@ -27,7 +28,7 @@ class Fix66WorkTopicsTests(unittest.TestCase):
         self.enterContext(patch.dict(os.environ, {"HANDRAW_DEMO_MODE": "0"}))
         self.temp = TemporaryDirectory()
         self.db_path = Path(self.temp.name) / "test_fix_66.db"
-        self.db = server.init_database(self.db_path)
+        self.db = init_legacy_database(self.db_path)
         self.author, _ = services.register_user(self.db, "test_author", "Pass1234!")
         self.admin, _ = services.register_user(self.db, "test_admin", "Pass1234!")
         conn = self.db.get_conn()

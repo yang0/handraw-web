@@ -4,10 +4,11 @@ from __future__ import annotations
 import base64
 import json
 import logging
-import sqlite3
 import threading
 import time
 from typing import Any
+
+from .postgres_db import PgConnection
 import uuid
 
 from .db import Database
@@ -80,7 +81,7 @@ def decode_cursor(cursor_str: str | None) -> dict[str, Any] | None:
         return None
 
 
-def _get_unlocked_set(conn: sqlite3.Connection, user: dict[str, Any] | None) -> set[str]:
+def _get_unlocked_set(conn: PgConnection, user: dict[str, Any] | None) -> set[str]:
     if not user:
         return set()
     uid = user.get("id")
@@ -156,7 +157,7 @@ def enrich_dimensions(item: dict[str, Any]) -> None:
     item["imageDimensions"] = dims_list
 
 
-def is_valid_work_row(row: sqlite3.Row | dict[str, Any]) -> bool:
+def is_valid_work_row(row: dict[str, Any]) -> bool:
     """Check if work row has valid published status and non-empty image list."""
     if row["status"] != "published":
         return False
@@ -177,7 +178,7 @@ def is_valid_work_row(row: sqlite3.Row | dict[str, Any]) -> bool:
 
 
 
-def _load_feed_comments(conn: sqlite3.Connection, work_ids: list[str]) -> dict[str, list[dict[str, Any]]]:
+def _load_feed_comments(conn: PgConnection, work_ids: list[str]) -> dict[str, list[dict[str, Any]]]:
     """Batch-load comments for one page, not the entire published catalog."""
     if not work_ids:
         return {}

@@ -15,12 +15,12 @@ from pathlib import Path
 from unittest.mock import patch
 
 from backend.runtime_policy import bind_host, recharge_enabled, sanitize_html
+from tests.legacy_database import init_legacy_database
 from backend.server import (
     GenerationReconciler,
     HandrawRequestHandler,
     _remote_image_url_allowed,
     build_sitemap_xml,
-    init_database,
     render_seo_portal_html,
 )
 
@@ -41,7 +41,7 @@ class SecurityHTTPTests(unittest.TestCase):
             },
         )
         self.env.start()
-        self.db = init_database(root / "security.db")
+        self.db = init_legacy_database(root / "security.db")
         self.httpd = ThreadingHTTPServer(("127.0.0.1", 0), HandrawRequestHandler)
         self.httpd.channel_role = "main"  # type: ignore[attr-defined]
         self.httpd.db = self.db  # type: ignore[attr-defined]

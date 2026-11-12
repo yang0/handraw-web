@@ -26,7 +26,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from playwright.sync_api import sync_playwright
 
-from backend.server import HandrawRequestHandler, SESSION_COOKIE_NAME, init_database
+from tests.legacy_database import init_legacy_database
+from backend.server import HandrawRequestHandler, SESSION_COOKIE_NAME
 from backend.services import register_user, utc_now_iso
 from backend import curation as C
 from backend import resource_discussions as RD
@@ -71,7 +72,7 @@ def main():
         old_env[k] = os.environ.get(k)
         os.environ[k] = v
 
-    db = init_database(db_path)
+    db = init_legacy_database(db_path)
 
     # Register users
     author_user, author_token = register_user(db, "ink_master", "Pass1234")

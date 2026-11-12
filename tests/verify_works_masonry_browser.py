@@ -18,6 +18,7 @@ if hasattr(sys.stdout, "reconfigure"):
 
 from playwright.sync_api import sync_playwright
 
+from tests.legacy_database import init_legacy_database
 from backend import server as server_module
 from backend.server import create_channel_server
 from backend.services import publish_user_work, register_user
@@ -33,7 +34,7 @@ def run_verification():
     srv = None
     try:
         db_path = Path(temp_dir.name) / "browser_verify.db"
-        db = server_module.init_database(db_path)
+        db = init_legacy_database(db_path)
 
         author, _ = register_user(db, "demo_creator", "password123")
 

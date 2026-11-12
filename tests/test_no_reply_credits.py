@@ -16,6 +16,7 @@ import unittest
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
+from tests.legacy_database import init_legacy_database
 from backend import server as server_module
 from backend.admin_services import admin_update_settings
 from backend.services import (
@@ -26,13 +27,13 @@ from backend.services import (
     publish_forum_topic_post,
     register_user,
 )
-from backend.work_schema import ZERO_REPLY_PUBLISH_CREDITS_SQL, zero_reply_publish_credits_hook
+from tests.work_schema import ZERO_REPLY_PUBLISH_CREDITS_SQL, zero_reply_publish_credits_hook
 
 
 class NoReplyCreditsTests(unittest.TestCase):
     def setUp(self):
         self.temp = TemporaryDirectory()
-        self.db = server_module.init_database(Path(self.temp.name) / "test_no_reply_credits.db")
+        self.db = init_legacy_database(Path(self.temp.name) / "test_no_reply_credits.db")
         self.author, _ = register_user(self.db, "test_author", "password123")
         self.replier, _ = register_user(self.db, "test_replier", "password123")
         self.admin, _ = register_user(self.db, "test_admin", "password123")

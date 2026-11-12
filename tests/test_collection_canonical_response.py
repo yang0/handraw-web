@@ -4,10 +4,9 @@
 import unittest
 import os
 from unittest.mock import patch
-from pathlib import Path
-from tempfile import TemporaryDirectory
 
-from backend import server
+from backend.seed import ensure_seeded
+from tests.postgres_support import open_isolated_postgres
 from backend.services import (
     publish_user_work,
     register_user,
@@ -19,14 +18,9 @@ from backend.services import (
 class CollectionCanonicalResponseTests(unittest.TestCase):
     def setUp(self):
         self.enterContext(patch.dict(os.environ, {"HANDRAW_DEMO_MODE": "0"}))
-        self.temp = TemporaryDirectory()
-        self.db = server.init_database(Path(self.temp.name) / "test_social.db")
+        self.db = open_isolated_postgres(self)
+        ensure_seeded(self.db)
         self.user, _ = register_user(self.db, "user_tester", "Pass1234!")
-
-    def tearDown(self):
-        self.db.get_conn().close()
-        self.db.close()
-        self.temp.cleanup()
 
     def test_toggle_user_collection_canonical_fields(self):
         # 1. Test collection on style

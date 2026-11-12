@@ -6,9 +6,10 @@ and (future) user_resources with consistent ownership, visibility, and generatio
 from __future__ import annotations
 
 import json
-import sqlite3
 from functools import lru_cache
 from typing import Any
+
+from .postgres_db import PgConnection
 
 from .config import CONTENT_DIR
 from .runtime_policy import sanitize_media_url
@@ -29,7 +30,7 @@ def static_catalog() -> dict[str, dict[str, Any]]:
 
 
 def resolve(
-    conn: sqlite3.Connection,
+    conn: PgConnection,
     code: str,
     *,
     viewer: dict[str, Any] | None = None,

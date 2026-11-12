@@ -11,7 +11,7 @@ import unittest
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
-from backend.db import Database
+from tests.legacy_database import Database
 from backend.ranking import (
     asset_popular_score,
     normalize_sort,

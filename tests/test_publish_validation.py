@@ -11,6 +11,7 @@ import unittest
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
+from tests.legacy_database import init_legacy_database
 from backend import server
 from backend.services import publish_user_work, register_user
 
@@ -20,7 +21,7 @@ IMG = "/images/individual/FA/FA-013.webp"
 class PublishValidationTests(unittest.TestCase):
     def setUp(self):
         self.temp = TemporaryDirectory()
-        self.db = server.init_database(Path(self.temp.name) / "valid.db")
+        self.db = init_legacy_database(Path(self.temp.name) / "valid.db")
         self.author, _ = register_user(self.db, "val_author", "password-a")
 
     def tearDown(self):
@@ -83,7 +84,7 @@ class PublishValidationTests(unittest.TestCase):
 class VisibilitySyncTests(unittest.TestCase):
     def setUp(self):
         self.temp = TemporaryDirectory()
-        self.db = server.init_database(Path(self.temp.name) / "vis.db")
+        self.db = init_legacy_database(Path(self.temp.name) / "vis.db")
         self.author, _ = register_user(self.db, "vis_author", "password-a")
         register_user(self.db, "vis_admin", "password-admin")
         self.db.get_conn().execute("UPDATE users SET role = 'admin' WHERE username = 'vis_admin'")

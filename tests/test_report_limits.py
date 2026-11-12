@@ -10,6 +10,7 @@ import unittest
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
+from tests.legacy_database import init_legacy_database
 from backend import server
 from backend.services import publish_user_work, register_user, submit_abuse_report
 
@@ -19,7 +20,7 @@ IMG = "/images/individual/FA/FA-013.webp"
 class ReportLimitTests(unittest.TestCase):
     def setUp(self):
         self.temp = TemporaryDirectory()
-        self.db = server.init_database(Path(self.temp.name) / "limits.db")
+        self.db = init_legacy_database(Path(self.temp.name) / "limits.db")
         self.author, _ = register_user(self.db, "rl_author", "password-a")
         self.work = publish_user_work(
             self.db, self.author, {"title": "举报上限", "prompt": "p", "images": [IMG], "styles": ["FA-013"]}

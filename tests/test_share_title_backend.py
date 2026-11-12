@@ -6,7 +6,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from backend.server import init_database
+from tests.legacy_database import init_legacy_database
 from backend.runtime_policy import sanitize_plain_text
 from backend.services import (
     ServiceError,
@@ -22,7 +22,7 @@ class TestShareTitleBackend(unittest.TestCase):
     def setUp(self):
         self.tmp_dir = tempfile.TemporaryDirectory()
         db_path = Path(self.tmp_dir.name) / "test_share_title.db"
-        self.test_db = init_database(db_path)
+        self.test_db = init_legacy_database(db_path)
 
     def tearDown(self):
         self.test_db.close()

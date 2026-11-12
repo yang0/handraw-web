@@ -13,6 +13,7 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 from unittest.mock import patch
 
+from tests.legacy_database import init_legacy_database
 from backend import resource_discussions, services
 from backend import server as server_module
 from backend.config import SESSION_COOKIE_NAME
@@ -43,7 +44,7 @@ class PostRoutesHTTPTests(unittest.TestCase):
         cls._env.start()
         cls.temp = TemporaryDirectory()
         cls.db_path = Path(cls.temp.name) / "post_routes.db"
-        cls.db = server_module.init_database(cls.db_path)
+        cls.db = init_legacy_database(cls.db_path)
 
         # Register users
         cls.author, _ = register_user(cls.db, "pr_author", "pass-author")

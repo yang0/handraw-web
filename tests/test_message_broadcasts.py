@@ -27,7 +27,7 @@ from urllib.error import HTTPError
 from urllib.parse import urlencode
 from urllib.request import Request, urlopen
 
-from backend.db import Database
+from tests.legacy_database import Database
 from backend.messaging import (
     send_message_broadcast,
     withdraw_message_broadcast,
@@ -35,7 +35,8 @@ from backend.messaging import (
     mark_message_broadcast_read,
     get_messages_unread_summary,
 )
-from backend.server import HandrawRequestHandler, SESSION_COOKIE_NAME, init_database
+from tests.legacy_database import init_legacy_database
+from backend.server import HandrawRequestHandler, SESSION_COOKIE_NAME
 from backend.services import register_user, ServiceError
 
 
@@ -43,7 +44,7 @@ class MessageBroadcastTests(unittest.TestCase):
     def setUp(self):
         self.temp_dir = tempfile.TemporaryDirectory()
         self.db_path = Path(self.temp_dir.name) / "test_broadcasts.db"
-        self.db = init_database(self.db_path)
+        self.db = init_legacy_database(self.db_path)
 
         # Create admin, operator, and standard users
         self.admin, _ = register_user(self.db, "admin_user", "AdminPass123!", display_name="超级管理员")
@@ -347,7 +348,7 @@ class MessageBroadcastHTTPTests(unittest.TestCase):
             cls.old_env[k] = os.environ.get(k)
             os.environ[k] = v
 
-        cls.db = init_database(cls.db_path)
+        cls.db = init_legacy_database(cls.db_path)
         cls.admin, cls.token_admin = register_user(cls.db, "http_admin", "Password123!", display_name="超级管理员")
         with cls.db.transaction() as tx:
             tx.execute("UPDATE users SET role = 'admin' WHERE id = ?", (cls.admin["id"],))

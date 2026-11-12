@@ -17,10 +17,11 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 from unittest.mock import patch
 
+from tests.legacy_database import init_legacy_database
 from backend import server as server_module
 from backend.server import create_channel_server
 from backend.services import ServiceError, publish_user_work, register_user
-from backend.work_schema import RESET_WORKS_PRICE_SQL
+from tests.work_schema import RESET_WORKS_PRICE_SQL
 
 IMG = "/images/individual/FA/FA-013.webp"
 SECRET = "TOPSECRET-RECIPE-XYZ-123456789"
@@ -30,7 +31,7 @@ class PaidPromptNeverServedTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         cls.temp = TemporaryDirectory()
-        cls.db = server_module.init_database(Path(cls.temp.name) / "ssr.db")
+        cls.db = init_legacy_database(Path(cls.temp.name) / "ssr.db")
         author, _ = register_user(cls.db, "ssr_author", "password-a")
 
         # Verify setting price > 0 is rejected (400)

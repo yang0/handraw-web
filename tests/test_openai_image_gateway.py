@@ -17,10 +17,10 @@ from unittest.mock import patch
 
 from backend.config import load_image_config, normalize_image_protocol, resolve_gateway_model
 from backend.db import local_today_str
+from tests.legacy_database import init_legacy_database
 from backend.server import (
     GenerationReconciler,
     create_channel_server,
-    init_database,
 )
 from backend.services import prepare_cloud_generation, register_user
 
@@ -253,7 +253,7 @@ class OpenAIImageGatewayHTTPTests(unittest.TestCase):
             },
         )
         cls.env.start()
-        cls.db = init_database(cls.db_path)
+        cls.db = init_legacy_database(cls.db_path)
 
         with cls.db.transaction() as tx:
             tx.execute(

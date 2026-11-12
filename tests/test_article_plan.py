@@ -27,7 +27,9 @@ from http.server import ThreadingHTTPServer
 from pathlib import Path
 from unittest.mock import patch
 
-from backend.server import SESSION_COOKIE_NAME, HandrawRequestHandler, init_database
+from backend.seed import ensure_seeded
+from tests.postgres_support import open_isolated_postgres
+from backend.server import SESSION_COOKIE_NAME, HandrawRequestHandler
 from backend.services import register_user
 
 F1_BLOCKS = [
@@ -44,13 +46,10 @@ F1_BLOCKS = [
 
 class ArticlePlanRoutesTests(unittest.TestCase):
     def setUp(self) -> None:
-        self.temp_dir = tempfile.TemporaryDirectory()
-        root = Path(self.temp_dir.name)
-        self.db_path = root / "article_plan_test.db"
-        self.env = patch.dict(
+        root = Path(self.enterContext(tempfile.TemporaryDirectory()))
+        self.enterContext(patch.dict(
             os.environ,
             {
-                "HANDRAW_DB_PATH": str(self.db_path),
                 "HANDRAW_UPLOADS_DIR": str(root / "uploads"),
                 "HANDRAW_GENERATED_DIR": str(root / "generated"),
                 "HANDRAW_DEMO_MODE": "1",
@@ -58,9 +57,9 @@ class ArticlePlanRoutesTests(unittest.TestCase):
                 "HANDRAW_AI_CONFIG": str(root / "absent-ai-service.json"),
                 "HANDRAW_IMAGE_CONFIG": str(root / "absent-image-service.json"),
             },
-        )
-        self.env.start()
-        self.db = init_database(self.db_path)
+        ))
+        self.db = open_isolated_postgres(self)
+        ensure_seeded(self.db)
         self.httpd = ThreadingHTTPServer(("127.0.0.1", 0), HandrawRequestHandler)
         self.httpd.channel_role = "main"  # type: ignore[attr-defined]
         self.httpd.db = self.db  # type: ignore[attr-defined]
@@ -90,9 +89,6 @@ class ArticlePlanRoutesTests(unittest.TestCase):
         self.httpd.shutdown()
         self.httpd.server_close()
         self.thread.join(timeout=2.0)
-        self.db.close()
-        self.env.stop()
-        self.temp_dir.cleanup()
 
     def _post(self, path: str, payload: dict, cookie: str | None = None, token: str | None = None) -> tuple[int, dict]:
         data = json.dumps(payload).encode("utf-8")

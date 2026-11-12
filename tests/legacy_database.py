@@ -1,0 +1,212 @@
+"""Legacy file-backed fixtures for tests awaiting PostgreSQL migration."""
+from __future__ import annotations
+
+import logging
+import re
+import sqlite3
+import threading
+from contextlib import contextmanager
+from pathlib import Path
+from typing import Iterator
+
+from backend.db import utc_now_iso
+from .legacy_migrations import MIGRATIONS, POST_MIGRATION_HOOKS
+
+logger = logging.getLogger("handraw.test_database")
+_MIGRATION_NAME_RE = re.compile(r"^[0-9]{3}_[a-z0-9_]+$")
+
+
+class Database:
+    def __init__(self, db_path: Path | str) -> None:
+        self.db_path = Path(db_path)
+        self._write_lock = threading.RLock()
+        self._local = threading.local()
+        self._all_conns: set[sqlite3.Connection] = set()
+        self._conns_lock = threading.Lock()
+
+    def _connect(self) -> sqlite3.Connection:
+        self.db_path.parent.mkdir(parents=True, exist_ok=True)
+        conn = sqlite3.connect(str(self.db_path), timeout=15.0, isolation_level=None, check_same_thread=False)
+        conn.row_factory = sqlite3.Row
+        conn.execute("PRAGMA journal_mode=WAL;")
+        conn.execute("PRAGMA synchronous=NORMAL;")
+        conn.execute("PRAGMA foreign_keys=ON;")
+        conn.execute("PRAGMA busy_timeout=10000;")
+        with self._conns_lock:
+            self._all_conns.add(conn)
+        return conn
+
+    def get_conn(self) -> sqlite3.Connection:
+        conn = getattr(self._local, "conn", None)
+        if conn is None or getattr(self._local, "db_path", None) != str(self.db_path):
+            if conn is not None:
+                try:
+                    conn.close()
+                except Exception:
+                    pass
+                with self._conns_lock:
+                    self._all_conns.discard(conn)
+            conn = self._connect()
+            self._local.conn = conn
+            self._local.db_path = str(self.db_path)
+        return conn
+
+    def close_thread_conn(self) -> None:
+        conn = getattr(self._local, "conn", None)
+        if conn is not None:
+            try:
+                conn.close()
+            except Exception:
+                pass
+            with self._conns_lock:
+                self._all_conns.discard(conn)
+            self._local.conn = None
+
+    def close(self) -> None:
+        with self._conns_lock:
+            conns = list(self._all_conns)
+            self._all_conns.clear()
+        for c in conns:
+            try:
+                c.close()
+            except Exception:
+                pass
+        self._local.conn = None
+
+    @contextmanager
+    def transaction(self) -> Iterator[sqlite3.Connection]:
+        with self._write_lock:
+            conn = self.get_conn()
+            conn.execute("BEGIN IMMEDIATE;")
+            try:
+                yield conn
+                conn.execute("COMMIT;")
+            except Exception:
+                conn.execute("ROLLBACK;")
+                raise
+
+    def migrate(self) -> list[str]:
+        applied_names: list[str] = []
+        with self._write_lock:
+            conn = self.get_conn()
+            conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS schema_migrations (
+                    version INTEGER PRIMARY KEY,
+                    name TEXT NOT NULL,
+                    applied_at TEXT NOT NULL
+                );
+                """
+            )
+            existing = {
+                int(row["version"])
+                for row in conn.execute("SELECT version FROM schema_migrations").fetchall()
+            }
+            hooks_table_existed = bool(
+                conn.execute(
+                    "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'schema_migration_hooks'"
+                ).fetchone()
+            )
+            conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS schema_migration_hooks (
+                    version INTEGER PRIMARY KEY,
+                    completed_at TEXT NOT NULL
+                );
+                """
+            )
+            now = utc_now_iso()
+            if not hooks_table_existed and existing:
+                baseline_versions = sorted(v for v in existing if v in POST_MIGRATION_HOOKS)
+                conn.execute("BEGIN IMMEDIATE;")
+                try:
+                    for v in baseline_versions:
+                        conn.execute(
+                            "INSERT OR IGNORE INTO schema_migration_hooks (version, completed_at) VALUES (?, ?)",
+                            (v, now),
+                        )
+                    conn.execute("COMMIT;")
+                    logger.info("Baselined legacy schema_migration_hooks for versions: %s", baseline_versions)
+                except Exception:
+                    if conn.in_transaction:
+                        conn.execute("ROLLBACK;")
+                    raise
+
+            def _run_pending_hooks(up_to_version: int | None = None) -> None:
+                completed_hooks = {
+                    int(row["version"])
+                    for row in conn.execute("SELECT version FROM schema_migration_hooks").fetchall()
+                }
+                all_applied_versions = {
+                    int(row["version"])
+                    for row in conn.execute("SELECT version FROM schema_migrations").fetchall()
+                }
+                pending = sorted(
+                    v for v in all_applied_versions
+                    if v in POST_MIGRATION_HOOKS
+                    and v not in completed_hooks
+                    and (up_to_version is None or v < up_to_version)
+                )
+                for v in pending:
+                    conn.execute("BEGIN IMMEDIATE;")
+                    try:
+                        POST_MIGRATION_HOOKS[v](conn)
+                        conn.execute(
+                            "INSERT INTO schema_migration_hooks (version, completed_at) VALUES (?, ?)",
+                            (v, utc_now_iso()),
+                        )
+                        conn.execute("COMMIT;")
+                    except Exception:
+                        if conn.in_transaction:
+                            conn.execute("ROLLBACK;")
+                        raise
+
+            for version, name, ddl in MIGRATIONS:
+                _run_pending_hooks(up_to_version=version)
+                if version in existing:
+                    continue
+                if not isinstance(version, int) or not _MIGRATION_NAME_RE.fullmatch(name):
+                    raise RuntimeError(f"invalid migration id: {version!r} {name!r}")
+                # DDL and its bookkeeping must commit together.  ``executescript``
+                # implicitly commits first, so a failure halfway through used to
+                # leave an un-recorded partial migration behind -- and SQLite's
+                # ``ALTER TABLE ADD COLUMN`` has no ``IF NOT EXISTS``, so the
+                # re-run then failed permanently with "duplicate column name".
+                script = (
+                    "BEGIN IMMEDIATE;\n"
+                    + ddl
+                    + "\n;\n"
+                    + "INSERT INTO schema_migrations (version, name, applied_at) VALUES ("
+                    + str(version)
+                    + ", '"
+                    + name
+                    + "', '"
+                    + now
+                    + "');\n"
+                    + "COMMIT;"
+                )
+                try:
+                    conn.executescript(script)
+                except Exception:
+                    if conn.in_transaction:
+                        conn.execute("ROLLBACK;")
+                    raise
+                applied_names.append(name)
+                existing.add(version)
+
+            _run_pending_hooks(up_to_version=None)
+        return applied_names
+
+
+def init_legacy_database(db_path: Path | str, force_reset: bool = False) -> Database:
+    from backend.document_importer import mark_legacy_imports_failed
+    from backend.seed import ensure_seeded
+
+    db = Database(db_path)
+    try:
+        ensure_seeded(db, force_reset=force_reset)
+        mark_legacy_imports_failed(db)
+    except BaseException:
+        db.close()
+        raise
+    return db

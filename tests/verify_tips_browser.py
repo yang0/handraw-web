@@ -36,7 +36,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from playwright.sync_api import sync_playwright
 
 from backend.config import SESSION_COOKIE_NAME
-from backend.server import HandrawRequestHandler, init_database
+from tests.legacy_database import init_legacy_database
+from backend.server import HandrawRequestHandler
 from backend.services import apply_wallet_delta, register_user
 from http.server import ThreadingHTTPServer
 
@@ -78,7 +79,7 @@ def main():
     db = None
     httpd = None
     try:
-        db = init_database(db_path)
+        db = init_legacy_database(db_path)
         author_user, token_author = register_user(db, "author_demo", "AuthorPass123!", display_name="原创画师小李")
         viewer_user, token_viewer = register_user(db, "viewer_demo", "ViewerPass123!", display_name="赞赏测试员")
         payee_user, token_payee = register_user(db, "payee_demo", "PayeePass123!", display_name="官方收款代表")

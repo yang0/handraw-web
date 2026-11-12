@@ -13,6 +13,7 @@ from unittest.mock import patch
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
+from tests.legacy_database import init_legacy_database
 from backend import admin_services, server, services
 from backend.resource_discussions import comment as resource_comment
 from backend.seed import DEFAULT_SITE_SETTINGS
@@ -23,7 +24,7 @@ class Fix65SmallDesignGapsTests(unittest.TestCase):
         self.enterContext(patch.dict(os.environ, {"HANDRAW_DEMO_MODE": "0"}))
         self.temp = TemporaryDirectory()
         self.db_path = Path(self.temp.name) / "test_fix_65.db"
-        self.db = server.init_database(self.db_path)
+        self.db = init_legacy_database(self.db_path)
         self.author, _ = services.register_user(self.db, "author_65", "Pass1234!")
         self.user_b, _ = services.register_user(self.db, "solver_65", "Pass1234!")
         self.outsider, _ = services.register_user(self.db, "outsider_65", "Pass1234!")

@@ -20,7 +20,8 @@ from unittest.mock import patch
 
 from PIL import Image
 
-from backend.server import HandrawRequestHandler, init_database
+from tests.legacy_database import init_legacy_database
+from backend.server import HandrawRequestHandler
 from backend.services import register_user, publish_user_work, ServiceError
 from backend import skill_web_bridge as bridge
 
@@ -39,7 +40,7 @@ class SkillWebBridgeTests(unittest.TestCase):
         })
         env.start()
         self.addCleanup(env.stop)
-        self.db = init_database(root / "test.db")
+        self.db = init_legacy_database(root / "test.db")
         self.addCleanup(self.db.close)
         self.owner, _ = register_user(self.db, "skill_owner", "Password123!", display_name="创作者")
         self.other, _ = register_user(self.db, "skill_other", "Password123!", display_name="另一位用户")
@@ -311,7 +312,7 @@ class SkillWebBridgeTests(unittest.TestCase):
 
     def test_new_database_has_no_legacy_skill_generation_tables(self):
         conn = self.db.get_conn()
-        from backend.migrations import POST_MIGRATION_HOOKS
+        from tests.legacy_migrations import POST_MIGRATION_HOOKS
         self.assertNotIn(98, POST_MIGRATION_HOOKS)
         names = {row[0] for row in conn.execute(
             "SELECT name FROM sqlite_master WHERE type='table'"

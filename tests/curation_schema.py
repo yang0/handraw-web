@@ -1,7 +1,7 @@
 """Community curation schema migrations (additive only).
 
 Ships as ``CURATION_MIGRATIONS`` so the primary reviewer can append it to
-``backend/migrations.py`` without editing existing migration files.
+``legacy_migrations.py`` without editing existing migration files.
 """
 from __future__ import annotations
 

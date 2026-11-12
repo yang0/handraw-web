@@ -15,7 +15,7 @@ from urllib.error import HTTPError
 from urllib.parse import parse_qs, urlencode, urlsplit
 from urllib.request import HTTPCookieProcessor, HTTPRedirectHandler, Request, build_opener
 
-from backend.db import Database
+from tests.legacy_database import Database
 from backend.server import HandrawRequestHandler
 
 

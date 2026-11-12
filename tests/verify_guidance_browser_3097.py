@@ -20,7 +20,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from playwright.sync_api import sync_playwright
 
-from backend.server import HandrawRequestHandler, SESSION_COOKIE_NAME, init_database
+from tests.legacy_database import init_legacy_database
+from backend.server import HandrawRequestHandler, SESSION_COOKIE_NAME
 from backend.services import register_user
 from http.server import ThreadingHTTPServer
 
@@ -67,7 +68,7 @@ def main():
     db = None
     httpd = None
     try:
-        db = init_database(db_path)
+        db = init_legacy_database(db_path)
         user, session_token = register_user(db, "guidance_tester", "SecretPass123!")
 
         httpd = ThreadingHTTPServer(("127.0.0.1", PORT), HandrawRequestHandler)

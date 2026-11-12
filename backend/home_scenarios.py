@@ -1,7 +1,7 @@
 """Home scenarios service, schema, and API helpers for Handraw Web 2.0.
 
 Provides:
-- Additive database schema and post-migration hook for default 8 scenarios.
+- Default scenarios and initialization.
 - Public API for scenarios with deterministic rotation and ETag caching.
 - Admin APIs for scenarios management, ordering, toggling, and work pinning.
 - Shared SQL match rules builder used by public scenarios and works square feed.
@@ -16,10 +16,11 @@ import math
 import os
 import re
 import threading
-import sqlite3
 import time
 from functools import lru_cache
 from typing import TYPE_CHECKING, Any
+
+from .postgres_db import PgConnection
 
 if TYPE_CHECKING:
     from .db import Database
@@ -141,82 +142,35 @@ DEFAULT_SCENARIOS: list[dict[str, Any]] = [
 ]
 
 # ---------------------------------------------------------------------------
-# Migration DDL & Post-migration Hook
+# Default Scenario Initialization
 # ---------------------------------------------------------------------------
-
-HOME_SCENARIOS_SQL = """
-CREATE TABLE IF NOT EXISTS home_scenarios (
-    key TEXT PRIMARY KEY,
-    title TEXT NOT NULL,
-    subtitle TEXT NOT NULL,
-    studio_entry TEXT NOT NULL,
-    studio_params_json TEXT NOT NULL DEFAULT '{}',
-    match_rules_json TEXT NOT NULL DEFAULT '{}',
-    sort_order INTEGER NOT NULL DEFAULT 0,
-    is_enabled INTEGER NOT NULL DEFAULT 1,
-    created_at TEXT NOT NULL,
-    updated_at TEXT NOT NULL
-);
-
-CREATE INDEX IF NOT EXISTS idx_home_scenarios_order
-    ON home_scenarios(sort_order ASC, is_enabled DESC);
-
-CREATE TABLE IF NOT EXISTS scenario_pinned_works (
-    scenario_key TEXT NOT NULL,
-    work_id TEXT NOT NULL,
-    sort_order INTEGER NOT NULL DEFAULT 0,
-    created_by TEXT NOT NULL DEFAULT '',
-    created_at TEXT NOT NULL,
-    PRIMARY KEY (scenario_key, work_id),
-    FOREIGN KEY (scenario_key) REFERENCES home_scenarios(key) ON DELETE CASCADE
-);
-
-CREATE INDEX IF NOT EXISTS idx_scenario_pins_order
-    ON scenario_pinned_works(scenario_key, sort_order ASC);
-"""
-
 
 def _now_iso() -> str:
     return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
-def seed_default_home_scenarios_hook(conn: sqlite3.Connection) -> None:
+def seed_default_home_scenarios_hook(conn: PgConnection) -> None:
     """Insert default scenarios if they do not exist; never overwrite admin edits."""
-    now_iso = _now_iso()
-    for sc in DEFAULT_SCENARIOS:
-        existing = conn.execute(
-            "SELECT 1 FROM home_scenarios WHERE key = ?", (sc["key"],)
-        ).fetchone()
-        if not existing:
-            conn.execute(
-                """
-                INSERT INTO home_scenarios (
-                    key, title, subtitle, studio_entry, studio_params_json,
-                    match_rules_json, sort_order, is_enabled, created_at, updated_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                """,
-                (
-                    sc["key"],
-                    sc["title"],
-                    sc["subtitle"],
-                    sc["studio_entry"],
-                    json.dumps(sc.get("studio_params") or {}, ensure_ascii=False),
-                    json.dumps(sc.get("match_rules") or {}, ensure_ascii=False),
-                    int(sc.get("sort_order") or 0),
-                    1 if sc.get("is_enabled", True) else 0,
-                    now_iso,
-                    now_iso,
-                ),
-            )
+    now = _now_iso()
+    rows = [
+        (
+            sc["key"], sc["title"], sc["subtitle"], sc["studio_entry"],
+            json.dumps(sc.get("studio_params") or {}, ensure_ascii=False),
+            json.dumps(sc.get("match_rules") or {}, ensure_ascii=False),
+            int(sc.get("sort_order") or 0), 1 if sc.get("is_enabled", True) else 0,
+            now, now,
+        )
+        for sc in DEFAULT_SCENARIOS
+    ]
+    values = ", ".join(["(?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"] * len(rows))
+    conn.execute(f"""
+        INSERT INTO home_scenarios (
+            key, title, subtitle, studio_entry, studio_params_json, match_rules_json,
+            sort_order, is_enabled, created_at, updated_at
+        ) VALUES {values}
+        ON CONFLICT (key) DO NOTHING
+    """, tuple(value for row in rows for value in row))
 
-
-SCENARIOS_MIGRATIONS: list[tuple[int, str, str]] = [
-    (86, "086_home_scenarios", HOME_SCENARIOS_SQL),
-]
-
-SCENARIOS_POST_MIGRATION_HOOKS: dict[int, Any] = {
-    86: seed_default_home_scenarios_hook,
-}
 
 # ---------------------------------------------------------------------------
 # Home Scenario Cache
@@ -374,7 +328,7 @@ def build_scenario_match_clause(
 
 
 def get_scenario_match_clause_by_key(
-    conn: sqlite3.Connection,
+    conn: PgConnection,
     scenario_key: str,
     table_alias: str = "w",
 ) -> tuple[str, list[Any]]:

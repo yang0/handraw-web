@@ -7,7 +7,6 @@ import io
 import json
 import os
 import re
-import sqlite3
 import threading
 import time
 import uuid
@@ -15,6 +14,8 @@ import logging
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
+
+from .postgres_db import PgConnection
 
 logger = logging.getLogger("backend.services")
 
@@ -149,7 +150,7 @@ def is_new_release_active(published_at_ms: int | None, now_ms: int | None = None
     return 0 <= age < NEW_RELEASE_WINDOW_MS
 
 
-def get_site_settings(conn: sqlite3.Connection) -> dict[str, Any]:
+def get_site_settings(conn: PgConnection) -> dict[str, Any]:
     out = json.loads(json.dumps(DEFAULT_SITE_SETTINGS))
     rows = conn.execute("SELECT key, value_json FROM site_settings").fetchall()
     for r in rows:
@@ -165,7 +166,7 @@ def get_site_settings(conn: sqlite3.Connection) -> dict[str, Any]:
 
 
 def record_audit_log(
-    tx: sqlite3.Connection,
+    tx: PgConnection,
     actor: dict[str, Any] | None,
     action: str,
     target_type: str,
@@ -193,7 +194,7 @@ def record_audit_log(
 
 
 def apply_wallet_delta(
-    tx: sqlite3.Connection,
+    tx: PgConnection,
     user_id: int,
     delta: int,
     kind: str,
@@ -247,7 +248,7 @@ def apply_wallet_delta(
     return new_balance, True
 
 
-def get_wallet_quota_state(conn: sqlite3.Connection, user_id: int, settings: dict[str, Any]) -> dict[str, Any]:
+def get_wallet_quota_state(conn: PgConnection, user_id: int, settings: dict[str, Any]) -> dict[str, Any]:
     today = local_today_str()
     econ = settings.get("economy", {})
     max_q = max(0, int(econ.get("daily_free_quota", 3)))
@@ -265,7 +266,7 @@ def get_wallet_quota_state(conn: sqlite3.Connection, user_id: int, settings: dic
     }
 
 
-def _count_user_published_items(conn: sqlite3.Connection, username: str) -> int:
+def _count_user_published_items(conn: PgConnection, username: str) -> int:
     work_filter, work_ids = _seed_filter("id", "works")
     asset_filter, asset_ids = _seed_filter("code", "assets")
     w_cnt = int(
@@ -451,7 +452,7 @@ def authenticate_request(db: Database, headers: dict[str, str]) -> dict[str, Any
     return result
 
 
-def create_session_for_user(tx: sqlite3.Connection, user_id: int, user_agent: str = "", ip_addr: str = "") -> str:
+def create_session_for_user(tx: PgConnection, user_id: int, user_agent: str = "", ip_addr: str = "") -> str:
     token = generate_session_token()
     token_hash = hash_session_token(token)
     now_iso = utc_now_iso()
@@ -702,7 +703,7 @@ def update_my_profile(db: Database, user: dict[str, Any], body: dict[str, Any]) 
 
 # ======================== BOOT PAYLOAD & STRICT SERVER GATES ========================
 
-def _serialize_catalog_asset(row: sqlite3.Row, unlocked_set: set[str], current_user: dict[str, Any] | None) -> dict[str, Any]:
+def _serialize_catalog_asset(row: dict[str, Any], unlocked_set: set[str], current_user: dict[str, Any] | None) -> dict[str, Any]:
     code = row["code"]
     source_type = row["source_type"]
     cost = int(row["unlock_cost"] or 0)
@@ -782,7 +783,7 @@ def _runtime_connection(conn: Any | None) -> Any | None:
     return None
 
 
-def get_secrets_cache(conn: sqlite3.Connection | None = None, force: bool = False) -> tuple[str, list[str], set[str]]:
+def get_secrets_cache(conn: PgConnection | None = None, force: bool = False) -> tuple[str, list[str], set[str]]:
     global _SECRETS_CACHE
     now = time.time()
     secrets: list[str] = []
@@ -820,7 +821,7 @@ def get_secrets_cache(conn: sqlite3.Connection | None = None, force: bool = Fals
 
 def check_text_has_secret(
     text: str,
-    conn: sqlite3.Connection | None = None,
+    conn: PgConnection | None = None,
     preloaded: tuple[str, list[str], set[str]] | None = None,
     extra_secrets: list[str] | None = None,
 ) -> bool:
@@ -873,7 +874,7 @@ def extract_strings_from_obj(obj: Any) -> list[str]:
 
 def check_obj_has_secret(
     obj: Any,
-    conn: sqlite3.Connection | None = None,
+    conn: PgConnection | None = None,
     preloaded: tuple[str, list[str], set[str]] | None = None,
 ) -> bool:
     """Check if any decoded string in obj contains a secret or 20-char window (G5)."""
@@ -978,7 +979,7 @@ def _get_static_catalog_codes() -> dict[str, set[str]]:
     return _STATIC_CATALOG_CODES
 
 
-def get_valid_catalog_codes(conn: sqlite3.Connection | None = None) -> dict[str, set[str]]:
+def get_valid_catalog_codes(conn: PgConnection | None = None) -> dict[str, set[str]]:
     """Return dictionary of real catalog codes {styles, layouts, colors, tones, all} (J2, J3)."""
     static = _get_static_catalog_codes()
     styles = set(static["styles"])
@@ -1168,7 +1169,7 @@ def filter_display_prompt(text: str | None) -> str:
     return cleaned.strip()
 
 
-def mask_recipe_data(data: Any, conn: sqlite3.Connection | None = None) -> dict[str, Any]:
+def mask_recipe_data(data: Any, conn: PgConnection | None = None) -> dict[str, Any]:
     """Rebuild masked recipe from typed fields only; drop all free-text fields and non-dict shapes (H1, J1-J3)."""
     if not isinstance(data, dict):
         return {"prompt": "", "promptMasked": True}
@@ -1176,7 +1177,7 @@ def mask_recipe_data(data: Any, conn: sqlite3.Connection | None = None) -> dict[
     return _rebuild_recipe_dict(data, catalog_codes=catalog_codes)
 
 
-def get_generation_visible_prompt(row: sqlite3.Row | dict[str, Any] | None) -> tuple[str, bool]:
+def get_generation_visible_prompt(row: dict[str, Any] | None) -> tuple[str, bool]:
     """Return (visible_prompt, prompt_masked) for a studio_generations row.
 
     Reads never scan for secrets.
@@ -1196,7 +1197,7 @@ def get_generation_visible_prompt(row: sqlite3.Row | dict[str, Any] | None) -> t
     return "", True
 
 
-def get_work_client_prompt(row: sqlite3.Row | dict[str, Any] | None, is_admin_route: bool = False) -> tuple[str, bool]:
+def get_work_client_prompt(row: dict[str, Any] | None, is_admin_route: bool = False) -> tuple[str, bool]:
     """Return (prompt, prompt_masked) for a works row.
 
     Reads never scan for secrets.
@@ -1220,9 +1221,9 @@ def get_work_client_prompt(row: sqlite3.Row | dict[str, Any] | None, is_admin_ro
 
 
 def get_topic_client_recipe_json(
-    row: sqlite3.Row | dict[str, Any] | None,
+    row: dict[str, Any] | None,
     is_admin_route: bool = False,
-    conn: sqlite3.Connection | None = None,
+    conn: PgConnection | None = None,
 ) -> tuple[dict | list | None, bool]:
     """Return (recipe_data, prompt_masked) for a forum_topics row.
 
@@ -1273,7 +1274,7 @@ def sanitize_items_json_for_client(items: Any, visible_prompt: str, was_masked: 
     return cleaned_items
 
 
-def sanitize_prompt_for_client(prompt: str, conn: sqlite3.Connection | None = None) -> tuple[str, bool]:
+def sanitize_prompt_for_client(prompt: str, conn: PgConnection | None = None) -> tuple[str, bool]:
     """Compatibility adapter: returns ('', True) if text contains secret, else (prompt, False)."""
     if not prompt or not isinstance(prompt, str):
         return "", False
@@ -1285,7 +1286,7 @@ def sanitize_prompt_for_client(prompt: str, conn: sqlite3.Connection | None = No
     return prompt, False
 
 
-def _resolve_generation_visible_prompt(row: sqlite3.Row | dict[str, Any], conn: sqlite3.Connection | None = None) -> tuple[str, bool]:
+def _resolve_generation_visible_prompt(row: dict[str, Any], conn: PgConnection | None = None) -> tuple[str, bool]:
     """Compatibility adapter for get_generation_visible_prompt."""
     return get_generation_visible_prompt(row)
 
@@ -1538,11 +1539,11 @@ def start_blackbox_backfill(db: Database) -> threading.Thread:
 
 
 def _serialize_work(
-    row: sqlite3.Row,
+    row: dict[str, Any],
     comments_by_work: dict[str, list[dict[str, Any]]],
     unlocked_set: set[str],
     current_user: dict[str, Any] | None,
-    conn: sqlite3.Connection | None = None,
+    conn: PgConnection | None = None,
 ) -> dict[str, Any]:
     wid = row["id"]
     price = 0
@@ -1621,11 +1622,11 @@ def _serialize_work(
 
 
 def _serialize_topic(
-    row: sqlite3.Row,
+    row: dict[str, Any],
     replies_by_topic: dict[str, list[dict[str, Any]]],
     unlocked_set: set[str],
     current_user: dict[str, Any] | None,
-    conn: sqlite3.Connection | None = None,
+    conn: PgConnection | None = None,
     tips_by_topic: dict[str, int] | None = None,
 ) -> dict[str, Any]:
     tid = row["id"]
@@ -1684,7 +1685,7 @@ def _serialize_topic(
     }
 
 
-def compute_public_asset_counts_and_creators(conn: sqlite3.Connection) -> tuple[dict[str, int], int, int, list[dict[str, Any]]]:
+def compute_public_asset_counts_and_creators(conn: PgConnection) -> tuple[dict[str, int], int, int, list[dict[str, Any]]]:
     """Compute exact counts per style/layout and creator honor summaries WITHOUT exposing any work images or prompts."""
     asset_counts: dict[str, int] = {}
     creator_stats: dict[str, dict[str, Any]] = {}
@@ -2467,7 +2468,7 @@ def _extract_images_from_items_json(items_json_str: Any) -> list[str]:
 
 
 def check_generation_social_accessible(
-    row: sqlite3.Row | dict[str, Any] | None,
+    row: dict[str, Any] | None,
     viewer: dict[str, Any] | None = None,
     *,
     allow_own: bool = False,
@@ -2510,7 +2511,7 @@ def check_generation_social_accessible(
     return True
 
 
-def _generation_work_id(conn: sqlite3.Connection, identifier: str) -> str:
+def _generation_work_id(conn: PgConnection, identifier: str) -> str:
     """Resolve a Web execution ID, V3 run ID, or work ID to one real work.
 
     All generation-history interactions are recorded against works.id.
@@ -2550,7 +2551,7 @@ def _generation_work_id(conn: sqlite3.Connection, identifier: str) -> str:
 
 
 def attach_generation_social_counts(
-    conn: sqlite3.Connection,
+    conn: PgConnection,
     items: list[dict[str, Any]],
     viewer: dict[str, Any] | None = None,
 ) -> None:
@@ -4322,8 +4323,8 @@ def sanitize_client_error_msg(error_msg: Any, status: Any = None) -> str:
 
 
 def serialize_public_generation_history(
-    row: sqlite3.Row | dict[str, Any],
-    conn: sqlite3.Connection | None = None,
+    row: dict[str, Any],
+    conn: PgConnection | None = None,
 ) -> dict[str, Any]:
     row_keys = row.keys() if hasattr(row, "keys") else row
     raw_id = str(row["id"])
@@ -4533,7 +4534,7 @@ def get_public_generation_history(
 
 
 def _serialize_public_run_work(
-    conn: sqlite3.Connection, row: sqlite3.Row | dict[str, Any],
+    conn: PgConnection, row: dict[str, Any],
 ) -> dict[str, Any]:
     """The public creator-history card is a view of one published work/run."""
     from .generation_v3 import work_images
@@ -4919,7 +4920,7 @@ def fork_generation_recipe(
 
 
 def _canonical_studio_history(
-    conn: sqlite3.Connection, user_id: int, legacy_ui_entries: list[dict[str, Any]],
+    conn: PgConnection, user_id: int, legacy_ui_entries: list[dict[str, Any]],
 ) -> list[dict[str, Any]]:
     """Use generation_runs/items as the only logical task/media truth.
 
@@ -5781,8 +5782,8 @@ def claim_cloud_generation_submission(db: Database, user: dict[str, Any] | None,
 
 
 def _cloud_generation_result(
-    conn: sqlite3.Connection,
-    row: sqlite3.Row,
+    conn: PgConnection,
+    row: dict[str, Any],
     settings: dict[str, Any],
     *,
     idempotent: bool = False,

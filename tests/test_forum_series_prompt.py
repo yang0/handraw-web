@@ -4,7 +4,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from backend.server import init_database
+from tests.legacy_database import init_legacy_database
 from backend.services import register_user
 from backend.generation_works import project_generation_to_works, generation_image_assets
 
@@ -12,7 +12,7 @@ from backend.generation_works import project_generation_to_works, generation_ima
 class ForumSeriesPromptTests(unittest.TestCase):
     def setUp(self):
         self.folder = tempfile.TemporaryDirectory()
-        self.db = init_database(Path(self.folder.name) / "series.db")
+        self.db = init_legacy_database(Path(self.folder.name) / "series.db")
         self.user, _ = register_user(self.db, "seriesprompt", "Password123!")
         self.conn = self.db.get_conn()
 

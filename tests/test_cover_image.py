@@ -7,22 +7,23 @@ import unittest
 from unittest.mock import patch
 from PIL import Image
 
-from backend.server import init_database
+from backend.seed import ensure_seeded
+from tests.postgres_support import open_isolated_postgres
 from backend import curation as C, services as S
 from backend.media_dims import image_size, is_square
 
 
 class CoverImageTests(unittest.TestCase):
     def setUp(self):
-        self.tmp = tempfile.TemporaryDirectory()
-        self.env = patch.dict(os.environ, {
+        tmp = self.enterContext(tempfile.TemporaryDirectory())
+        self.enterContext(patch.dict(os.environ, {
             "HANDRAW_DEMO_MODE": "0",
-            "HANDRAW_PRIVATE_STORAGE": self.tmp.name,
+            "HANDRAW_PRIVATE_STORAGE": tmp,
             "HANDRAW_ALLOWED_ORIGINS": "http://trusted.test",
-        })
-        self.env.start()
-        self.db = init_database(Path(self.tmp.name) / "test.db")
-        self.uploads_dir = Path(self.tmp.name) / "uploads"
+        }))
+        self.db = open_isolated_postgres(self)
+        ensure_seeded(self.db)
+        self.uploads_dir = Path(tmp) / "uploads"
         self.uploads_dir.mkdir(parents=True, exist_ok=True)
 
         self.users = {}
@@ -43,11 +44,6 @@ class CoverImageTests(unittest.TestCase):
             "action": "grant",
             "reason": "Test setup",
         })
-
-    def tearDown(self):
-        self.db.close()
-        self.env.stop()
-        self.tmp.cleanup()
 
     def _create_img(self, name: str, w: int, h: int) -> str:
         fpath = self.uploads_dir / name

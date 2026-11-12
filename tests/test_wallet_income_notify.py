@@ -6,7 +6,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from backend.db import Database
+from tests.legacy_database import Database
 from backend.services import (
     accept_forum_bounty_reply,
     apply_wallet_delta,

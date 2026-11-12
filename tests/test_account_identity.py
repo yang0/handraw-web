@@ -4,12 +4,12 @@ import io
 import os
 import tempfile
 import unittest
-from pathlib import Path
 from unittest.mock import patch
 
 from PIL import Image
 
-from backend.server import init_database
+from backend.seed import ensure_seeded
+from tests.postgres_support import open_isolated_postgres
 from backend import features
 from backend.avatar_identity import avatar_dir, avatar_file_for_path, save_avatar, reset_avatar
 from backend.security import verify_password
@@ -18,20 +18,15 @@ from backend.services import ServiceError, login_user, register_user, update_my_
 
 class AccountIdentityTests(unittest.TestCase):
     def setUp(self):
-        self.temp = tempfile.TemporaryDirectory()
-        self.env = patch.dict(os.environ, {
-            "HANDRAW_DEMO_MODE": "1", "HANDRAW_PRIVATE_STORAGE": self.temp.name
-        })
-        self.env.start()
-        self.db = init_database(Path(self.temp.name) / "test-account-identity.db")
+        temp = self.enterContext(tempfile.TemporaryDirectory())
+        self.enterContext(patch.dict(os.environ, {
+            "HANDRAW_DEMO_MODE": "1", "HANDRAW_PRIVATE_STORAGE": temp
+        }))
+        self.db = open_isolated_postgres(self)
+        ensure_seeded(self.db)
         self.user = dict(self.db.get_conn().execute(
             "SELECT * FROM users WHERE username='su_editorial'"
         ).fetchone())
-
-    def tearDown(self):
-        self.db.close()
-        self.env.stop()
-        self.temp.cleanup()
 
     def test_nickname_is_immutable_after_registration_including_legacy_unlocked(self):
         before = self.user["display_name"]

@@ -24,7 +24,8 @@ from playwright.sync_api import sync_playwright
 REPO_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO_ROOT))
 
-from backend.server import SESSION_COOKIE_NAME, HandrawRequestHandler, init_database
+from tests.legacy_database import init_legacy_database
+from backend.server import SESSION_COOKIE_NAME, HandrawRequestHandler
 from backend.services import register_user
 
 
@@ -61,7 +62,7 @@ def run_browser_verification() -> None:
         old_env[k] = os.environ.get(k)
         os.environ[k] = v
 
-    db = init_database(db_path)
+    db = init_legacy_database(db_path)
     httpd = ThreadingHTTPServer(("127.0.0.1", 0), HandrawRequestHandler)
     httpd.channel_role = "main"  # type: ignore[attr-defined]
     httpd.db = db  # type: ignore[attr-defined]

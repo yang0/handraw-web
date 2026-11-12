@@ -3,10 +3,10 @@ import json
 import os
 import tempfile
 import unittest
-from pathlib import Path
 from unittest.mock import patch
 
-from backend.server import init_database
+from backend.seed import ensure_seeded
+from tests.postgres_support import open_isolated_postgres
 from backend import features
 from backend.services import ServiceError, login_user, add_comment_to_work
 from backend.security import verify_password
@@ -14,17 +14,13 @@ from backend.security import verify_password
 
 class AccountFeaturesTests(unittest.TestCase):
     def setUp(self):
-        self.temp = tempfile.TemporaryDirectory()
-        self.env = patch.dict(os.environ, {"HANDRAW_DEMO_MODE":"1","HANDRAW_PRIVATE_STORAGE":self.temp.name})
-        self.env.start()
-        self.db = init_database(Path(self.temp.name)/"account-test.db")
+        temp = self.enterContext(tempfile.TemporaryDirectory())
+        self.enterContext(patch.dict(os.environ, {"HANDRAW_DEMO_MODE":"1","HANDRAW_PRIVATE_STORAGE":temp}))
+        self.db = open_isolated_postgres(self)
+        ensure_seeded(self.db)
         self.a = dict(self.db.get_conn().execute("SELECT * FROM users WHERE username='su_editorial'").fetchone())
         self.b = dict(self.db.get_conn().execute("SELECT * FROM users WHERE username='momo_design'").fetchone())
-        self.ready = patch("backend.features.mail_ready",return_value=True)
-        self.ready.start()
-
-    def tearDown(self):
-        self.ready.stop();self.db.close();self.env.stop();self.temp.cleanup()
+        self.enterContext(patch("backend.features.mail_ready", return_value=True))
 
     def test_password_reset_single_use_revokes_all_sessions(self):
         login_user(self.db,self.a["username"],"handraw123")

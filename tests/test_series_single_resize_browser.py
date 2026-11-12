@@ -18,7 +18,8 @@ try:
 except ImportError:  # Optional browser E2E dependency is absent on Python shard runners.
     sync_playwright = None
 
-from backend.server import create_channel_server, init_database
+from tests.legacy_database import init_legacy_database
+from backend.server import create_channel_server
 from backend.services import register_user
 
 PNG_1X1_BYTES = base64.b64decode(
@@ -115,7 +116,7 @@ class SeriesSingleResizeBrowserTests(unittest.TestCase):
             },
         )
         cls.env.start()
-        cls.db = init_database(cls.db_path)
+        cls.db = init_legacy_database(cls.db_path)
         cls.user, _ = register_user(cls.db, "series_e2e", "Password123!")
 
         cls.server = create_channel_server(0, "main", cls.db)

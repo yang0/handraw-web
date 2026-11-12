@@ -10,10 +10,10 @@ import unittest
 from pathlib import Path
 
 from backend.curation import publish_work_direct
-from backend.db import Database
+from tests.legacy_database import Database
 from backend.generation_works import project_generation_to_works
 from backend.resource_discussions import comment
-from backend.server import init_database
+from tests.legacy_database import init_legacy_database
 from backend.services import publish_forum_reply_post, register_user, ServiceError
 
 
@@ -21,7 +21,7 @@ class Stage2TopicWritesTests(unittest.TestCase):
     def setUp(self) -> None:
         self.temp_dir = tempfile.TemporaryDirectory()
         self.db_path = Path(self.temp_dir.name) / "test_stage2.db"
-        self.db = init_database(self.db_path)
+        self.db = init_legacy_database(self.db_path)
         self.author, _ = register_user(self.db, "test_author", "pass-author-123")
         self.commenter, _ = register_user(self.db, "test_commenter", "pass-comment-123")
 

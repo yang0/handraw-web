@@ -9,6 +9,7 @@ from __future__ import annotations
 import unittest
 from pathlib import Path
 
+from tests.legacy_database import init_legacy_database
 from backend import skill_paths, skill_prompt
 from backend.services import _compose_skill_prompt
 
@@ -126,7 +127,7 @@ class SkillPromptTests(unittest.TestCase):
 
         with TemporaryDirectory() as temp_dir:
             db_path = Path(temp_dir) / "test.db"
-            db = init_database(db_path)
+            db = init_legacy_database(db_path)
             user, _ = register_user(db, "test_prompt_user", "password123")
 
             call_checked = False
@@ -188,7 +189,7 @@ class SkillPromptTests(unittest.TestCase):
 
         with TemporaryDirectory() as temp_dir:
             db_path = Path(temp_dir) / "test_inflight.db"
-            db = init_database(db_path)
+            db = init_legacy_database(db_path)
             user, _ = register_user(db, "inflight_user", "password123")
 
             res1 = prepare_cloud_generation(
@@ -230,7 +231,7 @@ class SkillPromptTests(unittest.TestCase):
 
         with TemporaryDirectory() as temp_dir:
             db_path = Path(temp_dir) / "test_concurrent.db"
-            db = init_database(db_path)
+            db = init_legacy_database(db_path)
             user, _ = register_user(db, "concurrent_user", "password123")
 
             compose_call_count = 0
@@ -305,7 +306,7 @@ class SkillPromptTests(unittest.TestCase):
                 "HANDRAW_UPLOADS_DIR": str(uploads_dir),
                 "HANDRAW_GENERATED_DIR": str(generated_dir),
             }):
-                db = init_database(db_path)
+                db = init_legacy_database(db_path)
                 httpd = ThreadingHTTPServer(("127.0.0.1", 0), HandrawRequestHandler)
                 httpd.channel_role = "main"
                 httpd.db = db
@@ -425,7 +426,7 @@ class SkillPromptTests(unittest.TestCase):
                 "HANDRAW_UPLOADS_DIR": str(uploads_dir),
                 "HANDRAW_GENERATED_DIR": str(generated_dir),
             }):
-                db = init_database(db_path)
+                db = init_legacy_database(db_path)
                 httpd = ThreadingHTTPServer(("127.0.0.1", 0), HandrawRequestHandler)
                 httpd.channel_role = "main"
                 httpd.db = db
@@ -495,7 +496,7 @@ class SkillPromptTests(unittest.TestCase):
 
         with TemporaryDirectory() as temp_dir:
             db_path = Path(temp_dir) / "test_prompt_ready_1.db"
-            db = init_database(db_path)
+            db = init_legacy_database(db_path)
             u1, _ = register_user(db, "ready_user_1", "password123")
             u2, _ = register_user(db, "ready_user_2", "password123")
 
@@ -530,7 +531,7 @@ class SkillPromptTests(unittest.TestCase):
 
         with TemporaryDirectory() as temp_dir:
             db_path = Path(temp_dir) / "test_reconcile_stale.db"
-            db = init_database(db_path)
+            db = init_legacy_database(db_path)
 
             now_dt = datetime.now(timezone.utc)
             old_time = (now_dt - timedelta(minutes=11)).strftime("%Y-%m-%dT%H:%M:%SZ")

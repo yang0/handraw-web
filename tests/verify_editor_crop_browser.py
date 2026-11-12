@@ -14,7 +14,8 @@ sys.path.insert(0, str(REPO_ROOT))
 from http.server import ThreadingHTTPServer
 from playwright.sync_api import sync_playwright
 
-from backend.server import HandrawRequestHandler, SESSION_COOKIE_NAME, init_database
+from tests.legacy_database import init_legacy_database
+from backend.server import HandrawRequestHandler, SESSION_COOKIE_NAME
 from backend.services import register_user
 
 PORT = 3098
@@ -123,7 +124,7 @@ def run_browser_verification():
     url_4_1 = "/assets/temp_crop_test_4_1.png"
     url_1_1 = "/assets/temp_crop_test_1_1.png"
 
-    db = init_database(db_path)
+    db = init_legacy_database(db_path)
     user, session_token = register_user(db, "crop_tester", "Pass1234!")
 
     # Seed works with these test images so card picker and gallery can display them

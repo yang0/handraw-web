@@ -2,7 +2,7 @@
 import tempfile
 import unittest
 from pathlib import Path
-from backend.db import Database
+from tests.legacy_database import Database
 from backend.services import ServiceError, register_user, sync_user_studio_articles
 
 

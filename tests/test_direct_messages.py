@@ -20,7 +20,8 @@ from datetime import datetime, timezone, timedelta
 from pathlib import Path
 from unittest.mock import patch
 
-from backend.db import Database, utc_now_iso
+from tests.legacy_database import Database
+from backend.db import utc_now_iso
 from backend.messaging import (
     block_user,
     get_messages_unread_summary,
@@ -30,7 +31,7 @@ from backend.messaging import (
     send_direct_message,
     unblock_user,
 )
-from backend.server import init_database
+from tests.legacy_database import init_legacy_database
 from backend.services import ServiceError, register_user, submit_abuse_report
 
 
@@ -38,7 +39,7 @@ class DirectMessagingTests(unittest.TestCase):
     def setUp(self):
         self.temp_dir = tempfile.TemporaryDirectory()
         self.db_path = Path(self.temp_dir.name) / "test_dm.db"
-        self.db = init_database(self.db_path)
+        self.db = init_legacy_database(self.db_path)
 
         # Register users for testing
         self.alice, _ = register_user(self.db, "alice_dm", "password123")
@@ -385,7 +386,7 @@ class DirectMessagingHTTPTests(unittest.TestCase):
             },
         )
         self.env.start()
-        self.db = init_database(self.db_path)
+        self.db = init_legacy_database(self.db_path)
         self.httpd = ThreadingHTTPServer(("127.0.0.1", 0), HandrawRequestHandler)
         self.httpd.channel_role = "main"  # type: ignore[attr-defined]
         self.httpd.db = self.db  # type: ignore[attr-defined]

@@ -11,6 +11,7 @@ import time
 from typing import Any
 import unittest
 
+from tests.legacy_database import init_legacy_database
 from backend import server
 from backend.services import (
     _seed_filter,
@@ -89,7 +90,7 @@ class TestWorksFeed(unittest.TestCase):
     def setUp(self):
         self.enterContext(patch.dict(os.environ, {"HANDRAW_DEMO_MODE": "0"}))
         self.tmp_dir = tempfile.TemporaryDirectory()
-        self.test_db = server.init_database(Path(self.tmp_dir.name) / "feed_test.db")
+        self.test_db = init_legacy_database(Path(self.tmp_dir.name) / "feed_test.db")
         # Insert test users
         with self.test_db.transaction() as tx:
             tx.execute(

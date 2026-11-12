@@ -4402,12 +4402,13 @@ def create_channel_server(
     return srv
 
 
-def init_database(db_path: Path | str, force_reset: bool = False) -> Database:
-    db = Database(db_path)
-    db.migrate()
-    ensure_seeded(db, force_reset=force_reset)
-    from backend.document_importer import mark_legacy_imports_failed
-    mark_legacy_imports_failed(db)
+def init_database(dsn: str) -> Database:
+    db = Database(dsn)
+    try:
+        ensure_seeded(db)
+    except BaseException:
+        db.close()
+        raise
     return db
 
 
@@ -4464,11 +4465,7 @@ def main(argv: list[str] | None = None) -> None:
         )
     ensure_redis_ready()
 
-    from .postgres_db import PostgresDatabase
-    from .seed import ensure_seeded
-    db = PostgresDatabase(pg_url)
-    db.migrate()
-    ensure_seeded(db)
+    db = init_database(pg_url)
 
     requested_host = args.host or None
     server = create_channel_server(args.port, "main", db, host=requested_host)

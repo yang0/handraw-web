@@ -18,8 +18,9 @@ from tempfile import TemporaryDirectory
 from unittest.mock import patch
 
 from backend import server as server_module
-from backend.server import create_channel_server
-from backend.services import publish_user_work, register_user
+from backend.server import create_channel_server, init_database
+from backend.services import add_comment_to_work, publish_user_work, register_user
+from tests.postgres_support import isolated_pg_dsn
 
 IMG = "/images/individual/FA/FA-013.webp"
 WORK_TITLE = "浏览器渲染断言作品"
@@ -40,16 +41,21 @@ except Exception:  # pragma: no cover
 class BrowserRenderTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
-        cls.temp = TemporaryDirectory()
-        cls._env = patch.dict(os.environ, {"HANDRAW_ALLOWED_ORIGINS": "http://trusted.test", "HANDRAW_PRIVATE_STORAGE": cls.temp.name})
-        cls._env.start()
-        cls.db = server_module.init_database(Path(cls.temp.name) / "browser.db")
+        if not os.environ.get("HANDRAW_PG_STAGING_URL"):
+            raise unittest.SkipTest("Isolated PostgreSQL staging URL not provided")
+        storage = cls.enterClassContext(TemporaryDirectory())
+        cls.enterClassContext(patch.dict(os.environ, {
+            "HANDRAW_ALLOWED_ORIGINS": "http://trusted.test", "HANDRAW_PRIVATE_STORAGE": storage,
+        }))
+        cls.db = init_database(cls.enterClassContext(isolated_pg_dsn()))
+        cls.addClassCleanup(cls.db.close)
         author, _ = register_user(cls.db, "br_author", "password-a")
         cls.work = publish_user_work(
             cls.db,
             author,
             {"title": WORK_TITLE, "prompt": WORK_PROMPT, "images": [IMG], "styles": ["FA-013"]},
         )
+        add_comment_to_work(cls.db, author, cls.work["workId"], "这条回复让作品进入讨论列表")
         # A second work whose thread an admin hid: the forum must not show it,
         # while the work itself stays public.
         cls.hidden = publish_user_work(
@@ -57,10 +63,10 @@ class BrowserRenderTests(unittest.TestCase):
             author,
             {"title": HIDDEN_THREAD_TITLE, "prompt": "p", "images": [IMG], "styles": ["FA-013"]},
         )
+        add_comment_to_work(cls.db, author, cls.hidden["workId"], "这条回复让作品先进入讨论列表")
         register_user(cls.db, "br_admin", "password-admin")
         conn = cls.db.get_conn()
         conn.execute("UPDATE users SET role = 'admin' WHERE username = 'br_admin'")
-        conn.commit()
         admin = dict(conn.execute("SELECT * FROM users WHERE username = 'br_admin'").fetchone())
         cls.db.close_thread_conn()
         from backend.admin_services import admin_moderate_topic
@@ -77,7 +83,7 @@ class BrowserRenderTests(unittest.TestCase):
         forum_moderator_action(cls.db, author, {"topicId": cls.deleted["topicId"], "action": "delete"})
         # A curation submission, so the logged-in "my submissions" tab has a
         # known item to render.
-        uploads = Path(cls.temp.name) / "uploads"
+        uploads = Path(storage) / "uploads"
         uploads.mkdir(parents=True, exist_ok=True)
         from PIL import Image
         img = Image.new("RGB", (200, 200), color=(255, 255, 255))
@@ -123,13 +129,9 @@ class BrowserRenderTests(unittest.TestCase):
         if cls._pw is not None:
             cls._pw.stop()
         cls.server.shutdown()
+        cls.server.import_manager.stop()
         cls.server.server_close()
         cls.thread.join(5)
-        cls.db.close_thread_conn()
-        cls.db.get_conn().close()
-        cls.db.close()
-        cls.temp.cleanup()
-        cls._env.stop()
 
     def setUp(self):
         if not self._available:
@@ -214,9 +216,12 @@ class BrowserRenderTests(unittest.TestCase):
         self.assertEqual(self.js_errors, [], f"JS errors on my submissions: {self.js_errors}")
 
     def test_forum_list_omits_a_hidden_thread_but_keeps_the_published_one(self):
-        body = self._load("/forum/", wait_text=WORK_TITLE)
-        self.assertIn(WORK_TITLE, body, "the published thread must be listed")
-        self.assertNotIn(HIDDEN_THREAD_TITLE, body, "a moderator-hidden thread must not be listed")
+        for width in (1440, 900, 390):
+            with self.subTest(viewport_width=width):
+                self.page.set_viewport_size({"width": width, "height": 900})
+                body = self._load("/forum/", wait_text=WORK_TITLE)
+                self.assertIn(WORK_TITLE, body, "the published thread must be listed")
+                self.assertNotIn(HIDDEN_THREAD_TITLE, body, "a moderator-hidden thread must not be listed")
         self.assertEqual(self.js_errors, [])
 
     def test_admin_topic_list_offers_no_restore_on_a_deleted_thread(self):

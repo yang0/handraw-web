@@ -12,7 +12,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 from backend.admin_services import admin_delete_user
-from backend.server import init_database
+from tests.legacy_database import init_legacy_database
 from backend.services import register_user
 
 
@@ -20,7 +20,7 @@ class AdminUserDeletionForeignKeyTests(unittest.TestCase):
     def test_deletion_clears_recent_fk_dependents_without_disabling_constraints(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
             with patch.dict(os.environ, {"HANDRAW_DEMO_MODE": "0", "HANDRAW_PRIVATE_STORAGE": temp}):
-                db = init_database(Path(temp) / "account-delete.sqlite")
+                db = init_legacy_database(Path(temp) / "account-delete.sqlite")
                 try:
                     admin, _ = register_user(db, "delete_admin", "StrongPassword123!")
                     victim, _ = register_user(db, "delete_victim", "StrongPassword456!")

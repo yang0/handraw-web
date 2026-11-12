@@ -10,7 +10,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
-from backend.db import Database
+from tests.legacy_database import Database
 from backend.generation_works import project_generation_to_works
 from backend.post_routes import _handle_detail, _handle_t_redirect, _resolve_ref_to_topic_id
 from backend.services import register_user, utc_now_iso

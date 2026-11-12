@@ -10,10 +10,11 @@ import unittest
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
+from tests.legacy_database import init_legacy_database
 from backend import server
 from backend.admin_services import admin_resolve_report
 from backend.services import publish_user_work, register_user, submit_abuse_report
-from backend.work_schema import STATUS_ACTOR_BACKFILL_SQL
+from tests.work_schema import STATUS_ACTOR_BACKFILL_SQL
 
 IMG = "/images/individual/FA/FA-013.webp"
 
@@ -21,7 +22,7 @@ IMG = "/images/individual/FA/FA-013.webp"
 class Migration049BackfillTests(unittest.TestCase):
     def setUp(self):
         self.temp = TemporaryDirectory()
-        self.db = server.init_database(Path(self.temp.name) / "m49.db")
+        self.db = init_legacy_database(Path(self.temp.name) / "m49.db")
         self.author, _ = register_user(self.db, "m49_author", "password-a")
         register_user(self.db, "m49_admin", "password-admin")
         conn = self.db.get_conn()

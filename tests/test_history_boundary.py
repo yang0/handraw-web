@@ -17,7 +17,8 @@ from unittest.mock import patch
 
 from backend import skill_prompt
 
-from backend.server import HandrawRequestHandler, init_database, load_localized_json
+from tests.legacy_database import init_legacy_database
+from backend.server import HandrawRequestHandler, load_localized_json
 from backend.services import (
     complete_cloud_generation,
     get_public_generation_history,
@@ -78,7 +79,7 @@ class HistoryBoundaryTests(unittest.TestCase):
             },
         )
         self.env.start()
-        self.db = init_database(self.db_path)
+        self.db = init_legacy_database(self.db_path)
         self.user, _ = register_user(self.db, "creator_alice", "Password123!")
 
         self.httpd = urllib.request.http.server.ThreadingHTTPServer(("127.0.0.1", 0), HandrawRequestHandler)  # type: ignore[attr-defined]

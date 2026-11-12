@@ -15,8 +15,9 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from backend.db import Database, utc_now_iso
-from backend.server import init_database
+from tests.legacy_database import Database
+from backend.db import utc_now_iso
+from tests.legacy_database import init_legacy_database
 from backend.services import (
     ServiceError,
     get_user_public_generations,
@@ -25,7 +26,7 @@ from backend.services import (
     serialize_public_generation_history,
     register_user,
 )
-from backend.work_schema import deduplicate_generation_history
+from tests.work_schema import deduplicate_generation_history
 
 CODE_RE = re.compile(r"^(?:USR-)?[A-Z]{1,4}-[A-Z0-9]+$")
 
@@ -50,7 +51,7 @@ class GenerationDuplicatesAndCodesTests(unittest.TestCase):
             },
         )
         self.env.start()
-        self.db = init_database(self.db_path)
+        self.db = init_legacy_database(self.db_path)
 
         conn = self.db.get_conn()
         # Clean any seeded generations for test users to have clean baselines

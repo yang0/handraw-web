@@ -4,12 +4,13 @@ from __future__ import annotations
 import hashlib
 import json
 import re
-import sqlite3
 import time
 import urllib.error
 import urllib.request
 from pathlib import Path
 from typing import Any
+
+from .postgres_db import PgConnection
 
 from .config import CONTENT_DIR, get_image_config_path, get_uploads_dir, load_image_config, open_url, resolve_gateway_model
 from .db import Database, local_today_str, utc_now_iso
@@ -68,7 +69,7 @@ ROLE_MATRIX_SPEC: list[dict[str, Any]] = [
 ]
 
 
-def get_management_profile(conn: sqlite3.Connection, user: dict[str, Any] | None) -> dict[str, Any]:
+def get_management_profile(conn: PgConnection, user: dict[str, Any] | None) -> dict[str, Any]:
     if not user or user.get("status") != "active":
         return {
             "effectiveRole": "guest",
@@ -1099,10 +1100,10 @@ def admin_list_comments(
 
 
 def resolve_migrated_comment(
-    tx: sqlite3.Connection,
+    tx: PgConnection,
     comment_type: str,
     comment_id: str,
-) -> tuple[str, str, sqlite3.Row | None]:
+) -> tuple[str, str, dict[str, Any] | None]:
     """
     Given (comment_type, comment_id), check if it points to a migrated legacy comment.
     - If active in forum_replies: returns ('forum_reply', reply_id, reply_row).
@@ -1645,7 +1646,7 @@ def _get_official_series_group(series: str, kind: str) -> str:
     return fallbacks.get(series, "官方图型" if kind == "layout" else "官方画风")
 
 
-def _check_official_name_taken(conn: sqlite3.Connection, kind: str, name: str, exclude_code: str = "") -> None:
+def _check_official_name_taken(conn: PgConnection, kind: str, name: str, exclude_code: str = "") -> None:
     norm_name = name.strip()
     # 1. catalog.json
     for it in _load_official_catalog_items():
@@ -1664,7 +1665,7 @@ def _check_official_name_taken(conn: sqlite3.Connection, kind: str, name: str, e
             raise ServiceError(f"已有同名官方资源（{dup_code}）", status=409, code="name_taken", extra={"existingCode": dup_code, "code": "name_taken"})
 
 
-def _allocate_official_code(conn: sqlite3.Connection, series: str) -> str:
+def _allocate_official_code(conn: PgConnection, series: str) -> str:
     series = series.strip().upper()
     prefix = f"{series}-"
     max_num = 0
@@ -2487,7 +2488,7 @@ def admin_list_reports(db: Database, user: dict[str, Any] | None, status: str = 
     return {"items": items, "total": len(items)}
 
 
-def _lookup_target_author(tx: sqlite3.Connection, target_type: str, target_id: str) -> str:
+def _lookup_target_author(tx: PgConnection, target_type: str, target_id: str) -> str:
     resolved_type, actual_id, m_row = resolve_migrated_comment(tx, target_type, target_id)
     if resolved_type == "forum_reply" and m_row:
         return str(m_row["author_username"] or "")

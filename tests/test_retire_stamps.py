@@ -17,14 +17,15 @@ import unittest
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
-from backend.db import Database
+from tests.legacy_database import Database
 from backend.ranking import (
     WORK_POPULAR_EXPR,
     sort_works,
     work_popular_score,
     work_popular_sql,
 )
-from backend.server import HandrawRequestHandler, init_database
+from tests.legacy_database import init_legacy_database
+from backend.server import HandrawRequestHandler
 from backend.services import (
     ServiceError,
     publish_user_work,
@@ -37,7 +38,7 @@ class RetireStampsBackendTests(unittest.TestCase):
     def setUp(self) -> None:
         self.temp_dir = TemporaryDirectory()
         self.db_path = Path(self.temp_dir.name) / "test_stamps.db"
-        self.db = init_database(self.db_path)
+        self.db = init_legacy_database(self.db_path)
         self.user_a, self.token_a = register_user(self.db, "alice_stamp", "Pass1234!")
         self.user_b, self.token_b = register_user(self.db, "bob_stamp", "Pass1234!")
 

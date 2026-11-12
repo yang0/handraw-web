@@ -24,7 +24,8 @@ from backend.observability import (
     sanitize_log_text,
 )
 from backend.postgres_db import PgConnection
-from backend.server import HandrawRequestHandler, init_database
+from tests.legacy_database import init_legacy_database
+from backend.server import HandrawRequestHandler
 from backend.services import ServiceError, run_blackbox_backfill
 
 
@@ -211,7 +212,7 @@ class PostgresAndBackfillTests(unittest.TestCase):
 
     def test_run_blackbox_backfill_handles_null_recipe_json_and_logs_scan_exceptions(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
-            db = init_database(Path(tmp) / "backfill_test.db")
+            db = init_legacy_database(Path(tmp) / "backfill_test.db")
             try:
                 with db.transaction() as tx:
                     # Recreate nullable recipe_json as in PostgreSQL schemas to verify NULL equality handling

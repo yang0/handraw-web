@@ -14,7 +14,8 @@ from contextlib import contextmanager
 from pathlib import Path
 from unittest.mock import patch
 
-from backend.db import Database, local_today_str
+from tests.legacy_database import Database
+from backend.db import local_today_str
 from backend.seed import ensure_seeded
 from backend.services import (
     ServiceError,

@@ -10,7 +10,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from backend.db import Database
+from tests.legacy_database import Database
 from backend.generation_works import project_generation_to_works
 from backend.services import register_user, utc_now_iso
 from backend.works_feed import get_works_feed, get_work_by_id

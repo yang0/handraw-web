@@ -7,8 +7,8 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from backend.db import Database
-from backend.work_schema import (
+from tests.legacy_database import Database
+from tests.work_schema import (
     audit_and_deduplicate_work_topics,
     FORUM_TOPICS_LISTED_AT_SQL,
     FORUM_TOPICS_WORK_UNIQUE_SQL,
@@ -189,7 +189,7 @@ class Migration080Tests(unittest.TestCase):
     def test_migrate_on_database_with_preexisting_duplicate_work_topics(self) -> None:
         """Simulate a database migrated up to 079 having duplicate work_id, then running 080+081."""
         conn = self.db.get_conn()
-        from backend.migrations import MIGRATIONS, POST_MIGRATION_HOOKS
+        from tests.legacy_migrations import MIGRATIONS, POST_MIGRATION_HOOKS
         now_iso = "2026-11-01T12:00:00Z"
 
         # Apply migrations 1..79 only

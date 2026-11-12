@@ -14,7 +14,8 @@ import urllib.request
 from pathlib import Path
 from unittest.mock import patch
 
-from backend.server import HandrawRequestHandler, init_database
+from tests.legacy_database import init_legacy_database
+from backend.server import HandrawRequestHandler
 from backend.services import (
     ServiceError,
     get_user_public_generations,
@@ -86,7 +87,7 @@ class ProfileGenerationHistoryTests(unittest.TestCase):
             },
         )
         self.env.start()
-        self.db = init_database(self.db_path)
+        self.db = init_legacy_database(self.db_path)
 
         self.creator_alice, _ = register_user(self.db, "alice", "SecretPass123!")
         self.creator_bob, _ = register_user(self.db, "bob", "SecretPass123!")

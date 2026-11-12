@@ -18,7 +18,8 @@ from pathlib import Path
 from unittest.mock import patch
 
 from backend.document_parser import parse_article_file
-from backend.server import HandrawRequestHandler, init_database
+from tests.legacy_database import init_legacy_database
+from backend.server import HandrawRequestHandler
 from backend.services import register_user
 
 
@@ -42,7 +43,7 @@ class StudioArticleParseTests(unittest.TestCase):
             },
         )
         self.env.start()
-        self.db = init_database(self.db_path)
+        self.db = init_legacy_database(self.db_path)
         register_user(self.db, "parse_tester", "password123")
 
         self.httpd = urllib.request.http.server.ThreadingHTTPServer(("127.0.0.1", 0), HandrawRequestHandler)  # type: ignore[attr-defined]
@@ -165,7 +166,7 @@ class StudioArticleParseTests(unittest.TestCase):
         self.assertEqual(status_b, 200, "Another user should not be affected by user A's limit")
 
         # 服务重启（新建 Database 实例）后用户 A 的计数仍然持久化存在
-        from backend.db import Database
+        from tests.legacy_database import Database
         from backend.services import consume_daily_usage
         restarted_db = Database(self.db_path)
         try:

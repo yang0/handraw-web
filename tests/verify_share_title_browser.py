@@ -31,7 +31,8 @@ if sys.platform == "win32":
 
 from playwright.sync_api import sync_playwright
 
-from backend.server import HandrawRequestHandler, SESSION_COOKIE_NAME, init_database
+from tests.legacy_database import init_legacy_database
+from backend.server import HandrawRequestHandler, SESSION_COOKIE_NAME
 from backend.services import register_user
 
 PORT = 3128
@@ -60,7 +61,7 @@ def run_verification():
     os.environ["HANDRAW_ALLOWED_ORIGINS"] = f"http://127.0.0.1:{PORT}"
     os.environ["HANDRAW_DEMO_MODE"] = "1"
 
-    db = init_database(db_path)
+    db = init_legacy_database(db_path)
     user, token = register_user(db, "creator_rain", "Secret1234!", display_name="雨夜创作者")
     print(f"Registered user: {user['username']}")
 

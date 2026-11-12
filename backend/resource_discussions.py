@@ -1,13 +1,8 @@
-"""One comment store per discussion, adapted from the reviewed DeepSeek proposal.
-
-Official resources keep asset_comments; collected submissions keep forum_replies.
-Boot projects these same rows into both views without copying stored comments.
-"""
+"""Create and query discussion topics shared by works, resources, and the forum."""
 from __future__ import annotations
 
 from functools import lru_cache
 import json
-import sqlite3
 import time
 import uuid
 import re
@@ -15,14 +10,8 @@ from datetime import datetime, timezone
 
 from .config import CONTENT_DIR
 from . import services as S
+from .postgres_db import PgConnection
 from .runtime_policy import sanitize_html, sanitize_media_url, sanitize_plain_text
-
-try:
-    from psycopg import IntegrityError as PostgresIntegrityError
-except ImportError:  # SQLite-only installations need no PostgreSQL driver.
-    PostgresIntegrityError = sqlite3.IntegrityError
-
-TOPIC_INTEGRITY_ERRORS = (sqlite3.IntegrityError, PostgresIntegrityError)
 
 @lru_cache(maxsize=1)
 def static_catalog():
@@ -134,7 +123,7 @@ def ensure_topic(tx, kind, target, resource, initial_origin: str = 'submission',
         if existing:
             tid = str(existing['id'])
             tx.execute(
-                'INSERT OR IGNORE INTO curation_resource_topics (kind, target_id, topic_id, origin, created_at) VALUES (?, ?, ?, ?, ?)',
+                'INSERT INTO curation_resource_topics (kind, target_id, topic_id, origin, created_at) VALUES (?, ?, ?, ?, ?) ON CONFLICT DO NOTHING',
                 (kind, target, tid, initial_origin, now),
             )
             _sync_work_topic_media(tx, tid, target, resource)
@@ -188,7 +177,7 @@ def ensure_topic(tx, kind, target, resource, initial_origin: str = 'submission',
     sp_name = f"sp_ensure_{uuid.uuid4().hex[:8]}"
     tx.execute(f"SAVEPOINT {sp_name}")
     try:
-        tx.execute(
+        inserted = tx.execute(
             """
             INSERT INTO forum_topics (
                 id, category, category_label, title, author_username, author_name, summary,
@@ -196,6 +185,7 @@ def ensure_topic(tx, kind, target, resource, initial_origin: str = 'submission',
                 status, status_source, status_reason, status_actor_role,
                 published_at_ms, created_label, created_at, updated_at, listed_at_ms
             ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, '刚刚', ?, ?, ?)
+            ON CONFLICT DO NOTHING
             """,
             (
                 tid,
@@ -219,38 +209,45 @@ def ensure_topic(tx, kind, target, resource, initial_origin: str = 'submission',
                 topic_listed,
             ),
         )
-        tx.execute(
-            'INSERT INTO curation_resource_topics (kind, target_id, topic_id, origin, created_at) VALUES (?, ?, ?, ?, ?)',
-            (kind, target, tid, initial_origin, now),
-        )
-        tx.execute(f"RELEASE SAVEPOINT {sp_name}")
-        return tid
-    except TOPIC_INTEGRITY_ERRORS:
+        if inserted.rowcount:
+            mapped = tx.execute(
+                'INSERT INTO curation_resource_topics (kind, target_id, topic_id, origin, created_at) VALUES (?, ?, ?, ?, ?) ON CONFLICT DO NOTHING',
+                (kind, target, tid, initial_origin, now),
+            )
+            if mapped.rowcount:
+                tx.execute(f"RELEASE SAVEPOINT {sp_name}")
+                return tid
+    except BaseException:
         tx.execute(f"ROLLBACK TO SAVEPOINT {sp_name}")
         tx.execute(f"RELEASE SAVEPOINT {sp_name}")
-
-        # Another transaction created the topic or mapping concurrently: fetch and return it
-        if kind == 'work':
-            existing = tx.execute('SELECT id FROM forum_topics WHERE work_id=?', (target,)).fetchone()
-            if existing:
-                tid = str(existing['id'])
-                tx.execute(
-                    'INSERT OR IGNORE INTO curation_resource_topics (kind, target_id, topic_id, origin, created_at) VALUES (?, ?, ?, ?, ?)',
-                    (kind, target, tid, initial_origin, now),
-                )
-                return tid
-
-        if kind in ('style', 'layout', 'asset'):
-            row = tx.execute('SELECT topic_id FROM curation_resource_topics WHERE kind=? AND UPPER(target_id)=?', (kind, target)).fetchone()
-        else:
-            row = tx.execute('SELECT topic_id FROM curation_resource_topics WHERE kind=? AND target_id=?', (kind, target)).fetchone()
-        if row:
-            return str(row['topic_id'])
         raise
+
+    tx.execute(f"ROLLBACK TO SAVEPOINT {sp_name}")
+    tx.execute(f"RELEASE SAVEPOINT {sp_name}")
+
+    # A concurrent writer won the insert. Resolve its mapping after releasing
+    # our savepoint so the losing attempt leaves no orphan topic.
+    if kind == 'work':
+        existing = tx.execute('SELECT id FROM forum_topics WHERE work_id=?', (target,)).fetchone()
+        if existing:
+            tid = str(existing['id'])
+            tx.execute(
+                'INSERT INTO curation_resource_topics (kind, target_id, topic_id, origin, created_at) VALUES (?, ?, ?, ?, ?) ON CONFLICT DO NOTHING',
+                (kind, target, tid, initial_origin, now),
+            )
+            return tid
+
+    if kind in ('style', 'layout', 'asset'):
+        row = tx.execute('SELECT topic_id FROM curation_resource_topics WHERE kind=? AND UPPER(target_id)=?', (kind, target)).fetchone()
+    else:
+        row = tx.execute('SELECT topic_id FROM curation_resource_topics WHERE kind=? AND target_id=?', (kind, target)).fetchone()
+    if row:
+        return str(row['topic_id'])
+    raise RuntimeError("Could not resolve discussion topic after a conflicting insert")
 
 
 def record_atomic_reply_and_listing(
-    tx: sqlite3.Connection,
+    tx: PgConnection,
     topic_id: str,
     user: dict[str, Any],
     clean_text: str,

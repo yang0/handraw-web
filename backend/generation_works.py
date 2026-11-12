@@ -4,11 +4,12 @@ import hashlib
 import json
 import logging
 import re
-import sqlite3
 import time
 import uuid
 from datetime import datetime, timezone
 from typing import Any
+
+from .postgres_db import PgConnection
 
 logger = logging.getLogger("handraw.generation_works")
 
@@ -47,8 +48,8 @@ def derive_item_key(item: Any, fallback_idx: int = 0) -> tuple[str, str]:
 
 
 def extract_generation_styles_and_layout(
-    conn: sqlite3.Connection,
-    row: sqlite3.Row | dict[str, Any],
+    conn: PgConnection,
+    row: dict[str, Any],
     item: dict[str, Any] | None = None,
 ) -> tuple[list[str], str]:
     """Extract distinct style codes and single layout code from generation metadata."""
@@ -129,8 +130,8 @@ def extract_generation_styles_and_layout(
 
 
 def recover_generation_work_assets(
-    conn: sqlite3.Connection,
-    work_row: sqlite3.Row | dict[str, Any],
+    conn: PgConnection,
+    work_row: dict[str, Any],
 ) -> tuple[list[str], str]:
     """Read-only fallback for older generated works missing resource metadata.
 
@@ -177,8 +178,8 @@ def recover_generation_work_assets(
 
 
 def generation_image_assets(
-    conn: sqlite3.Connection,
-    work_row: sqlite3.Row | dict[str, Any],
+    conn: PgConnection,
+    work_row: dict[str, Any],
     image_urls: list[str],
 ) -> list[dict[str, Any]]:
     """Resolve public per-image style/layout IDs from this work's own web generation.
@@ -293,7 +294,7 @@ def generation_image_assets(
 
 
 def resolve_work_title(
-    row: sqlite3.Row | dict[str, Any],
+    row: dict[str, Any],
     item: dict[str, Any] | None = None,
 ) -> str:
     """Resolve public work title adhering to the 5-priority scheme in Issue #5."""
@@ -328,7 +329,7 @@ def resolve_work_title(
 
 
 def _grant_work_media(
-    conn: sqlite3.Connection,
+    conn: PgConnection,
     image_url: str,
     author_username: str,
     generation_id: str,
@@ -368,8 +369,8 @@ def _grant_work_media(
 
 
 def project_generation_to_works(
-    conn: sqlite3.Connection,
-    generation_id_or_row: str | sqlite3.Row | dict[str, Any],
+    conn: PgConnection,
+    generation_id_or_row: str | dict[str, Any],
     *,
     force_visibility: str | None = None,
 ) -> list[str]:
@@ -394,8 +395,8 @@ def project_generation_to_works(
 
 
 def _project_generation_impl(
-    conn: sqlite3.Connection,
-    generation_id_or_row: str | sqlite3.Row | dict[str, Any],
+    conn: PgConnection,
+    generation_id_or_row: str | dict[str, Any],
     *,
     force_visibility: str | None = None,
 ) -> list[str]:
@@ -620,7 +621,7 @@ def _project_generation_impl(
 
 
 def sync_generation_visibility(
-    conn: sqlite3.Connection,
+    conn: PgConnection,
     generation_id: str,
     new_visibility: str,
     *,
@@ -672,7 +673,7 @@ def sync_generation_visibility(
         )
 
 def get_work_generation_provenance(
-    conn: sqlite3.Connection, work_id: str,
+    conn: PgConnection, work_id: str,
 ) -> dict[str, Any] | None:
     """The work's direct run FK is its authoritative provenance."""
     row = conn.execute(
@@ -696,7 +697,7 @@ def get_work_generation_provenance(
         "engine": row["source"],
     }
 
-def reconcile_work_topics(conn: sqlite3.Connection, *, batch_size: int = 100) -> dict[str, Any]:
+def reconcile_work_topics(conn: PgConnection, *, batch_size: int = 100) -> dict[str, Any]:
     """Repair missing discussion links for current published works only.
 
     Fresh V3 has no historical topic migration. Each new work creates its

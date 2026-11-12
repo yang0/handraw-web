@@ -14,16 +14,17 @@ import unittest
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
+from tests.legacy_database import init_legacy_database
 from backend import server as server_module
 from backend.admin_services import admin_update_settings
 from backend.services import get_site_settings, publish_forum_reply_post, publish_forum_topic_post, register_user
-from backend.work_schema import ZERO_TOPIC_PUBLISH_CREDITS_SQL, zero_topic_publish_credits_hook
+from tests.work_schema import ZERO_TOPIC_PUBLISH_CREDITS_SQL, zero_topic_publish_credits_hook
 
 
 class NoTopicRewardTests(unittest.TestCase):
     def setUp(self):
         self.temp = TemporaryDirectory()
-        self.db = server_module.init_database(Path(self.temp.name) / "test_no_reward.db")
+        self.db = init_legacy_database(Path(self.temp.name) / "test_no_reward.db")
         self.author, _ = register_user(self.db, "test_author", "password123")
         self.admin, _ = register_user(self.db, "test_admin", "password123")
 

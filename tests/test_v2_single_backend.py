@@ -1,7 +1,6 @@
 """One listener serves path-based local pages and Host-based deployed pages."""
 import json
 import os
-from pathlib import Path
 import tempfile
 import threading
 import unittest
@@ -10,16 +9,21 @@ import urllib.error
 import urllib.request
 
 from backend.server import create_channel_server, init_database, main
+from tests.postgres_support import isolated_pg_dsn
 
 
 class SingleBackendHTTPTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
-        cls.folder = tempfile.TemporaryDirectory()
-        root = Path(cls.folder.name)
-        cls.env = patch.dict(os.environ, {"HANDRAW_DEMO_MODE":"1", "HANDRAW_ALLOWED_ORIGINS":"http://trusted.test", "HANDRAW_PRIVATE_STORAGE":str(root)})
-        cls.env.start()
-        cls.db = init_database(root / "isolated.db")
+        if not os.environ.get("HANDRAW_PG_STAGING_URL"):
+            raise unittest.SkipTest("Isolated PostgreSQL staging URL not provided")
+        root = cls.enterClassContext(tempfile.TemporaryDirectory())
+        cls.enterClassContext(patch.dict(os.environ, {
+            "HANDRAW_DEMO_MODE": "1", "HANDRAW_ALLOWED_ORIGINS": "http://trusted.test",
+            "HANDRAW_PRIVATE_STORAGE": root,
+        }))
+        cls.db = init_database(cls.enterClassContext(isolated_pg_dsn()))
+        cls.addClassCleanup(cls.db.close)
         cls.server = create_channel_server(0, "main", cls.db)
         cls.base = f"http://127.0.0.1:{cls.server.server_address[1]}"
         cls.thread = threading.Thread(target=cls.server.serve_forever, daemon=True)
@@ -28,11 +32,9 @@ class SingleBackendHTTPTests(unittest.TestCase):
     @classmethod
     def tearDownClass(cls):
         cls.server.shutdown()
+        cls.server.import_manager.stop()
         cls.server.server_close()
         cls.thread.join(5)
-        cls.db.close()
-        cls.env.stop()
-        cls.folder.cleanup()
 
     def request(self, path, host=None, cookie=None, body=None):
         headers = {"Host":host or "localhost", "Origin":"http://trusted.test"}
@@ -81,10 +83,16 @@ class SingleBackendStartupTests(unittest.TestCase):
     def test_main_creates_exactly_one_server(self):
         db, server, reconciler = Mock(), Mock(), Mock()
         server.serve_forever.side_effect = KeyboardInterrupt
-        with patch("backend.server.init_database", return_value=db), patch("backend.server.create_channel_server", return_value=server) as create, patch("backend.server.GenerationReconciler") as factory, patch("builtins.print"):
+        dsn = "postgresql://test@127.0.0.1/handraw_test"
+        self.enterContext(patch.dict(os.environ, {
+            "HANDRAW_DATABASE_URL": dsn, "HANDRAW_REDIS_REQUIRED": "1", "HANDRAW_PG_RUNTIME_ACK": "V3_NATIVE",
+        }))
+        self.enterContext(patch("backend.redis_rate_limit.ensure_ready"))
+        with patch("backend.server.init_database", return_value=db) as initialize, patch("backend.server.create_channel_server", return_value=server) as create, patch("backend.server.GenerationReconciler") as factory, patch("builtins.print"):
             factory.return_value.start.return_value = reconciler
             main(["--port","8127"])
-        create.assert_called_once_with(8127,"main",db,host=None,demo_mode=None)
+        initialize.assert_called_once_with(dsn)
+        create.assert_called_once_with(8127, "main", db, host=None)
         server.server_close.assert_called_once()
         reconciler.stop.assert_called_once()
         db.close.assert_called_once()

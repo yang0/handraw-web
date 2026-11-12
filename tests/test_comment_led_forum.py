@@ -1,26 +1,21 @@
 """Regression contract: work discussions appear in forum only after first comment."""
 from __future__ import annotations
 
-import tempfile
 import unittest
-from pathlib import Path
 
 from backend import resource_discussions, services
-from backend.server import init_database
+from backend.seed import ensure_seeded
+from tests.postgres_support import open_isolated_postgres
 
 IMG = "/images/individual/FA/FA-013.webp"
 
 
 class CommentLedForumTests(unittest.TestCase):
     def setUp(self):
-        self.tmp = tempfile.TemporaryDirectory()
-        self.db = init_database(Path(self.tmp.name) / "comment_led.db")
+        self.db = open_isolated_postgres(self)
+        ensure_seeded(self.db)
         self.author, _ = services.register_user(self.db, "comment_author", "password-author")
         self.reader, _ = services.register_user(self.db, "comment_reader", "password-reader")
-
-    def tearDown(self):
-        self.db.close()
-        self.tmp.cleanup()
 
     def _work(self, request_id):
         return services.publish_user_work(

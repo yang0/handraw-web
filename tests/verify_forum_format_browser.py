@@ -27,7 +27,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from playwright.sync_api import sync_playwright
 
-from backend.server import HandrawRequestHandler, init_database
+from tests.legacy_database import init_legacy_database
+from backend.server import HandrawRequestHandler
 from http.server import ThreadingHTTPServer
 
 PORT = 3097
@@ -68,7 +69,7 @@ def main():
     db = None
     httpd = None
     try:
-        db = init_database(db_path)
+        db = init_legacy_database(db_path)
 
         httpd = ThreadingHTTPServer(("127.0.0.1", PORT), HandrawRequestHandler)
         httpd.channel_role = "main"  # type: ignore[attr-defined]

@@ -19,8 +19,6 @@ from typing import Any
 from .db import utc_now_iso
 from .services import ServiceError
 
-from .skill_web_schema import SKILL_WEB_MIGRATIONS
-
 
 def _limit(qs: dict[str, list[str]], default: int = 100) -> int:
     try:

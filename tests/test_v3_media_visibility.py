@@ -5,7 +5,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from backend.db import Database
+from tests.legacy_database import Database
 from backend.server import _is_published_media
 from backend.services import register_user, set_work_visibility, utc_now_iso
 

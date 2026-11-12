@@ -12,6 +12,7 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 from unittest.mock import patch
 
+from tests.legacy_database import init_legacy_database
 from backend import curation as C
 from backend import server
 from backend.security import verify_password
@@ -23,7 +24,7 @@ IMG = "/images/individual/FA/FA-013.webp"
 class ForkCounterCannotBeGamedTests(unittest.TestCase):
     def setUp(self):
         self.temp = TemporaryDirectory()
-        self.db = server.init_database(Path(self.temp.name) / "forkgame.db")
+        self.db = init_legacy_database(Path(self.temp.name) / "forkgame.db")
         self.author, _ = register_user(self.db, "fg_author", "password-a")
         self.parent = publish_user_work(
             self.db, self.author, {"title": "父作品测试发布", "notes": "父作品测试发布的创作说明内容", "prompt": "p", "images": [IMG], "styles": ["FA-013"]}
@@ -71,7 +72,7 @@ class MixedSubmissionBackdoorTests(unittest.TestCase):
         self.temp = TemporaryDirectory()
         self.env = patch.dict(os.environ, {"HANDRAW_PRIVATE_STORAGE": self.temp.name})
         self.env.start()
-        self.db = server.init_database(Path(self.temp.name) / "mixed.db")
+        self.db = init_legacy_database(Path(self.temp.name) / "mixed.db")
         self.author, _ = register_user(self.db, "mx_author", "password-a")
         uploads = Path(self.temp.name) / "uploads"
         uploads.mkdir(parents=True, exist_ok=True)
@@ -142,7 +143,7 @@ class MixedSubmissionBackdoorTests(unittest.TestCase):
 class PaidPromptNeverRenderedTests(unittest.TestCase):
     def setUp(self):
         self.temp = TemporaryDirectory()
-        self.db = server.init_database(Path(self.temp.name) / "ssr.db")
+        self.db = init_legacy_database(Path(self.temp.name) / "ssr.db")
         self.author, _ = register_user(self.db, "ssr_author", "password-a")
 
     def tearDown(self):
@@ -193,7 +194,7 @@ class PaidPromptNeverRenderedTests(unittest.TestCase):
 class VisibilityPropagationTests(unittest.TestCase):
     def setUp(self):
         self.temp = TemporaryDirectory()
-        self.db = server.init_database(Path(self.temp.name) / "vis2.db")
+        self.db = init_legacy_database(Path(self.temp.name) / "vis2.db")
         self.author, _ = register_user(self.db, "vp_author", "password-a")
         self.work = publish_user_work(
             self.db, self.author, {"title": "举报作品测试", "notes": "举报作品测试创作说明心得", "prompt": "p", "images": [IMG], "styles": ["FA-013"]}
@@ -230,7 +231,7 @@ class StarterCredentialRotationTests(unittest.TestCase):
         from backend.security import hash_password
 
         with TemporaryDirectory() as tmp:
-            db = server.init_database(Path(tmp) / "rot.db")
+            db = init_legacy_database(Path(tmp) / "rot.db")
             try:
                 user, _ = register_user(db, "linnan", "handraw-starter-2026")
                 self.assertTrue(

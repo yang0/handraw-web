@@ -23,7 +23,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from playwright.sync_api import sync_playwright
 
-from backend.server import HandrawRequestHandler, SESSION_COOKIE_NAME, init_database
+from tests.legacy_database import init_legacy_database
+from backend.server import HandrawRequestHandler, SESSION_COOKIE_NAME
 from backend.services import register_user
 
 PORT = 3097
@@ -64,7 +65,7 @@ def main():
     db = None
     httpd = None
     try:
-        db = init_database(db_path)
+        db = init_legacy_database(db_path)
         alice, token_alice = register_user(db, "alice_test", "Password123!", display_name="爱丽丝")
         bob, token_bob = register_user(db, "bob_test", "Password123!", display_name="鲍勃")
 

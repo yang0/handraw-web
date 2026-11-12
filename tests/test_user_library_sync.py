@@ -37,8 +37,10 @@ from unittest.mock import patch
 from PIL import Image
 
 from backend.config import SESSION_COOKIE_NAME
-from backend.db import Database, utc_now_iso
-from backend.server import HandrawRequestHandler, init_database
+from tests.legacy_database import Database
+from backend.db import utc_now_iso
+from tests.legacy_database import init_legacy_database
+from backend.server import HandrawRequestHandler
 from backend.services import register_user, get_studio_workspace
 from backend.user_library import (
     MAX_ASSETS_PER_USER,
@@ -94,7 +96,7 @@ class UserLibrarySyncTests(unittest.TestCase):
             },
         )
         self.env.start()
-        self.db = init_database(self.db_path)
+        self.db = init_legacy_database(self.db_path)
 
         self.httpd = ThreadingHTTPServer(("127.0.0.1", 0), HandrawRequestHandler)
         self.httpd.channel_role = "main"  # type: ignore[attr-defined]
@@ -1545,7 +1547,7 @@ class UserLibrarySyncTests(unittest.TestCase):
             )
 
         # Run Migration 066 logic (first run)
-        from backend.work_schema import normalize_historical_asset_uids
+        from tests.work_schema import normalize_historical_asset_uids
         conn = self.db.get_conn()
         normalize_historical_asset_uids(conn)
 

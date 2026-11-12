@@ -14,10 +14,11 @@ from tempfile import TemporaryDirectory
 from unittest.mock import patch
 
 from backend.config import SESSION_COOKIE_NAME
-from backend.db import Database
-from backend.migrations import MIGRATIONS, POST_MIGRATION_HOOKS
+from tests.legacy_database import Database
+from tests.legacy_migrations import MIGRATIONS, POST_MIGRATION_HOOKS
 from backend.security import hash_session_token
-from backend.server import HandrawRequestHandler, init_database
+from tests.legacy_database import init_legacy_database
+from backend.server import HandrawRequestHandler
 from backend.services import (
     authenticate_request,
     create_session_for_user,
@@ -298,7 +299,7 @@ class MigrationHooksUnitTests(unittest.TestCase):
                 db.close()
 
     def test_migration_and_hook_interleaved_execution_order(self):
-        from backend import migrations as migrations_module
+        from tests import legacy_migrations as migrations_module
 
         orig_migrations = list(migrations_module.MIGRATIONS)
         orig_hooks = dict(migrations_module.POST_MIGRATION_HOOKS)
@@ -449,7 +450,7 @@ class SessionHashHttpTests(unittest.TestCase):
             },
         )
         self.env.start()
-        self.db = init_database(root / "http_test.db")
+        self.db = init_legacy_database(root / "http_test.db")
         register_user(self.db, "http_user", "Pass123456", display_name="HTTP User")
 
         self.httpd = ThreadingHTTPServer(("127.0.0.1", 0), HandrawRequestHandler)

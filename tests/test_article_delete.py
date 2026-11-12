@@ -13,8 +13,9 @@ from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from backend.db import Database
-from backend.server import SESSION_COOKIE_NAME, HandrawRequestHandler, init_database
+from tests.legacy_database import Database
+from tests.legacy_database import init_legacy_database
+from backend.server import SESSION_COOKIE_NAME, HandrawRequestHandler
 from backend.services import (
     ServiceError,
     delete_user_studio_article,
@@ -138,7 +139,7 @@ class ArticleDeleteHttpTests(unittest.TestCase):
             },
         )
         self.env.start()
-        self.db = init_database(self.db_path)
+        self.db = init_legacy_database(self.db_path)
         self.httpd = ThreadingHTTPServer(("127.0.0.1", 0), HandrawRequestHandler)
         self.httpd.channel_role = "main"  # type: ignore[attr-defined]
         self.httpd.db = self.db  # type: ignore[attr-defined]

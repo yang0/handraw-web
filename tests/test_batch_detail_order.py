@@ -7,7 +7,7 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
 
-from backend.db import Database
+from tests.legacy_database import Database
 from backend.generation_works import project_generation_to_works
 from backend.post_routes import _handle_detail
 from backend.recipe_routes import draft_recipe_from_work

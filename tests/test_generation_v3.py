@@ -9,7 +9,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from backend.db import Database
+from tests.legacy_database import Database
 from backend.generation_v3 import (
     ensure_run, record_public_work, reserve_skill_run,
     record_skill_uploaded_item, uploaded_skill_images, work_images,

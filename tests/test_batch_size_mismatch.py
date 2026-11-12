@@ -13,6 +13,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from unittest.mock import patch
 
+from tests.postgres_support import isolated_pg_dsn
 from backend.server import create_channel_server, init_database
 from backend.services import register_user
 
@@ -54,9 +55,9 @@ def _make_gateway_handler(state: _GatewayState):
 class BatchSizeMismatchHTTPTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls) -> None:
-        cls.temp_dir = tempfile.TemporaryDirectory()
-        root = Path(cls.temp_dir.name)
-        cls.db_path = root / "batch_size_mismatch.db"
+        if not os.environ.get("HANDRAW_PG_STAGING_URL"):
+            raise unittest.SkipTest("Isolated PostgreSQL staging URL not provided")
+        root = Path(cls.enterClassContext(tempfile.TemporaryDirectory()))
         cls.img_cfg = root / "image-service.json"
 
         cls.gw_state = _GatewayState()
@@ -74,19 +75,18 @@ class BatchSizeMismatchHTTPTests(unittest.TestCase):
             }),
             encoding="utf-8",
         )
-        cls.env = patch.dict(
+        cls.enterClassContext(patch.dict(
             os.environ,
             {
-                "HANDRAW_DB_PATH": str(cls.db_path),
                 "HANDRAW_UPLOADS_DIR": str(root / "uploads"),
                 "HANDRAW_GENERATED_DIR": str(root / "generated"),
                 "HANDRAW_DEMO_MODE": "0",
                 "HANDRAW_ALLOWED_ORIGINS": ORIGIN,
                 "HANDRAW_IMAGE_CONFIG": str(cls.img_cfg),
             },
-        )
-        cls.env.start()
-        cls.db = init_database(cls.db_path)
+        ))
+        cls.db = init_database(cls.enterClassContext(isolated_pg_dsn()))
+        cls.addClassCleanup(cls.db.close)
         cls.user, _ = register_user(cls.db, "series_user", "Password123!")
 
         cls.server = create_channel_server(0, "main", cls.db)
@@ -98,18 +98,12 @@ class BatchSizeMismatchHTTPTests(unittest.TestCase):
     @classmethod
     def tearDownClass(cls) -> None:
         cls.server.shutdown()
+        cls.server.import_manager.stop()
         cls.server.server_close()
         cls.thread.join(timeout=5)
         cls.gw_server.shutdown()
         cls.gw_server.server_close()
         cls.gw_thread.join(timeout=5)
-        cls.db.close_thread_conn()
-        cls.db.close()
-        cls.env.stop()
-        try:
-            cls.temp_dir.cleanup()
-        except Exception:
-            pass
 
     @classmethod
     def _login(cls, username: str, password: str) -> str:

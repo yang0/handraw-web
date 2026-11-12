@@ -11,7 +11,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from unittest.mock import patch
 
-from backend.db import Database
+from tests.legacy_database import Database
 from backend.resource_discussions import (
     ensure_topic,
     record_atomic_reply_and_listing,

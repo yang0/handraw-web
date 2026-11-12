@@ -68,10 +68,11 @@ def main() -> int:
         "HANDRAW_ALLOWED_ORIGINS": f"http://127.0.0.1:{PORT},http://localhost:{PORT}",
     })
 
-    from backend.server import SESSION_COOKIE_NAME, init_database
+    from tests.legacy_database import init_legacy_database
+    from backend.server import SESSION_COOKIE_NAME
     from backend.services import register_user, sync_user_studio_articles
 
-    init_db = init_database(db_path)
+    init_db = init_legacy_database(db_path)
     user, session_token = register_user(init_db, "su_editorial", "Pass123456", display_name="主编苏")
 
     # Seed 3 articles

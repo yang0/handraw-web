@@ -11,8 +11,8 @@ from pathlib import Path
 from typing import Any
 import unittest
 
-from backend.db import Database
-from backend.server import init_database
+from tests.legacy_database import Database
+from tests.legacy_database import init_legacy_database
 from backend.generation_works import (
     derive_item_key,
     project_generation_to_works,
@@ -38,7 +38,7 @@ class TestGenerationWorksSync(unittest.TestCase):
         self.enterContext(patch.dict(os.environ, {"HANDRAW_DEMO_MODE": "0"}))
         self.temp_dir = tempfile.TemporaryDirectory()
         self.db_path = Path(self.temp_dir.name) / "test_gen_works.db"
-        self.db = init_database(self.db_path)
+        self.db = init_legacy_database(self.db_path)
         self.user_author, self.token_author = register_user(self.db, "author_yang", "Pass1234!", display_name="杨凌")
         self.user_reader, self.token_reader = register_user(self.db, "reader_lin", "Pass1234!", display_name="小林")
         self.user_other, self.token_other = register_user(self.db, "reader_other", "Pass1234!", display_name="路人")

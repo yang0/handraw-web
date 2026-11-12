@@ -9,7 +9,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from backend.server import init_database
+from tests.legacy_database import init_legacy_database
 from backend.services import (
     filter_display_prompt,
     get_studio_workspace,
@@ -40,7 +40,7 @@ class PublishDefaultsTests(unittest.TestCase):
             },
         )
         self.env.start()
-        self.db = init_database(self.db_path)
+        self.db = init_legacy_database(self.db_path)
         self.user, _ = register_user(self.db, "testuser", "TestPass123!")
 
     def tearDown(self) -> None:

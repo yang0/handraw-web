@@ -60,7 +60,6 @@ import json
 import logging
 import mimetypes
 import re
-import sqlite3
 import threading
 import time
 import uuid
@@ -68,6 +67,8 @@ import warnings
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
+
+from .postgres_db import PgConnection
 from urllib.parse import parse_qs, unquote, urlparse
 
 from PIL import Image
@@ -146,7 +147,7 @@ def check_token_rate_limit(
         return True
 
 
-def next_change_seq(conn: sqlite3.Connection) -> int:
+def next_change_seq(conn: PgConnection) -> int:
     """Atomically increment and return the global monotonic change sequence number."""
     conn.execute(
         """
@@ -157,11 +158,11 @@ def next_change_seq(conn: sqlite3.Connection) -> int:
     row = conn.execute("SELECT current_seq FROM library_change_counter WHERE id = 1").fetchone()
     if row is None:
         raise RuntimeError("Failed to read change sequence from library_change_counter")
-    return int(row["current_seq"] if isinstance(row, sqlite3.Row) else row[0])
+    return int(row[0])
 
 
 def check_user_upload_quota(
-    tx: sqlite3.Connection,
+    tx: PgConnection,
     user_id: int,
     new_bytes: int,
     *,
@@ -186,9 +187,10 @@ def check_user_upload_quota(
         raise ServiceError("图库存储容量已达上限（最多1GB）", status=413, code="asset_storage_quota_exceeded")
 
 
-def format_asset(row: sqlite3.Row | dict[str, Any]) -> dict[str, Any]:
+def format_asset(row: dict[str, Any]) -> dict[str, Any]:
     """Format a database row into the standardized user library asset payload."""
-    raw_tags = row["tags_json"] if isinstance(row, sqlite3.Row) else row.get("tags_json")
+    row = dict(row)
+    raw_tags = row.get("tags_json")
     tags: list[str] = []
     if raw_tags:
         try:
@@ -199,7 +201,7 @@ def format_asset(row: sqlite3.Row | dict[str, Any]) -> dict[str, Any]:
             pass
 
     def _val(k: str, default: Any = None) -> Any:
-        return row[k] if isinstance(row, sqlite3.Row) else row.get(k, default)
+        return row.get(k, default)
 
     uid = str(_val("asset_uid") or "")
     raw_image_url = str(_val("image_url") or "")
@@ -225,7 +227,7 @@ def format_asset(row: sqlite3.Row | dict[str, Any]) -> dict[str, Any]:
 
 
 def ensure_user_uploads_synced(
-    db_or_conn: Database | sqlite3.Connection,
+    db_or_conn: Database | PgConnection,
     user_id: int,
     *,
     non_blocking: bool = False,
@@ -282,7 +284,7 @@ def _validate_image_and_sha256(data_url: str, provided_sha: str) -> tuple[bytes,
 
 
 def is_media_referenced(
-    conn: sqlite3.Connection,
+    conn: PgConnection,
     media_url: str,
     file_path: str,
     *,

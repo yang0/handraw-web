@@ -20,7 +20,8 @@ import fitz
 from PIL import Image
 
 from backend import ai_client
-from backend.db import Database, utc_now_iso
+from tests.legacy_database import Database
+from backend.db import utc_now_iso
 from backend.document_importer import (
     ImportManager,
     cleanup_unreferenced_import_media,
@@ -29,7 +30,8 @@ from backend.document_importer import (
     verify_fidelity,
 )
 from backend.document_structure import DocumentImportError, extract_document_structure
-from backend.server import create_channel_server, init_database
+from tests.legacy_database import init_legacy_database
+from backend.server import create_channel_server
 
 
 def _create_sample_docx() -> bytes:
@@ -845,7 +847,7 @@ class ImportHttpApiTests(unittest.TestCase):
         cls.env_patch = patch.dict(os.environ, {"HANDRAW_UPLOADS_DIR": str(cls.uploads_dir), "HANDRAW_DEMO_MODE": "0", "HANDRAW_ALLOWED_ORIGINS": "https://studio.handraw-style.com"})
         cls.env_patch.start()
         cls.db_path = Path(cls.temp_dir.name) / "http_test.db"
-        cls.db = init_database(cls.db_path)
+        cls.db = init_legacy_database(cls.db_path)
         from backend.services import register_user
         cls.u1, cls.tok1 = register_user(cls.db, "import_user_1", "password123")
         cls.u2, cls.tok2 = register_user(cls.db, "import_user_2", "password123")

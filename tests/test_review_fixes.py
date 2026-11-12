@@ -11,6 +11,7 @@ import unittest
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
+from tests.legacy_database import init_legacy_database
 from backend import server
 from backend.ranking import work_popular_sql
 from backend.services import build_boot_payload, publish_user_work, register_user
@@ -21,7 +22,7 @@ IMG = "/images/individual/FA/FA-013.webp"
 class PaidPromptTests(unittest.TestCase):
     def setUp(self):
         self.temp = TemporaryDirectory()
-        self.db = server.init_database(Path(self.temp.name) / "paid.db")
+        self.db = init_legacy_database(Path(self.temp.name) / "paid.db")
         self.author, _ = register_user(self.db, "pay_author", "password-a")
         self.reader, _ = register_user(self.db, "pay_reader", "password-b")
 
@@ -79,7 +80,7 @@ class PaidPromptTests(unittest.TestCase):
 class PopularIndexTests(unittest.TestCase):
     def setUp(self):
         self.temp = TemporaryDirectory()
-        self.db = server.init_database(Path(self.temp.name) / "idx.db")
+        self.db = init_legacy_database(Path(self.temp.name) / "idx.db")
 
     def tearDown(self):
         self.db.get_conn().close()
@@ -115,7 +116,7 @@ class ConvergeAllStatusesTests(unittest.TestCase):
     def setUp(self):
         self.temp = TemporaryDirectory()
         self.path = Path(self.temp.name) / "conv.db"
-        self.db = server.init_database(self.path)
+        self.db = init_legacy_database(self.path)
         self.author, _ = register_user(self.db, "conv_all", "password-a")
         published = publish_user_work(
             self.db, self.author, {"title": "收敛作品", "prompt": "p", "images": [IMG], "styles": ["FA-013"]}

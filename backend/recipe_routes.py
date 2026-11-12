@@ -12,7 +12,6 @@ from __future__ import annotations
 import hashlib
 import json
 import re
-import sqlite3
 import uuid
 from typing import Any
 
@@ -119,7 +118,7 @@ def validate_recipe_media(db: Database, uid: int, raw_refs: Any) -> list[str]:
     return clean_refs
 
 
-def validate_recipe_fields(db: Database, uid: int, body: dict[str, Any], existing: sqlite3.Row | None = None) -> dict[str, Any]:
+def validate_recipe_fields(db: Database, uid: int, body: dict[str, Any], existing: dict[str, Any] | None = None) -> dict[str, Any]:
     """Validate and normalize all recipe parameters."""
     kind = str(body.get("kind") if body.get("kind") is not None else (existing["kind"] if existing else "single")).strip()
     if kind not in ("single", "batch", "article_card"):
@@ -234,7 +233,7 @@ def validate_recipe_fields(db: Database, uid: int, body: dict[str, Any], existin
     }
 
 
-def format_recipe(row: sqlite3.Row | dict[str, Any]) -> dict[str, Any]:
+def format_recipe(row: dict[str, Any]) -> dict[str, Any]:
     """Format recipe database row into API client response shape."""
     style_ids = json.loads(row["style_ids"] or "[]") if isinstance(row["style_ids"], str) else (row["style_ids"] or [])
     colors = json.loads(row["colors"] or "[]") if isinstance(row["colors"], str) else (row["colors"] or [])

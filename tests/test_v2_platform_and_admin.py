@@ -19,7 +19,8 @@ from http.server import ThreadingHTTPServer
 from pathlib import Path
 from unittest.mock import patch
 
-from backend.server import HandrawRequestHandler, init_database
+from tests.legacy_database import init_legacy_database
+from backend.server import HandrawRequestHandler
 
 ROOT = Path(__file__).resolve().parents[1]
 SKILL_SPEC = importlib.util.spec_from_file_location(
@@ -92,7 +93,7 @@ class HandrawV2PlatformAndAdminTests(unittest.TestCase):
         )
         self.env_patch.start()
 
-        self.db = init_database(self.db_path)
+        self.db = init_legacy_database(self.db_path)
         self.httpd = ThreadingHTTPServer(("127.0.0.1", 0), HandrawRequestHandler)
         self.httpd.channel_role = "main"  # type: ignore[attr-defined]
         self.httpd.db = self.db  # type: ignore[attr-defined]
