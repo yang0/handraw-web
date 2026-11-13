@@ -2,7 +2,7 @@
 const test=require("node:test"),assert=require("node:assert/strict"),vm=require("node:vm"),fs=require("node:fs");
 const context={window:{__HANDRAW_TESTING__:true},setTimeout,clearTimeout,console};
 vm.createContext(context);vm.runInContext(fs.readFileSync("demo/assets/parameter-canvas.js","utf8"),context);
-const {CanvasStore,selectedQuote,arrangeNodes,pickResourceCandidate,simpleFlow,combinationSummary,addGuidedParameter,connectionError,addCanvasNode}=context.window.HandrawParameterCanvas.testing;
+const {CanvasStore,selectedQuote,arrangeNodes,pickResourceCandidate,simpleFlow,combinationSummary,addGuidedParameter,connectionError,addCanvasNode,outputItems}=context.window.HandrawParameterCanvas.testing;
 const storage=new Map();
 function store(t,api,scope="user:canvas") {
   const instance=new CanvasStore({api,scope,loggedIn:()=>true,storage:{getItem:key=>storage.get(key),setItem:(key,value)=>storage.set(key,value)}});
@@ -66,6 +66,20 @@ test("node view opens by default and exposes one anchor for each usable directio
     ["out","theme"],["out","style"],["in","combine"],["out","combine"],["in","output"]
   ]);
   assert.match(root.innerHTML,/data-action="add-node-menu"/);
+  assert.match(root.innerHTML,/class="pc-drawer" hidden/);
+});
+
+test("results follow frozen output IDs, with safe fallback for unlinked and deleted nodes",()=>{
+  const run={canvasId:"canvas",items:[
+    {ordinal:0,outputNodeId:"second"},{ordinal:1,outputNodeId:"first"},
+    {ordinal:2,outputNodeId:"removed"},{ordinal:3}
+  ]};
+  const groups=outputItems(run,["first","second"],"canvas");
+  assert.deepEqual(Array.from(groups.byNode.get("first"),item=>item.ordinal),[1]);
+  assert.deepEqual(Array.from(groups.byNode.get("second"),item=>item.ordinal),[0]);
+  assert.deepEqual(Array.from(groups.orphaned,item=>item.ordinal),[2,3]);
+  assert.deepEqual(Array.from(outputItems(run,["first"],"canvas").byNode.get("first"),item=>item.ordinal),[1,3]);
+  assert.equal(outputItems(run,["first","second"],"another").orphaned.length,4);
 });
 
 test("wiring accepts nested combinations and rejects duplicates, cycles and terminal outputs",t=>{

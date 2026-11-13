@@ -55,6 +55,7 @@
   const _workspaceCollectionsLoading=new Map();
   const _generationControllers = new Set();
   let _articlesSyncTimer = null;
+  let _articleLocalSaveFailed = false;
   let _articlesSyncVersion = 0;
   const _articleCloudBases = new Map();
   const _articleCloudSnapshots = new Map();
@@ -131,7 +132,8 @@
       // memory and older runs are always recoverable from PostgreSQL.
       const cached=key===HISTORY_STORAGE_KEY && Array.isArray(val)?val.slice(0,40):val;
       localStorage.setItem(scopedStorageKey(key), JSON.stringify(cached));
-    } catch (_) {}
+      return true;
+    } catch (_) { return false; }
   }
 
   const savedPrefs = readJsonStorage(PREFS_STORAGE_KEY, {});
@@ -4507,7 +4509,7 @@
 
   function persistMyArticles() {
     ensureMyArticlesInitialized();
-    writeJsonStorage(MY_ARTICLES_STORAGE_KEY, CS.myArticles);
+    _articleLocalSaveFailed = !writeJsonStorage(MY_ARTICLES_STORAGE_KEY, CS.myArticles);
     if (_articlesCloudConflict) {
       // Keep entries omitted from the hydrated workspace; merge later edits
       // without deleting the offline versions saved before rehydration.
@@ -15107,8 +15109,7 @@
             </div>
           </div>
 
-          <!-- Top-right: reader preview & Document Upload -->
-          <div style="display:flex;align-items:center;gap:10px;">
+          <div class="ic-article-editor-actions">
             <label class="btn btn-sm" style="cursor:pointer;padding:3px 10px;font-size:12px;font-weight:750;" title="上传文档重新由 AI 解析覆盖当前正文">
               导入/替换文档
               <input type="file" id="editor-file-replace-inp" accept=".md,.markdown,.txt,.doc,.docx,.pdf" hidden />
@@ -15117,6 +15118,7 @@
               <button type="button" class="ic-article-seg-btn is-active" id="editor-switch-editor">编辑</button>
               <button type="button" class="ic-article-seg-btn" id="editor-switch-preview">预览</button>
             </div>
+            <button type="button" class="btn btn-sm btn-primary" id="editor-btn-save" title="保存文章（Ctrl / ⌘ + S）">保存文章</button>
           </div>
         </header>
 
@@ -15304,10 +15306,10 @@
       }
       if (state === "dirty") el.textContent = "本地保存中…";
       else if (state === "empty") el.textContent = "未填写";
-      else if (!remote || _articlesSyncStatus === "local") el.textContent = "已保存到此浏览器";
-      else if (_articlesSyncStatus === "conflict") el.textContent = "版本冲突 · 本地稿已保留，云端未覆盖";
-      else if (_articlesSyncStatus === "failed") el.textContent = "本地已保存 · 云端同步失败";
-      else if (_articlesSyncStatus === "pending" || _articlesSyncStatus === "syncing") el.textContent = "本地已保存 · 正在同步云端…";
+      else if (!remote || _articlesSyncStatus === "local") el.textContent = _articleLocalSaveFailed ? "本地保存失败" : "已保存到此浏览器";
+      else if (_articlesSyncStatus === "conflict") el.textContent = _articleLocalSaveFailed ? "版本冲突 · 本地保存失败" : "版本冲突 · 本地稿已保留，云端未覆盖";
+      else if (_articlesSyncStatus === "failed") el.textContent = _articleLocalSaveFailed ? "保存失败 · 请重试" : "本地已保存 · 云端同步失败";
+      else if (_articlesSyncStatus === "pending" || _articlesSyncStatus === "syncing") el.textContent = "正在同步云端…";
       else if (_articlesSyncStatus === "synced") el.textContent = "已同步到云端";
       else el.textContent = "已保存到此浏览器 · 云端状态待确认";
     };
@@ -15371,6 +15373,32 @@
 
     const hasEditorContent = () =>
       Boolean((draft.title || "").trim() || (draft.markdown || "").trim());
+
+    const saveButton = DOM.previewStage.querySelector("#editor-btn-save");
+    if (saveButton) saveButton.onclick = async () => {
+      if (!isCurrentEditor() || saveButton.disabled) return;
+      if (autoSyncTimer) clearTimeout(autoSyncTimer);
+      autoSyncTimer = null;
+      if (!commitSync({bumpTime:false})) {
+        updateSavedState("empty");
+        toast("请先填写标题或正文");
+        return;
+      }
+      const remote = Boolean(App.state?.serverBacked && App.state?.loggedIn);
+      if (remote) {
+        saveButton.disabled = true;
+        saveButton.textContent = "保存中…";
+      }
+      const synced = remote && await flushCloudArticlesSync();
+      if (!isCurrentEditor()) return;
+      saveButton.disabled = false;
+      saveButton.textContent = "保存文章";
+      updateSavedState("saved");
+      if (synced) toast("文章已保存到云端");
+      else if (_articlesCloudConflict) toast(_articleLocalSaveFailed ? "文章保存冲突，本地保存也未成功" : "文章已保留在本机，请处理云端冲突");
+      else if (_articleLocalSaveFailed) toast("文章保存失败，请重试");
+      else toast(remote ? "文章已保存到本机，云端同步失败" : "文章已保存到此浏览器");
+    };
 
     const triggerDebouncedSync = () => {
       if (!isCurrentEditor()) return;
@@ -16117,6 +16145,7 @@
     const quick = CS.stageView === "quick";
     const batch = CS.stageView === "batch";
     const canvas = CS.stageView === "canvas";
+    DOM.entryBar.classList?.toggle("is-canvas-mode", canvas);
     const article = CS.stageView === "preview" || CS.stageView === "article";
     const history = CS.stageView === "history";
     const workflows = CS.stageView === "workflows";
@@ -16986,6 +17015,7 @@
       if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "s") {
         e.preventDefault();
         if(CS.stageView==="canvas") void window.HandrawParameterCanvas?.saveCurrent();
+        else if(CS.stageView==="preview" && CS.articleSubView==="editor") DOM.previewStage?.querySelector("#editor-btn-save")?.click();
         else saveCurrentWorkflow(false);
         return;
       }

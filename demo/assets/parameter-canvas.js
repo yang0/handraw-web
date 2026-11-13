@@ -238,7 +238,12 @@
         const result=await this.options.api(`/api/studio/canvases/${encodeURIComponent(id)}/preview`,{method:"POST",body:{}});
         if(this.closed) return;
         if(id!==this.doc.id||key!==JSON.stringify(this.doc.graph)) throw new Error("参数已变化，请重新预览");
-        this.preview=result;this.selected=new Set(result.items.map(item=>item.ordinal));this.submitKey=uid("canvas_run");this.notify();
+        const selection = this.preview?.planHash === result.planHash ? this.selected : null;
+        this.preview=result;
+        this.selected=new Set(result.items.map(item=>item.ordinal).filter(ordinal=>!selection || selection.has(ordinal)));
+        this.confirmation=null;
+        this.submitKey=uid("canvas_run");
+        this.notify();
       } finally {this.expanding=false;this.notify("status");}
     }
     async submit() {
@@ -268,14 +273,14 @@
     }
     async loadMoreRuns() {
       if(!this.recentCursor||this.recentLoading) return;
-      const id=this.doc.id,cursor=this.recentCursor;this.recentLoading=true;this.notify();
+      const id=this.doc.id,cursor=this.recentCursor;this.recentLoading=true;this.notify("panel");
       try {
         const result=await this.options.api(`/api/studio/canvases/${encodeURIComponent(id)}/runs?cursor=${encodeURIComponent(cursor)}`);
         if(this.closed||id!==this.doc.id||cursor!==this.recentCursor) return;
         const byId=new Map(this.recent.map(item=>[item.id,item]));
         for(const item of result.items||[]) if(!byId.has(item.id)) byId.set(item.id,item);
         this.recent=[...byId.values()];this.recentCursor=result.nextCursor||"";
-      } finally {this.recentLoading=false;this.notify();}
+      } finally {this.recentLoading=false;this.notify("panel");}
     }
     async openRun(id) {
       let navigation=++this.navigation;
@@ -294,7 +299,13 @@
       if(this.closed||navigation!==this.navigation) return;
       await this.watch(id);
     }
-    async watch(id) { if(this.runId!==id) this.retryPayload=null;this.runId=id;this.persist();await this.refreshRun(); }
+    async watch(id) {
+      if(this.runId!==id) {this.retryPayload=null;this.run=null;}
+      this.runId=id;
+      this.persist();
+      this.notify("panel");
+      await this.refreshRun();
+    }
     async refreshRun() {
       clearTimeout(this.pollTimer);
       const id=this.runId;if(!id||this.closed) return;
@@ -327,6 +338,10 @@
   let current=null,root=null,options=null;
   let selectedPort = null;
   let nodeMenu = null;
+  let activePanel = null;
+  let outputPanelId = null;
+  let panelCanvasId = null;
+  let spaceHeld = false;
   let cancelPointer = null;
   let suppressPortClick = false;
   const busy=action=>Promise.resolve().then(action).catch(error=>current?.fail(error));
@@ -343,8 +358,8 @@
     }
     for(const button of root?.querySelectorAll('[data-action="preview"]')||[]) {
       const info=combinationSummary(current.doc.graph);
-      button.disabled=Boolean(current.expanding||current.loading||current.submission||(info.flow&&info.problem));
-      button.textContent=current.expanding?"正在核对组合与费用…":"预览组合与费用";
+      button.disabled=Boolean(current.expanding||current.loading||current.submitting||(!current.submission&&info.flow&&info.problem));
+      button.textContent=current.submission?"确认提交":current.expanding?"核对费用中…":"预览出图";
     }
   }
   function status() {
@@ -352,7 +367,7 @@
     el.textContent=current.conflict?"保存冲突，本地草稿已保留":!options.loggedIn()?"草稿保存在当前浏览器":current.savePromise?"正在保存…":current.dirty?"有未保存改动":"已保存";
     const select=root.querySelector('[data-action="choose-canvas"]');
     if(select) select.innerHTML='<option value="">已保存的画布</option>'+current.list.map(item=>`<option value="${esc(item.id)}" ${item.id===current.doc.id?"selected":""}>${esc(item.name)}</option>`).join("");
-    updateSummary();renderPanel();
+    updateSummary();renderPanels();
   }
   function parameterValue(node,value,index) {
     const id=esc(node.id),field=node.parameter,base=`data-node="${id}" data-value="${index}"`;
@@ -397,7 +412,8 @@
           const source = graph.nodes.find(item => item.id === edge.from);
           const label = source ? `${nodeName(source)} ${graph.nodes.indexOf(source) + 1}` : "参数";
           return `<span>${esc(label)}<button type="button" data-action="disconnect" data-node="${esc(node.id)}" data-from="${esc(edge.from)}" aria-label="断开${esc(label)}">×</button></span>`;
-        }).join("") || '<small>从其他节点的右侧圆点连到这里的左侧圆点</small>'}</div>`}</div></section>`;
+        }).join("") || '<small>从其他节点的右侧圆点连到这里的左侧圆点</small>'}</div>`}</div>
+      ${node.type === "output" ? '<div class="pc-output-results" data-output-results></div>' : ""}</section>`;
   }
 
   function portButton(node, direction, connected) {
@@ -506,7 +522,7 @@
 
   function wireHint(message = "") {
     const hint = root?.querySelector("[data-wire-hint]");
-    if (hint) hint.textContent = message || "右键或双击空白处添加节点。从右侧圆点拖到左侧圆点，也可依次点击两个圆点。";
+    if (hint) hint.textContent = message || "右键或双击添加节点 · 拖动圆点连线 · 空格或中键拖动画布";
   }
 
   function clearWire() {
@@ -596,17 +612,102 @@
     port.addEventListener("pointercancel", () => cancelPointer?.(), listener);
     port.addEventListener("lostpointercapture", () => cancelPointer?.(), listener);
   }
-  function renderPanel() {
-    const panel=root?.querySelector(".pc-results");if(!panel||!current) return;
-    const preview=current.preview,run=current.run,q=preview?selectedQuote(preview,current.selected.size):null;
-    panel.innerHTML=`${current.submission?'<p role="status">正在确认上一批提交状态，重试确认不会重复创建批次。</p><button type="button" data-action="submit">确认提交状态</button>':""}
-      ${preview?`<h3>确认出图 · ${preview.count} 张可选</h3><p>已选 ${q.count} 张 · 免费 ${q.freeUsed} 张 · 预计 ${q.total} 积分</p><p class="pc-muted">勾选要生成的图片。额度以提交时为准，积分不会超过本次确认上限。</p>
-      ${current.confirmation==="submit"?`<div class="pc-confirm" role="group" aria-label="确认本次生成"><strong>确认生成 ${q.count} 张？</strong><p>免费 ${q.freeUsed} 张，积分上限 ${q.total}。开始后关闭页面，后台仍会继续生成。</p><div><button type="button" data-action="cancel-confirm">返回检查</button><button type="button" class="pc-primary" data-action="confirm-submit" ${current.submitting?"disabled":""}>${current.submitting?"正在提交…":"确认并开始生成"}</button></div></div>`:`<button type="button" class="pc-primary" data-action="submit" ${!q.count||!q.affordable||current.submission?"disabled":""}>生成选中的 ${q.count} 张</button>`}${!q.affordable?'<p class="pc-next-action">积分不足，请减少勾选数量。</p>':""}<div class="pc-plan-list">${preview.items.map(item=>`<label><input type="checkbox" data-select="${item.ordinal}" ${current.selected.has(item.ordinal)?"checked":""} ${current.submission||current.submitting?"disabled":""}><span><b>${item.ordinal+1}.</b> ${esc(item.spec.prompt.slice(0,100))}<small>${esc([item.spec.style1,item.spec.style2,item.spec.layout,item.spec.ratio].filter(Boolean).join(" · "))}</small></span></label>`).join("")}</div>`:guided()?'<p class="pc-muted">预览后可逐项勾选，确认费用再开始。此步骤不会扣费。</p>':"<h3>预览出图</h3><p class='pc-muted'>把主题、画风等参数连到「参数组合」，再接到「批量出图」。只有一项参数时，可以直接接到「批量出图」。</p>"}
-      ${current.recent.length?`<hr class="pc-history-divider"><h3>已提交的批次</h3><label>查看生成记录<select data-action="choose-run"><option value="">选择批次</option>${current.recent.map(r=>`<option value="${esc(r.id)}" ${r.id===current.runId?"selected":""}>${esc(runDate(r.createdAt))} · ${r.count} 张</option>`).join("")}</select></label>`:""}
-      ${current.recentCursor?`<button type="button" data-action="more-runs" ${current.recentLoading?"disabled":""}>${current.recentLoading?"正在载入…":"加载更早的批次"}</button>`:""}
-      ${run?`<h3>批次进度</h3><p role="status">已完成 ${run.items.filter(item=>item.status==="success").length} / ${run.count} 张 · 已用 ${run.spentCredits} 积分</p><div class="pc-run-actions"><button type="button" data-action="refresh">刷新</button>${run.items.some(i=>i.status==="pending")?'<button type="button" data-action="stop">停止未提交任务</button>':""}${run.items.some(i=>["failed","cancelled"].includes(i.status))?`<button type="button" data-action="retry">重试未成功项（预计 ${run.retryQuote.total} 积分）</button>`:""}</div><p class="pc-muted">关闭页面后仍会继续出图。已提交上游的任务按实际结果结算。</p>
-      <div class="pc-gallery">${run.items.map(item=>`<article><strong>${item.ordinal+1}. ${esc(item.spec.prompt.slice(0,60))}</strong><span>${({pending:"等待提交",generating:"生成中",success:"已完成",failed:"未成功",cancelled:"已停止"})[item.status]||"等待确认"}</span>${item.images.map(url=>`<a href="${esc(url)}" target="_blank" rel="noopener"><img src="${esc(url)}" alt="${esc(item.spec.prompt.slice(0,80))}" loading="lazy"></a>`).join("")}${item.errorCode?'<small>本项未完成；可检查参数和额度后重试。</small>':""}</article>`).join("")}</div>`:""}`;
+  function outputItems(run, outputIds, canvasId) {
+    const byNode = new Map(outputIds.map(id => [id, []]));
+    const orphaned = [];
+    for (const item of run?.items || []) {
+      const id = item.outputNodeId || (outputIds.length === 1 ? outputIds[0] : null);
+      const group = run.canvasId === canvasId ? byNode.get(id) : null;
+      (group || orphaned).push(item);
+    }
+    return {byNode, orphaned};
   }
+
+  const taskLabels = {pending:"等待提交",generating:"生成中",success:"已完成",failed:"未成功",cancelled:"已停止"};
+  const completedCount = items => items.filter(item => item.status === "success").length;
+  const resultCount = items => items.reduce((sum, item) => sum + item.images.length, 0);
+
+  function outputGallery(items) {
+    return `<div class="pc-gallery">${items.map(item => {
+      const prompt = String(item.spec?.prompt || "");
+      return `<article><strong>${item.ordinal + 1}. ${esc(prompt.slice(0, 80))}</strong><span>${taskLabels[item.status] || "等待确认"}</span>
+      ${item.images.map(url => `<button type="button" class="pc-result-image" data-action="open-result-image" data-url="${esc(url)}" data-title="${esc(prompt.slice(0, 80))}" aria-label="查看第 ${item.ordinal + 1} 项生成图"><img src="${esc(url)}" alt="${esc(prompt.slice(0, 80))}" loading="lazy"></button>`).join("")}</article>`;
+    }).join("")}</div>`;
+  }
+
+  function batchControls(run) {
+    return `<div class="pc-run-actions"><button type="button" data-action="refresh">刷新</button>
+      ${run.items.some(item => item.status === "pending") ? '<button type="button" data-action="stop">停止未提交任务</button>' : ""}
+      ${run.items.some(item => ["failed","cancelled"].includes(item.status)) ? `<button type="button" data-action="retry">重试未成功项（预计 ${run.retryQuote.total} 积分）</button>` : ""}</div>`;
+  }
+
+  function previewHtml() {
+    if (current.submitting) return '<p role="status">正在提交批次…</p>';
+    if (current.submission) return '<p role="status">上一批提交状态待确认。</p><button type="button" class="pc-primary" data-action="submit">确认提交状态</button>';
+    const preview = current.preview;
+    if (!preview) return "";
+    const q = selectedQuote(preview, current.selected.size);
+    return `<p>已选 ${q.count} / ${preview.count} 张 · 免费 ${q.freeUsed} 张 · 预计 ${q.total} 积分</p>
+      ${current.confirmation === "submit"
+        ? `<div class="pc-confirm" role="group" aria-label="确认本次生成"><strong>确认生成 ${q.count} 张？</strong><p>积分上限 ${q.total}。关闭页面后仍会继续生成。</p><div><button type="button" data-action="cancel-confirm">返回检查</button><button type="button" class="pc-primary" data-action="confirm-submit">确认并开始生成</button></div></div>`
+        : `<button type="button" class="pc-primary" data-action="submit" ${!q.count || !q.affordable ? "disabled" : ""}>生成选中的 ${q.count} 张</button>`}
+      <button type="button" data-action="recheck-preview" ${current.expanding ? "disabled" : ""}>重新核对费用</button>
+      ${!q.affordable ? '<p class="pc-next-action">积分不足，请减少勾选数量。</p>' : ""}
+      <div class="pc-plan-list">${preview.items.map(item => `<label><input type="checkbox" data-select="${item.ordinal}" ${current.selected.has(item.ordinal) ? "checked" : ""}><span><b>${item.ordinal + 1}.</b> ${esc(String(item.spec?.prompt || "").slice(0,100))}<small>${esc([item.spec?.style1,item.spec?.style2,item.spec?.layout,item.spec?.ratio].filter(Boolean).join(" · "))}</small></span></label>`).join("")}</div>`;
+  }
+
+  function historyHtml(run, orphaned) {
+    const entries = current.recent.map(item => `<button type="button" class="pc-history-entry" data-action="choose-run" data-run="${esc(item.id)}" aria-pressed="${item.id === current.runId}"><span>${esc(runDate(item.createdAt))}</span><small>${item.count} 张</small></button>`).join("");
+    return `${entries || '<p class="pc-muted">此画布暂无出图记录。</p>'}
+      ${current.recentCursor ? `<button type="button" data-action="more-runs" ${current.recentLoading ? "disabled" : ""}>${current.recentLoading ? "正在载入…" : "加载更早的批次"}</button>` : ""}
+      ${current.runId && !run ? '<p role="status">正在载入批次…</p>' : ""}
+      ${run ? `<p>完成 ${completedCount(run.items)} / ${run.count} 张 · 已用 ${run.spentCredits} 积分</p>${batchControls(run)}
+        ${orphaned.length ? '<button type="button" data-action="show-detached-output">查看未关联到节点的结果</button>' : ""}
+        ${run.items.length > orphaned.length ? '<button type="button" data-action="focus-run-output">定位出图节点</button>' : ""}` : ""}`;
+  }
+
+  function updateMarkup(element, markup) {
+    if (element.dataset.rendered === markup) return;
+    const scrollTop = element.scrollTop;
+    const active = document.activeElement;
+    const ordinal = element.contains(active) ? active.dataset.select : null;
+    element.innerHTML = markup;
+    element.dataset.rendered = markup;
+    element.scrollTop = scrollTop;
+    if (ordinal != null) element.querySelector(`[data-select="${Number(ordinal)}"]`)?.focus({preventScroll:true});
+  }
+
+  function renderPanels() {
+    const drawer = root?.querySelector(".pc-drawer");
+    if (!drawer || !current) return;
+    const run = current.run;
+    const ids = current.doc.graph.nodes.filter(node => node.type === "output").map(node => node.id);
+    const {byNode, orphaned} = outputItems(run, ids, current.doc.id);
+    for (const slot of root.querySelectorAll("[data-output-results]")) {
+      const id = slot.dataset.outputNode || slot.closest("[data-card]").dataset.card;
+      const items = byNode.get(id) || [];
+      const thumb = items.find(item => item.images.length)?.images[0];
+      updateMarkup(slot, items.length ? `<button type="button" data-action="open-output" data-node="${esc(id)}" aria-expanded="${activePanel === "output" && outputPanelId === id}">
+        ${thumb ? `<img src="${esc(thumb)}" alt="" loading="lazy">` : ""}
+        <span><strong>出图结果</strong><small>完成 ${completedCount(items)} / ${items.length} 项 · ${resultCount(items)} 张图</small></span><span aria-hidden="true">›</span></button>` : "");
+    }
+    const history = root.querySelector('[data-action="toggle-history"]');
+    history.setAttribute("aria-expanded", String(activePanel === "history"));
+    const pending = run?.items.filter(item => ["pending","generating"].includes(item.status)).length;
+    history.textContent = pending ? `出图历史 · ${pending}` : "出图历史";
+    history.setAttribute("aria-label", pending ? `出图历史，${pending} 项进行中` : "出图历史");
+    const items = outputPanelId ? byNode.get(outputPanelId) || [] : orphaned;
+    const title = activePanel === "history" ? "出图历史" : activePanel === "output"
+      ? (outputPanelId ? "节点出图结果" : "未关联的历史结果") : "预览与费用";
+    const markup = activePanel === "history" ? historyHtml(run, orphaned)
+      : activePanel === "output" && run && items.length ? `<p>完成 ${completedCount(items)} / ${items.length} 项 · ${resultCount(items)} 张图</p>${outputGallery(items)}`
+      : activePanel === "preview" ? previewHtml() : "";
+    drawer.hidden = !markup;
+    drawer.setAttribute("aria-label", title);
+    drawer.querySelector("h2").textContent = title;
+    updateMarkup(drawer.querySelector(".pc-drawer-body"), markup);
+  }
+
   function render() {
     if(!root||!current||current.closed) return;
     closeNodeMenu();
@@ -615,14 +716,37 @@
     const doc=current.doc,isGuided=guided(),flow=simpleFlow(doc.graph);
     const oldScroll=root.querySelector('.pc-guided-body')?.scrollTop||0;
     const oldCanvas=root.querySelector(".pc-scroll");
-    root.innerHTML=`<div class="pc-header"><div><p class="pc-kicker">参数画布</p><input class="pc-name" aria-label="画布名称" data-name value="${esc(doc.name)}"><span data-pc-status></span></div><div class="pc-actions"><select aria-label="打开已保存画布" data-action="choose-canvas" ${current.submission?"disabled":""}><option value="">已保存的画布</option>${current.list.map(item=>`<option value="${esc(item.id)}" ${item.id===doc.id?"selected":""}>${esc(item.name)}</option>`).join("")}</select>${current.listCursor?`<button type="button" data-action="more-canvases" ${current.listLoading?"disabled":""}>${current.listLoading?"正在载入…":"更多画布"}</button>`:""}<button type="button" data-action="new" ${current.submission?"disabled":""}>新建</button><details class="pc-document-menu"><summary>更多</summary><div><button type="button" data-action="copy">另存副本</button><button type="button" data-action="save">立即保存</button><button type="button" data-action="export">导出画布</button></div></details></div></div>
+    if (panelCanvasId !== doc.id) {
+      panelCanvasId = doc.id;
+      activePanel = current.submission ? "preview" : null;
+      outputPanelId = null;
+    }
+    root.innerHTML = `<div class="pc-header">
+      <div class="pc-document"><input class="pc-name" aria-label="画布名称" data-name value="${esc(doc.name)}"><span data-pc-status role="status"></span></div>
+      <div class="pc-toolbar" aria-label="画布工具">
+        ${isGuided ? "" : '<button type="button" data-action="add-node-menu" aria-haspopup="dialog">＋ 添加节点</button>'}
+        <button type="button" data-action="toggle-history" aria-expanded="false" aria-controls="pc-drawer">出图历史</button>
+        <button type="button" class="pc-primary" data-action="preview">预览出图</button>
+        <details class="pc-document-menu"><summary>更多</summary><div>
+          <label>打开画布<select aria-label="打开已保存画布" data-action="choose-canvas" ${current.submission?"disabled":""}></select></label>
+          ${current.listCursor ? `<button type="button" data-action="more-canvases" ${current.listLoading?"disabled":""}>${current.listLoading?"正在载入…":"加载更多画布"}</button>` : ""}
+          <button type="button" data-action="new" ${current.submission?"disabled":""}>新建画布</button>
+          <button type="button" data-action="save">保存画布</button>
+          <button type="button" data-action="copy" ${current.submission?"disabled":""}>另存副本</button>
+          <button type="button" data-action="export">导出画布</button>
+          ${isGuided ? '<button type="button" data-action="free-view">切换到节点画布</button>' : `<button type="button" data-action="arrange">整理节点位置</button>
+            <button type="button" data-action="guided-view" ${!flow?"disabled":""}>切换到搭配视图</button>`}
+        </div></details>
+      </div></div>
       ${current.error?`<div class="pc-error" role="alert">${esc(current.error)}${current.conflict?'。可另存副本保留本地改动。':""}</div>`:""}
-      <div class="pc-viewbar"><div role="group" aria-label="画布操作视图"><button type="button" data-action="guided-view" aria-pressed="${isGuided}" ${!flow?"disabled":""}>搭配视图</button><button type="button" data-action="free-view" aria-pressed="${!isGuided}">节点画布</button></div><p>${isGuided?"添加候选，选择搭配方式，再预览要生成的图片。":flow?"拖动标题移动节点。":"此画布包含独立连线或多级搭配，已保留原结构。"}</p></div>
       ${isGuided?'<nav class="pc-step-nav" aria-label="跳转画布步骤"><button type="button" data-action="step" data-step="parameters">1 准备参数</button><button type="button" data-action="step" data-step="matching">2 搭配方式</button><button type="button" data-action="step" data-step="checkout">3 预览出图</button></nav>':""}
       ${current.removal?'<div class="pc-undo" role="status">已移除，尚可撤销 <button type="button" data-action="undo-remove">撤销移除</button></div>':""}
-      ${isGuided?guidedHtml(flow):`<div class="pc-toolbar"><button type="button" data-action="add-node-menu" aria-haspopup="dialog">＋ 添加节点</button><button type="button" data-action="arrange">整理位置</button><button type="button" class="pc-primary" data-action="preview">预览组合与费用</button><p data-wire-hint aria-live="polite"></p></div>
-      <div class="pc-layout"><div class="pc-scroll" tabindex="0" aria-label="参数节点画布"><div class="pc-world" style="width:${Math.max(1050,...doc.graph.nodes.map(n=>(Number(n.x)||0)+320))}px;height:${Math.max(760,...doc.graph.nodes.map(n=>(Number(n.y)||0)+500))}px"><svg class="pc-edges" aria-hidden="true"></svg>${doc.graph.nodes.map((node,index)=>nodeHtml(node,index)).join("")}</div></div><aside class="pc-results" aria-label="组合预览和批次结果"></aside></div>
-      `}`;
+      <div class="pc-workspace">
+        ${isGuided ? guidedHtml(flow) : `<div class="pc-scroll" tabindex="0" aria-label="参数节点画布" aria-describedby="pc-wire-hint"><div class="pc-world" style="width:${Math.max(1050,...doc.graph.nodes.map(n=>(Number(n.x)||0)+320))}px;height:${Math.max(760,...doc.graph.nodes.map(n=>(Number(n.y)||0)+500))}px"><svg class="pc-edges" aria-hidden="true"></svg>${doc.graph.nodes.map((node,index)=>nodeHtml(node,index)).join("")}</div></div>
+          <p id="pc-wire-hint" data-wire-hint aria-live="polite"></p>`}
+        <aside id="pc-drawer" class="pc-drawer" hidden><div class="pc-drawer-header"><h2></h2><button type="button" data-action="close-drawer" aria-label="收起面板">×</button></div><div class="pc-drawer-body"></div></aside>
+      </div>`;
+
     const canvas=root.querySelector(".pc-scroll");
     if(canvas && oldCanvas) {canvas.scrollLeft=oldCanvas.scrollLeft;canvas.scrollTop=oldCanvas.scrollTop;}
     status();wireHint();drawEdges();
@@ -635,7 +759,7 @@
       <aside class="pc-guide-sidebar"><section class="pc-matching" aria-label="选择搭配方式"><div class="pc-step-title"><span>2</span><div><h2>选择搭配方式</h2><p>这些参数怎么一起用？</p></div></div>
         <div class="pc-match-options">${[["cartesian","全部互相搭配","2 个主题 × 3 种画风 → 6 组","每个主题都试一遍每种画风。"],["zip","按顺序一一搭配","主题 1 + 画风 1，主题 2 + 画风 2","只有一个候选的参数，每组都会使用。"]].map(([mode,title,example,description])=>`<button type="button" data-action="matching" data-mode="${mode}" aria-pressed="${(flow.group.mode||"cartesian")===mode}"><strong>${title}</strong><span>${example}</span><small>${description}</small></button>`).join("")}</div>
         <label class="pc-repeat-label">每组生成<input type="number" min="1" max="200" aria-label="每组生成张数" data-node="${esc(flow.output.id)}" data-property="repeat" value="${flow.output.repeat??1}">张</label>
-      </section><section class="pc-checkout" aria-label="预览与出图"><div class="pc-step-title"><span>3</span><div><h2>预览与出图</h2><p>先核对张数与费用，再开始。</p></div></div><div data-live-summary aria-live="polite"></div><button type="button" class="pc-primary pc-preview-button" data-action="preview">预览组合与费用</button><div class="pc-results" aria-label="组合预览和批次结果"></div></section></aside></div>`;
+      </section><section class="pc-checkout" aria-label="预览与出图"><div class="pc-step-title"><span>3</span><div><h2>预览与出图</h2><p>先核对张数与费用，再开始。</p></div></div><div data-live-summary aria-live="polite"></div><button type="button" class="pc-primary pc-preview-button" data-action="preview">预览出图</button><div class="pc-output-results" data-output-results data-output-node="${esc(flow.output.id)}"></div></section></aside></div>`;
   }
   function valueChanged(target) {
     const node=current.doc.graph.nodes.find(n=>n.id===target.dataset.node);
@@ -656,18 +780,74 @@
     const fields=card.querySelectorAll('textarea,input,select,button[data-action="resource"]');
     (last?fields[fields.length-1]:fields[0])?.focus();
   }
+  function showPanel(panel, id = null, focus = true) {
+    activePanel = panel;
+    outputPanelId = id;
+    renderPanels();
+    if (panel) root.querySelector(".pc-document-menu")?.removeAttribute("open");
+    if (focus && panel) root.querySelector(".pc-drawer:not([hidden]) [data-action='close-drawer']")?.focus({preventScroll:true});
+  }
+
+  function focusRunOutput() {
+    const button = root.querySelector('[data-action="open-output"]');
+    if (!button) return;
+    showPanel(null);
+    button.scrollIntoView({block:"nearest",inline:"nearest"});
+    button.focus({preventScroll:true});
+  }
+
+  function beginPan(event, viewport) {
+    const pointerId = event.pointerId;
+    const {clientX, clientY} = event;
+    const {scrollLeft, scrollTop} = viewport;
+    const controller = new AbortController();
+    const listener = {signal:controller.signal};
+    viewport.setPointerCapture(pointerId);
+    viewport.classList.add("is-panning");
+    cancelPointer = () => {
+      controller.abort();
+      if (viewport.hasPointerCapture(pointerId)) viewport.releasePointerCapture(pointerId);
+      viewport.classList.remove("is-panning");
+      cancelPointer = null;
+    };
+    viewport.addEventListener("pointermove", next => {
+      if (next.pointerId !== pointerId) return;
+      viewport.scrollLeft = scrollLeft + clientX - next.clientX;
+      viewport.scrollTop = scrollTop + clientY - next.clientY;
+    }, listener);
+    for (const name of ["pointerup","pointercancel","lostpointercapture"]) {
+      viewport.addEventListener(name, next => {
+        if (next.pointerId === pointerId) cancelPointer?.();
+      }, listener);
+    }
+    event.preventDefault();
+  }
   function bind() {
     root.oninput=event=>{if(event.target.matches("input:not([type=checkbox]),textarea")) valueChanged(event.target);};
     root.onchange=event=>{
       const t=event.target;
-      if(t.dataset.select!=null) {const n=Number(t.dataset.select);t.checked?current.selected.add(n):current.selected.delete(n);current.confirmation=null;renderPanel();return;}
+      if(t.dataset.select!=null) {const n=Number(t.dataset.select);t.checked?current.selected.add(n):current.selected.delete(n);current.confirmation=null;renderPanels();return;}
       if(t.dataset.action==="choose-canvas"&&t.value) {busy(()=>current.open(t.value));return;}
-      if(t.dataset.action==="choose-run"&&t.value) {busy(()=>current.watch(t.value));return;}
       if(t.matches("select[data-node]")) valueChanged(t);
     };
     root.onclick=event=>{
       const button=event.target.closest("button[data-action]");if(!button) return;
       const action=button.dataset.action,node=current.doc.graph.nodes.find(n=>n.id===button.dataset.node),index=Number(button.dataset.value);
+      if(action==="toggle-history") {showPanel(activePanel==="history"?null:"history",null,false);return;}
+      if(action==="close-drawer") {
+        const trigger = activePanel==="history" ? root.querySelector('[data-action="toggle-history"]')
+          : activePanel==="output" ? [...root.querySelectorAll('[data-action="open-output"]')].find(element=>element.dataset.node===outputPanelId)
+          : root.querySelector('[data-action="preview"]');
+        showPanel(null);trigger?.focus({preventScroll:true});return;
+      }
+      if(action==="choose-run") {void busy(()=>current.watch(button.dataset.run));return;}
+      if(action==="focus-run-output") {focusRunOutput();return;}
+      if(action==="open-output"||action==="show-detached-output") {
+        const id=button.dataset.node||null;
+        showPanel(activePanel==="output"&&outputPanelId===id?null:"output",id);
+        return;
+      }
+      if(action==="open-result-image") {options.openImage?.(button.dataset.url,button.dataset.title);return;}
       if(action==="guided-view"||action==="free-view") {current.view=action==="free-view"?"free":"guided";current.persist();render();return;}
       if(action==="port") {
         if(suppressPortClick) {suppressPortClick=false;return;}
@@ -710,15 +890,21 @@
       if(action==="more-canvases") return void busy(()=>current.loadMoreCanvases());
       if(action==="more-runs") return void busy(()=>current.loadMoreRuns());
       if(action==="new"||action==="copy") return void busy(()=>current.create(action==="copy"));
-      if(action==="preview") return void busy(()=>current.expand());
+      if(action==="preview") {
+        showPanel("preview",null,false);
+        if(current.submission||current.preview) {renderPanels();return;}
+        return void busy(async()=>{await current.expand();if(activePanel==="preview") showPanel("preview");});
+      }
+      if(action==="recheck-preview") {return void busy(()=>current.expand());}
       if(action==="refresh") return void busy(()=>current.refreshRun());
       if(action==="stop") return void busy(()=>current.stopPending());
       if(action==="retry") {if(global.confirm(`重试未成功项，额外预计 ${current.run.retryQuote.total} 积分；已成功项不重复生成。是否继续？`)) busy(()=>current.retry());return;}
-      if(action==="submit") {if(current.submission) busy(()=>current.submit());else {current.confirmation="submit";renderPanel();}return;}
-      if(action==="cancel-confirm") {current.confirmation=null;renderPanel();return;}
+      if(action==="submit" && !current.submitting && current.submission) {submitFromPreview();return;}
+      if(action==="submit") {current.confirmation="submit";renderPanels();root.querySelector('[data-action="confirm-submit"]')?.focus();return;}
+      if(action==="cancel-confirm") {current.confirmation=null;renderPanels();root.querySelector('[data-action="submit"]')?.focus();return;}
       if(action==="confirm-submit") {
         if(current.submitting||current.confirmation!=="submit"||!current.preview) return;
-        current.submitting=true;renderPanel();busy(async()=>{try {await current.submit();} finally {current.submitting=false;current.confirmation=null;renderPanel();}});return;
+        submitFromPreview();return;
       }
       if(action==="export") {const url=URL.createObjectURL(new Blob([JSON.stringify(current.doc,null,2)],{type:"application/json"}));const a=document.createElement("a");a.href=url;a.download="参数画布.json";a.click();URL.revokeObjectURL(url);return;}
       if(action==="refs") {options.pickReferences?.({currentRefs:node.values[index],onConfirm:items=>{node.values[index]=items.map(item=>item.image).filter(Boolean);current.edit(true);}});return;}
@@ -750,9 +936,15 @@
       openNodeMenu(event.clientX,event.clientY);
     };
     root.onkeydown=event=>{
-      if(event.key==="Escape" && (selectedPort||cancelPointer)) {cancelPointer?.();clearWire();}
+      if(event.key==="Escape") {
+        if(selectedPort||cancelPointer) {cancelPointer?.();clearWire();}
+        else if(activePanel) root.querySelector('[data-action="close-drawer"]')?.click();
+      }
     };
     root.onpointerdown=event=>{
+      if (!event.target.closest(".pc-document-menu")) root.querySelector(".pc-document-menu")?.removeAttribute("open");
+      const viewport=event.target.closest(".pc-scroll");
+      if(viewport && (event.button===1 || (event.button===0 && spaceHeld))) {beginPan(event,viewport);return;}
       if(event.button!==0 || !event.isPrimary) return;
       suppressPortClick=false;
       const port=event.target.closest("[data-port]");
@@ -792,21 +984,65 @@
       event.preventDefault();
     };
   }
+  function submitFromPreview() {
+    current.submitting=true;
+    renderPanels();
+    void busy(async()=>{
+      const store = current;
+      try {
+        await store.submit();
+        if (current === store && activePanel === "preview" && !store.submission) {
+          showPanel(null);
+          focusRunOutput();
+        }
+      } finally {
+        store.submitting=false;
+        store.confirmation=null;
+        if (current === store) status();
+      }
+    });
+  }
   function mount(element,configuration) {
     if(root!==element || (current && options.scope!==configuration.scope)) dismissInteractions();
     if(current && (current.closed||options.scope!==configuration.scope)) {current.close();current=null;}
     const changedRoot=root!==element;root=element;options=configuration;
-    if(!current) {current=new CanvasStore({...configuration,storage:global.localStorage});current.onchange=reason=>reason==="status"?status():reason==="panel"?renderPanel():render();render();bind();void current.load();}
+    if(!current) {current=new CanvasStore({...configuration,storage:global.localStorage});current.onchange=reason=>reason==="status"?status():reason==="panel"?renderPanels():render();render();bind();void current.load();}
     else if(changedRoot) {render();bind();}
   }
   function dismissInteractions() {
     closeNodeMenu();
     cancelPointer?.();
     clearWire();
+    releaseSpace();
+    if (activePanel) showPanel(null);
   }
+  function releaseSpace() {
+    spaceHeld=false;
+    root?.querySelector(".pc-scroll")?.classList.remove("can-pan");
+  }
+  global.addEventListener?.("keydown", event=>{
+    if (event.code !== "Space" || event.defaultPrevented || !root?.offsetWidth ||
+        event.target.closest?.("input,textarea,select,button,summary,a,[contenteditable]")) return;
+    if (event.target !== document.body && !event.target.closest?.(".pc-scroll")) return;
+    const viewport = root.querySelector(".pc-scroll");
+    if (!viewport) return;
+    spaceHeld=true;
+    viewport.classList.add("can-pan");
+    event.preventDefault();
+  });
+  global.addEventListener?.("keyup", event=>{if(event.code==="Space") releaseSpace();});
+  global.addEventListener?.("blur", releaseSpace);
   global.addEventListener?.("resize", () => {
     if (root?.offsetWidth && current && !cancelPointer) drawEdges();
   });
-  global.HandrawParameterCanvas={mount,dismissInteractions,saveCurrent:()=>current?.save(),openRun:id=>current?.openRun(id),importDocument:document=>current?.importDocument(document),reset:()=>{dismissInteractions();current?.close();current=null;root=null;}};
-  if(global.__HANDRAW_TESTING__) global.HandrawParameterCanvas.testing={CanvasStore,blank,selectedQuote,arrangeNodes,pickResourceCandidate,simpleFlow,combinationSummary,addGuidedParameter,connectionError,addCanvasNode};
+  global.HandrawParameterCanvas={mount,dismissInteractions,saveCurrent:()=>current?.save(),openRun:async id=>{
+    const store=current;
+    if(!store) return;
+    await store.openRun(id);
+    if(current===store && store.run?.id===id) {
+      if(root.querySelector('[data-action="open-output"]')) focusRunOutput();
+      else showPanel("output");
+    }
+  },importDocument:document=>current?.importDocument(document),reset:()=>{dismissInteractions();current?.close();current=null;root=null;panelCanvasId=null;}};
+  if(global.__HANDRAW_TESTING__) global.HandrawParameterCanvas.testing={CanvasStore,blank,selectedQuote,arrangeNodes,pickResourceCandidate,simpleFlow,combinationSummary,addGuidedParameter,connectionError,addCanvasNode,outputItems};
 })(window);

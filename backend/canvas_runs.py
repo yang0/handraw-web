@@ -91,6 +91,14 @@ def get_canvas_run(db, user, rid):
         ).fetchone()[0]
     )
     failed = sum(r["status"] in ("failed", "cancelled") for r in rows)
+    # Task ordinals are compacted after selecting combinations. The frozen
+    # items keep that order and retain the original output node IDs.
+    plan_items = run["plan_json"].get("items", [])
+    output_nodes = {
+        index: item.get("outputNodeId")
+        for index, item in enumerate(plan_items)
+        if isinstance(item, dict)
+    }
     return {
         "ok": True,
         "run": {
@@ -109,6 +117,7 @@ def get_canvas_run(db, user, rid):
                     "ordinal": r["ordinal"],
                     "status": r["status"],
                     "errorCode": r["error_code"],
+                    "outputNodeId": output_nodes.get(r["ordinal"]),
                     "spec": r["spec_json"],
                     "images": by_item.get(r["id"], []),
                 }

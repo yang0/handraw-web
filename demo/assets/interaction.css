@@ -1003,6 +1003,10 @@ summary:focus-visible {
 .ic-art-ratio-field button { padding: 5px 7px; min-width: 30px; }
 .ic-art-ratio-options { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 8px; }
 .ic-art-ratio-options .btn { justify-content: center; padding: 9px 4px; }
+.ic-article-editor-actions { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+#editor-btn-save { white-space: nowrap; }
+#ic-entry-bar.is-canvas-mode { padding-block: 4px; gap: 6px; }
+#ic-entry-bar.is-canvas-mode .btn { min-height: 30px; padding-block: 4px; }
 .ic-art-drop-preview { display: none; }
 #art-editor-flow.is-dragging .ic-art-seg-ta,
 #art-editor-flow.is-dragging .ic-art-gap,

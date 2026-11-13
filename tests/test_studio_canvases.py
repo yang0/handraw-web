@@ -3,6 +3,7 @@
 import copy
 import unittest
 
+from backend.canvas_runs import get_canvas_run
 from backend.services import ServiceError, register_user
 from backend.studio_canvases import (
     compile_canvas,
@@ -203,6 +204,32 @@ class CanvasPersistenceTests(unittest.TestCase):
             .execute("SELECT COUNT(*) FROM studio_generations")
             .fetchone()[0],
             0,
+        )
+
+    def test_run_reports_frozen_output_nodes_for_nonconsecutive_selection(self):
+        document = graph(("prompt", ["A", "B"]))
+        document["nodes"].append({"id": "second", "type": "output"})
+        document["edges"].append({"from": "prompt", "to": "second"})
+        self.save(document)
+        preview = preview_canvas(self.db, self.user, "canvas")
+        result = submit_canvas(
+            self.db,
+            self.user,
+            "canvas",
+            {
+                "requestId": "selected_outputs",
+                "planHash": preview["planHash"],
+                "ordinals": [1, 3],
+            },
+        )
+        self.save(graph(("prompt", ["Changed"])), baseWriteSeq=1)
+        run = get_canvas_run(self.db, self.user, result["runId"])["run"]
+        self.assertEqual(
+            [
+                (item["ordinal"], item["outputNodeId"], item["spec"]["prompt"])
+                for item in run["items"]
+            ],
+            [(0, "out", "B"), (1, "second", "B")],
         )
 
     def test_changed_preview_rejects_before_tasks_or_billing(self):
