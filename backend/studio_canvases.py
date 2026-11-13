@@ -25,6 +25,7 @@ _PARAMETERS = {
 }
 _RATIOS = {"1:1", "3:4", "4:3", "9:16", "16:9", "2.35:1", "3:2", "2:3"}
 MAX_OUTPUTS = 200
+_NODE_TYPES = {"parameter", "parameters", "combine", "output"}
 _DEFAULTS = {
     "style1": "",
     "style2": "",
@@ -71,11 +72,7 @@ def validate_canvas_document(graph):
         raise _error("画布大小超限")
     ids = set()
     for node in graph["nodes"]:
-        if not isinstance(node, dict) or node.get("type") not in (
-            "parameter",
-            "combine",
-            "output",
-        ):
+        if not isinstance(node, dict) or node.get("type") not in _NODE_TYPES:
             raise _error("参数画布只支持参数、组合和输出节点")
         key = node.get("id")
         if not isinstance(key, str) or not key or len(key) > 160 or key in ids:
@@ -85,7 +82,7 @@ def validate_canvas_document(graph):
             if axis in node and (
                 type(node[axis]) not in (int, float)
                 or not math.isfinite(node[axis])
-                or not 0 <= node[axis] <= 50000
+                or not -50000 <= node[axis] <= 50000
             ):
                 raise _error("画布节点位置无效")
     for edge in graph["edges"]:
@@ -111,7 +108,7 @@ def compile_canvas(graph):
             or node["id"] in nodes
         ):
             raise _error("节点编号缺失或重复")
-        if node.get("type") not in ("parameter", "combine", "output"):
+        if node.get("type") not in _NODE_TYPES:
             raise _error("参数画布只支持参数、组合和输出节点")
         nodes[node["id"]] = node
     incoming = {key: [] for key in nodes}
@@ -141,6 +138,88 @@ def compile_canvas(graph):
                 result[key] = value
         return result
 
+    def candidates(parameter, values):
+        if (
+            not isinstance(parameter, str)
+            or parameter not in _PARAMETERS
+            or not isinstance(values, list)
+            or not 1 <= len(values) <= MAX_OUTPUTS
+        ):
+            raise _error("参数名称或候选列表无效")
+        rows = []
+        for value in values:
+            if parameter == "style1" and isinstance(value, dict):
+                if (
+                    set(value) - {"style1", "style2"}
+                    or not value.get("style1")
+                    or not all(isinstance(v, str) for v in value.values())
+                ):
+                    raise _error("融合画风需要主画风和可选副画风")
+                row = dict(value)
+            else:
+                row = {parameter: value}
+            if parameter == "refImages" and (
+                not isinstance(value, list)
+                or len(value) > 6
+                or not all(isinstance(v, str) for v in value)
+            ):
+                raise _error("每个参考图候选必须是最多六张图片组成的一组")
+            if parameter in ("colors", "tones", "moods") and (
+                not isinstance(value, list)
+                or not all(isinstance(v, str) for v in value)
+            ):
+                raise _error("配色、色调和氛围候选必须为字符串数组")
+            if parameter in ("colors", "tones", "moods") and (
+                len(value) > 10 or any(len(v) > 128 for v in value)
+            ):
+                raise _error("单套配色、色调或氛围方案过大")
+            if parameter not in (
+                "refImages",
+                "colors",
+                "tones",
+                "moods",
+                "style1",
+            ) and not isinstance(value, str):
+                raise _error("参数候选必须为字符串")
+            if parameter == "style1" and not isinstance(value, (str, dict)):
+                raise _error("画风候选格式无效")
+            if parameter == "prompt" and (not value.strip() or len(value) > 4000):
+                raise _error("主题不能为空且不能超过 4000 字符")
+            if parameter == "ratio" and value not in _RATIOS:
+                raise _error("图片比例无效")
+            if parameter == "mode" and value not in ("graphic-text", "image-only"):
+                raise _error("请选择图文或纯图模式")
+            if parameter == "whitespace" and len(value) > 256:
+                raise _error("留白说明过长")
+            rows.append(row)
+        return rows
+
+    def combine(sources, mode, repeat):
+        if mode not in ("cartesian", "zip"):
+            raise _error("请选择全组合或按行搭配")
+        lengths = [len(source) for source in sources]
+        if mode == "zip":
+            count = max(lengths)
+            if any(size not in (1, count) for size in lengths):
+                raise _error("按行搭配的长度必须相同，固定单值可复用")
+            groups = (
+                [source[0 if len(source) == 1 else i] for source in sources]
+                for i in range(count)
+            )
+        else:
+            count = 1
+            for size in lengths:
+                count *= size
+            groups = itertools.product(*sources)
+        if type(repeat) is not int or repeat < 1 or repeat > MAX_OUTPUTS:
+            raise _error("重复张数必须为 1–200 的整数")
+        if count * repeat > MAX_OUTPUTS:
+            raise _error("组合超过 200 张，请拆分批次", code="canvas_output_limit")
+        rows = [
+            copy.deepcopy(merge(group)) for group in groups for _ in range(repeat)
+        ]
+        return rows
+
     def expand(key):
         if key in active:
             raise _error("画布存在环路")
@@ -149,92 +228,37 @@ def compile_canvas(graph):
         active.add(key)
         node = nodes[key]
         kind = node["type"]
-        if kind == "parameter":
+        if kind in ("parameter", "parameters"):
             if incoming[key]:
                 raise _error("参数节点不能接收输入")
-            parameter = node.get("parameter")
-            values = node.get("values")
-            if (
-                parameter not in _PARAMETERS
-                or not isinstance(values, list)
-                or not 1 <= len(values) <= MAX_OUTPUTS
-            ):
-                raise _error("参数名称或候选列表无效")
-            rows = []
-            for value in values:
-                if parameter == "style1" and isinstance(value, dict):
-                    if (
-                        set(value) - {"style1", "style2"}
-                        or not value.get("style1")
-                        or not all(isinstance(v, str) for v in value.values())
-                    ):
-                        raise _error("融合画风需要主画风和可选副画风")
-                    row = dict(value)
-                else:
-                    row = {parameter: value}
-                if parameter == "refImages" and (
-                    not isinstance(value, list)
-                    or len(value) > 6
-                    or not all(isinstance(v, str) for v in value)
+            if kind == "parameter":
+                rows = candidates(node.get("parameter"), node.get("values"))
+            else:
+                fields = node.get("fields")
+                if not isinstance(fields, dict) or not fields:
+                    raise _error("出图参数至少需要一个字段")
+                # JSONB can reorder keys. Keep the preview order stable after a save.
+                order = node.get("fieldOrder")
+                if order is None:
+                    order = sorted(fields, key=lambda field: (field != "prompt", field))
+                elif (
+                    not isinstance(order, list)
+                    or len(order) != len(fields)
+                    or not all(isinstance(field, str) for field in order)
+                    or set(order) != set(fields)
                 ):
-                    raise _error("每个参考图候选必须是最多六张图片组成的一组")
-                if parameter in ("colors", "tones", "moods") and (
-                    not isinstance(value, list)
-                    or not all(isinstance(v, str) for v in value)
-                ):
-                    raise _error("配色、色调和氛围候选必须为字符串数组")
-                if parameter in ("colors", "tones", "moods") and (
-                    len(value) > 10 or any(len(v) > 128 for v in value)
-                ):
-                    raise _error("单套配色、色调或氛围方案过大")
-                if parameter not in (
-                    "refImages",
-                    "colors",
-                    "tones",
-                    "moods",
-                    "style1",
-                ) and not isinstance(value, str):
-                    raise _error("参数候选必须为字符串")
-                if parameter == "style1" and not isinstance(value, (str, dict)):
-                    raise _error("画风候选格式无效")
-                if parameter == "prompt" and (not value.strip() or len(value) > 4000):
-                    raise _error("主题不能为空且不能超过 4000 字符")
-                if parameter == "ratio" and value not in _RATIOS:
-                    raise _error("图片比例无效")
-                if parameter == "mode" and value not in ("graphic-text", "image-only"):
-                    raise _error("请选择图文或纯图模式")
-                if parameter == "whitespace" and len(value) > 256:
-                    raise _error("留白说明过长")
-                rows.append(row)
+                    raise _error("出图参数顺序无效")
+                sources = [candidates(field, fields[field]) for field in order]
+                rows = combine(sources, node.get("mode", "cartesian"), 1)
         else:
             sources = [expand(source) for source in incoming[key]]
             if not sources:
                 raise _error("组合或输出节点尚未连接参数")
-            mode = node.get("mode", "cartesian")
-            if mode not in ("cartesian", "zip"):
-                raise _error("请选择全组合或按行搭配")
-            lengths = [len(source) for source in sources]
-            if mode == "zip":
-                count = max(lengths)
-                if any(size not in (1, count) for size in lengths):
-                    raise _error("按行搭配的长度必须相同，固定单值可复用")
-                groups = (
-                    [source[0 if len(source) == 1 else i] for source in sources]
-                    for i in range(count)
-                )
-            else:
-                count = 1
-                for size in lengths:
-                    count *= size
-                groups = itertools.product(*sources)
-            repeat = node.get("repeat", 1) if kind == "output" else 1
-            if type(repeat) is not int or repeat < 1 or repeat > MAX_OUTPUTS:
-                raise _error("重复张数必须为 1–200 的整数")
-            if count * repeat > MAX_OUTPUTS:
-                raise _error("组合超过 200 张，请拆分批次", code="canvas_output_limit")
-            rows = [
-                copy.deepcopy(merge(group)) for group in groups for _ in range(repeat)
-            ]
+            rows = combine(
+                sources,
+                node.get("mode", "cartesian"),
+                node.get("repeat", 1) if kind == "output" else 1,
+            )
         active.remove(key)
         cache[key] = rows
         return rows

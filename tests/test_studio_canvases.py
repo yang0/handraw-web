@@ -29,6 +29,40 @@ def graph(*parameters, mode="cartesian", repeat=1):
 
 
 class CanvasCompilerTests(unittest.TestCase):
+    def test_grouped_parameters_keep_zip_and_cross_semantics(self):
+        fields = {
+            "prompt": ["A", "B"],
+            "style1": [{"style1": "FA-001", "style2": "FA-002"}, "FA-003"],
+            "ratio": ["16:9"],
+            "refImages": [["/images/a.webp", "/images/b.webp"]],
+        }
+        document = graph(*fields.items(), repeat=2)
+        grouped = {
+            "nodes": [
+                {
+                    "id": "inputs",
+                    "type": "parameters",
+                    "fields": fields,
+                    "fieldOrder": list(fields),
+                    "x": -1300,
+                    "y": -40,
+                },
+                {"id": "out", "type": "output", "repeat": 2},
+            ],
+            "edges": [{"from": "inputs", "to": "out"}],
+        }
+        self.assertEqual(compile_canvas(grouped), compile_canvas(document))
+        grouped["nodes"][0]["x"] = -50001
+        with self.assertRaises(ServiceError):
+            compile_canvas(grouped)
+        grouped["nodes"][0]["x"] = -1300
+        grouped["nodes"][0]["mode"] = "zip"
+        document["nodes"][-1]["mode"] = "zip"
+        self.assertEqual(compile_canvas(grouped), compile_canvas(document))
+        grouped["nodes"][0]["fieldOrder"] = ["prompt"] * len(fields)
+        with self.assertRaises(ServiceError):
+            compile_canvas(grouped)
+
     def test_cartesian_repeat_and_stable_input_order(self):
         document = graph(
             ("prompt", ["A", "B", "C"]), ("ratio", ["3:4", "16:9"]), repeat=2

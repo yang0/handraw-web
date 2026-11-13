@@ -8,13 +8,26 @@
   const esc=value=>String(value??"").replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
   const resourceCode=(value,field)=>typeof value==="object"&&value!==null?String(value[field]||""):field==="style2"?"":String(value||"");
   const runDate=value=>Number.isNaN(new Date(value).getTime())?String(value||"已保存批次"):new Date(value).toLocaleString("zh-CN",{month:"2-digit",day:"2-digit",hour:"2-digit",minute:"2-digit"});
-  const nodeName = node => node.type === "parameter" ? labels[node.parameter] : node.type === "combine" ? "参数组合" : "批量出图";
+  const isParameter = node => ["parameter","parameters"].includes(node.type);
+  const nodeName = node => node.type === "parameters" ? "出图参数" : node.type === "parameter" ? labels[node.parameter] : node.type === "combine" ? "参数组合" : "批量出图";
+  const defaultFields = () => ({prompt:[""],style1:["FA-001"],layout:[""],ratio:["3:4"]});
+  const coordinate = value => Math.max(-50000, Math.min(50000, value));
+  const panMargin = 320;
+  const nodeMenuEntries = [
+    {type:"parameters",name:"出图参数",group:"生成流程",detail:"在一张卡里编辑主题、画风、图型和比例",out:true},
+    {type:"output",name:"批量出图",group:"生成流程",detail:"接收参数，设置每组出几张",in:true},
+    {type:"combine",name:"参数组合",group:"高级节点",detail:"把来自多条连线的参数合成一组组出图方案",in:true,out:true},
+    ...Object.entries(labels).filter(([field])=>field!=="style2")
+      .map(([field,name])=>({type:"parameter",field,name,group:"单项参数",out:true}))
+  ];
+  const fieldList = node => Object.keys(labels).filter(field => Object.hasOwn(node.fields, field))
+    .map(field => ({id:node.id,parameter:field,values:node.fields[field]}));
 
   function connectionError(graph, from, to) {
     const source = graph.nodes.find(node => node.id === from);
     const target = graph.nodes.find(node => node.id === to);
     if (!source || !target || source === target) return "请连接两个不同节点";
-    if (source.type === "output" || target.type === "parameter") return "请从右侧输出连接到左侧输入";
+    if (source.type === "output" || isParameter(target)) return "请从右侧输出连接到左侧输入";
     if (graph.edges.some(edge => edge.from === from && edge.to === to)) return "这两个锚点已经连接";
     if (graph.edges.length >= 400) return "画布最多可添加 400 条连线";
     const pending = [to];
@@ -33,14 +46,18 @@
     if (graph.nodes.length >= 200) return null;
     const node = {
       id: uid("node"), type,
-      x: Math.max(16, Math.min(50000, position.x)),
-      y: Math.max(16, Math.min(50000, position.y))
+      x: coordinate(position.x),
+      y: coordinate(position.y)
     };
     if (type === "parameter") {
       node.parameter = field;
       node.values = [initialCandidate(field)];
     } else {
       node.mode = "cartesian";
+      if (type === "parameters") {
+        node.fields = defaultFields();
+        node.fieldOrder = Object.keys(node.fields);
+      }
       if (type === "output") node.repeat = 1;
     }
     graph.nodes.push(node);
@@ -53,12 +70,16 @@
     if (field === "mode") return "graphic-text";
     return "";
   }
-  function pickResourceCandidate(store,node,index,field,openPicker) {
-    const doc=store.doc,values=node.values,previous=values[index];
+  function parameterField(node, field) {
+    if (node?.type !== "parameters") return node;
+    return {id:node.id, parameter:field, values:node.fields[field]};
+  }
+  function pickResourceCandidate(store,node,index,field,openPicker,parameter=node.parameter) {
+    const doc=store.doc,values=parameterField(node,parameter).values,previous=values[index];
     openPicker({field,current:resourceCode(previous,field),onPick:code=>{
-      if(store.closed||store.doc!==doc||!doc.graph.nodes.includes(node)||node.values!==values||values[index]!==previous) return;
+      if(store.closed||store.doc!==doc||!doc.graph.nodes.includes(node)||parameterField(node,parameter).values!==values||values[index]!==previous) return;
       code=String(code||"").trim();
-      if(node.parameter==="style1") {
+      if(parameter==="style1") {
         const pair={style1:resourceCode(previous,"style1"),style2:resourceCode(previous,"style2")};
         pair[field]=code;
         values[index]=!pair.style1?"":pair.style2?pair:pair.style1;
@@ -68,11 +89,9 @@
   }
   function blank() {
     return {id:uid("canvas"),name:"参数组合画布",writeSeq:0,graph:{format:1,nodes:[
-      {id:"theme",type:"parameter",parameter:"prompt",values:[""],x:32,y:32},
-      {id:"style",type:"parameter",parameter:"style1",values:["FA-001"],x:32,y:340},
-      {id:"combine",type:"combine",mode:"cartesian",x:370,y:135},
-      {id:"output",type:"output",mode:"cartesian",repeat:1,x:700,y:135}
-    ],edges:[{from:"theme",to:"combine"},{from:"style",to:"combine"},{from:"combine",to:"output"}]}};
+      {id:"params",type:"parameters",fields:defaultFields(),fieldOrder:["prompt","style1","layout","ratio"],mode:"cartesian",x:32,y:32},
+      {id:"output",type:"output",mode:"cartesian",repeat:1,x:485,y:185}
+    ],edges:[{from:"params",to:"output"}]}};
   }
   function arrangeNodes(nodes,dimensions) {
     let y=32;
@@ -86,12 +105,35 @@
     }
   }
   function simpleFlow(graph) {
+    if(graph.nodes.length===2 && graph.edges.length===1) {
+      const group=graph.nodes.find(node=>node.type==="parameters"),output=graph.nodes.find(node=>node.type==="output");
+      if(group && output && graph.edges[0].from===group.id && graph.edges[0].to===output.id)
+        return {parameters:fieldList(group),group,output};
+    }
     const parameters=graph.nodes.filter(n=>n.type==="parameter"),groups=graph.nodes.filter(n=>n.type==="combine"),outputs=graph.nodes.filter(n=>n.type==="output");
-    if(groups.length!==1||outputs.length!==1||new Set(parameters.map(n=>n.parameter)).size!==parameters.length) return null;
+    if(groups.length!==1||outputs.length!==1||graph.nodes.length!==parameters.length+2||new Set(parameters.map(n=>n.parameter)).size!==parameters.length) return null;
     const group=groups[0],output=outputs[0],expected=new Set([...parameters.map(n=>n.id+"\u0000"+group.id),group.id+"\u0000"+output.id]);
     if(graph.edges.length!==expected.size||!graph.edges.every(e=>expected.has(e.from+"\u0000"+e.to))) return null;
     if(new Set(graph.edges.map(e=>e.from+"\u0000"+e.to)).size!==expected.size) return null;
     return {parameters,group,output};
+  }
+  function groupExistingParameters(graph, flow) {
+    if (!flow || flow.group.type !== "combine" || !flow.parameters.length) return false;
+    if (flow.parameters.some(node=>!Object.hasOwn(labels,node.parameter))) return false;
+    const {parameters,group,output}=flow;
+    const byId=new Map(parameters.map(node=>[node.id,node]));
+    const ordered=graph.edges.filter(edge=>edge.to===group.id).map(edge=>byId.get(edge.from));
+    const fields=Object.fromEntries(ordered.map(node=>[node.parameter,node.values]));
+    const node={...group,type:"parameters",fields,fieldOrder:ordered.map(node=>node.parameter),
+      x:Math.min(...parameters.map(node=>node.x??32)),y:Math.min(...parameters.map(node=>node.y??32))};
+    graph.nodes=[node,output];
+    graph.edges=[{from:node.id,to:output.id}];
+    return true;
+  }
+
+  function addParameterField(node,field) {
+    node.fields[field]=[initialCandidate(field)];
+    node.fieldOrder?.push(field);
   }
   function combinationSummary(graph) {
     const flow=simpleFlow(graph);
@@ -114,6 +156,11 @@
   function addGuidedParameter(store,field) {
     const flow=simpleFlow(store.doc.graph);if(!flow) return null;
     const existing=flow.parameters.find(n=>n.parameter===field);if(existing) return existing;
+    if(flow.group.type==="parameters") {
+      addParameterField(flow.group,field);
+      store.edit(true);
+      return {id:flow.group.id,parameter:field};
+    }
     const y = Math.max(32, ...store.doc.graph.nodes.map(n => Number(n.y) || 0)) + 600;
     const node = addCanvasNode(store.doc.graph, "parameter", field, { x: 32, y });
     if (node) {
@@ -341,6 +388,7 @@
   let activePanel = null;
   let outputPanelId = null;
   let panelCanvasId = null;
+  let nodeResizeObserver = null;
   let spaceHeld = false;
   let cancelPointer = null;
   let suppressPortClick = false;
@@ -356,6 +404,15 @@
       const info=combinationSummary(current.doc.graph);
       summary.innerHTML=info.problem?`<p class="pc-next-action">${esc(info.problem)}</p>`:`<div class="pc-total"><strong>${info.count}</strong><span>张图片</span></div><p class="pc-formula">${esc(info.formula)}</p>`;
     }
+    for (const element of root.querySelectorAll("[data-group-summary]")) {
+      const node=current.doc.graph.nodes.find(item=>item.id===element.dataset.groupSummary);
+      const counts=fieldList(node).map(field=>field.values.length);
+      const longest=Math.max(...counts);
+      if(counts.includes(0)) element.textContent="每个参数至少保留一个候选";
+      else if(node.fields.prompt?.some(value=>!String(value).trim())) element.textContent="填写主题后，点击顶部「预览出图」";
+      else if(node.mode==="zip" && counts.some(count=>count!==1 && count!==longest)) element.textContent="按顺序搭配时，多候选参数的数量要相同";
+      else element.textContent=`${node.mode==="zip"?longest:counts.reduce((a,b)=>a*b,1)} 组参数`;
+    }
     for(const button of root?.querySelectorAll('[data-action="preview"]')||[]) {
       const info=combinationSummary(current.doc.graph);
       button.disabled=Boolean(current.expanding||current.loading||current.submitting||(!current.submission&&info.flow&&info.problem));
@@ -370,9 +427,9 @@
     updateSummary();renderPanels();
   }
   function parameterValue(node,value,index) {
-    const id=esc(node.id),field=node.parameter,base=`data-node="${id}" data-value="${index}"`;
+    const id=esc(node.id),field=node.parameter,base=`data-node="${id}" data-parameter="${esc(field)}" data-value="${index}"`;
     if(field==="refImages") return `<button type="button" ${base} data-action="refs">选择一组参考图（${value.length}/6）</button><div class="pc-references">${value.map(url=>`<img src="${esc(url)}" alt="已选参考图" loading="lazy">`).join("")}</div>`;
-    if(field==="prompt") return `<textarea aria-label="主题候选 ${index+1}" ${base}>${esc(value)}</textarea>`;
+    if(field==="prompt") return `<textarea aria-label="主题候选 ${index+1}" placeholder="描述想画的内容，例如雨后森林中的小屋" ${base}>${esc(value)}</textarea>`;
     if(field==="ratio") return `<select aria-label="比例候选 ${index+1}" ${base}>${ratios.map(r=>`<option ${r===value?"selected":""}>${r}</option>`).join("")}</select>`;
     if(field==="mode") return `<select aria-label="创作模式候选 ${index+1}" ${base}><option value="graphic-text" ${value!=="image-only"?"selected":""}>图文</option><option value="image-only" ${value==="image-only"?"selected":""}>纯图</option></select>`;
     if(field==="style1") return resourceValue(node,value,index,"style1")+resourceValue(node,value,index,"style2");
@@ -384,27 +441,53 @@
     const resource=(options.resources?.(kind)||[]).find(item=>(item.id||item.code)===code);
     const label=field==="style1"?"主画风":field==="style2"?"融合副画风":"图型";
     const name=resource?.name_zh||resource?.name||resource?.title||(code?"资源信息暂不可用":field==="style2"?"可选，搭配双画风":"点击图片选择");
-    const image=resource?.image||"",base=`data-node="${esc(node.id)}" data-value="${index}" data-field="${field}"`;
+    const image=resource?.image||"",base=`data-node="${esc(node.id)}" data-parameter="${esc(node.parameter)}" data-value="${index}" data-field="${field}"`;
     const disabled=field==="style2"&&!resourceCode(value,"style1");
     return `<div class="pc-resource-control"><button type="button" class="pc-resource-picker ${code?"is-selected":""}" data-action="resource" ${base} aria-label="选择${label}候选 ${index+1}${code?`：${esc(code)} ${esc(name)}`:""}" ${disabled?"disabled":""}>
-      <span class="pc-resource-thumb">${image?`<img src="${esc(image)}" alt="${esc(code)} ${esc(name)}" loading="lazy">`:'<span aria-hidden="true">＋</span>'}</span>
+      <span class="pc-resource-thumb">${image?`<img src="${esc(image)}" alt="${esc(code)} ${esc(name)}"${node.grouped?"":" loading=\"lazy\""}>`:'<span aria-hidden="true">＋</span>'}</span>
       <span class="pc-resource-info"><small>${label}${code?` · ${esc(code)}`:""}</small><strong>${esc(name)}</strong><span>${disabled?"先选择主画风":code?"点击更换":"按编号、名称或图片挑选"}</span></span></button>
       ${code?`<div class="pc-resource-actions">${image?`<button type="button" data-action="zoom-resource" ${base} aria-label="放大${label}候选 ${index+1}">放大</button>`:""}<button type="button" data-action="clear-resource" ${base} aria-label="清空${label}候选 ${index+1}">清空</button></div>`:""}</div>`;
   }
+  function candidatesHtml(node) {
+    const field=node.parameter;
+    const label=labels[field];
+    const base=`data-node="${esc(node.id)}" data-parameter="${esc(field)}"`;
+    return node.values.map((value,i)=>`<div class="pc-candidate">
+      <div class="pc-candidate-heading"><span>${esc(label)} ${i+1}</span><button type="button" data-action="remove-value" ${base} data-value="${i}" aria-label="移除${esc(label)} ${i+1}">移除</button></div>
+      ${parameterValue(node,value,i)}</div>`).join("") +
+      `<button type="button" class="pc-add-candidate" data-action="add-value" ${base}>＋ 添加${esc(label)}候选</button>`;
+  }
+
+  let activeFields = new Map();
+  const touchNodes = new Set();
+  function parameterGroupHtml(node) {
+    const fields = fieldList(node);
+    const selected = fields.find(item=>item.parameter===activeFields.get(node.id)) || fields[0];
+    const nav = fields.map(item=>{
+      const field = item.parameter;
+      return `<button type="button" data-action="edit-field" data-node="${esc(node.id)}" data-parameter="${field}" aria-pressed="${field===selected?.parameter}">${labels[field]}${item.values.length > 1 ? ` <small>${item.values.length}</small>` : ""}</button>`;
+    }).join("");
+    const available = Object.keys(labels).filter(field=>field!=="style2" && !Object.hasOwn(node.fields,field));
+    const more = available.length ? `<details class="pc-field-menu"><summary>＋ 参数</summary><div>${available.map(field=>`<button type="button" data-action="add-field" data-node="${esc(node.id)}" data-parameter="${field}">${labels[field]}</button>`).join("")}</div></details>` : "";
+    return `<div class="pc-field-tabs" aria-label="要编辑的出图参数">${nav}${more}</div>
+      ${selected ? `<div class="pc-field-editor" data-field-editor="${selected.parameter}">${candidatesHtml({...selected,grouped:true})}
+        ${fields.length > 1 ? `<button type="button" class="pc-remove-field" data-action="remove-field" data-node="${esc(node.id)}" data-parameter="${selected.parameter}">移除此参数</button>` : ""}</div>` : ""}
+      <label>多个候选怎样组合<select data-node="${esc(node.id)}" data-property="mode"><option value="cartesian" ${node.mode!=="zip"?"selected":""}>全部互相搭配</option><option value="zip" ${node.mode==="zip"?"selected":""}>按顺序一一搭配</option></select></label>
+      <small class="pc-group-summary" data-group-summary="${esc(node.id)}"></small>`;
+  }
+
   function nodeHtml(node,index,isGuided=false) {
     const graph = current.doc.graph;
     const incoming = graph.edges.filter(edge => edge.to === node.id);
     const name = nodeName(node);
-    const addLabel=node.parameter==="prompt"?"主题":node.parameter==="style1"?"画风方案":labels[node.parameter]+"候选";
     const ports = isGuided ? "" : [
-      node.type !== "parameter" ? portButton(node, "in", incoming.length > 0) : "",
+      !isParameter(node) ? portButton(node, "in", incoming.length > 0) : "",
       node.type !== "output" ? portButton(node, "out", graph.edges.some(edge => edge.from === node.id)) : ""
     ].join("");
-    return `<section class="pc-node ${isGuided?"pc-parameter":""}" data-card="${esc(node.id)}" ${isGuided?"":`style="left:${Number(node.x??32)}px;top:${Number(node.y??32)}px"`}>
+    return `<section class="pc-node ${isGuided?"pc-parameter":""} ${node.type==="parameters"?"pc-parameter-group":""}${touchNodes.has(node.id)?" is-touch-selected":""}" data-card="${esc(node.id)}" ${isGuided?"":`style="left:${Number(node.x??32)}px;top:${Number(node.y??32)}px"`}>
       ${ports}
-      <header ${isGuided?"":`data-drag="${esc(node.id)}"`}><div><strong>${esc(name)}${isGuided?"":` ${index+1}`}</strong>${isGuided?`<span class="pc-node-count">${node.values.length} 个候选</span>`:""}</div><button type="button" data-action="remove-node" data-node="${esc(node.id)}" aria-label="移除${esc(name)}">×</button></header>
-      <div class="pc-node-body">${node.type==="parameter"?
-        `<p>${node.parameter==="prompt"?"一条主题描述一幅画面。想换内容，就添加主题。":node.parameter==="style1"?"每个方案可选一种画风，也可搭配主副两种画风。":"只选一个时，每组都使用它；添加多个可参与搭配。"}</p>${node.values.map((value,i)=>`<div class="pc-candidate"><div class="pc-candidate-heading"><span>${esc(addLabel)} ${i+1}</span><button type="button" data-action="remove-value" data-node="${esc(node.id)}" data-value="${i}" aria-label="移除${esc(addLabel)} ${i+1}">移除</button></div>${parameterValue(node,value,i)}</div>`).join("")}<button type="button" class="pc-add-candidate" data-action="add-value" data-node="${esc(node.id)}">＋ 添加${esc(addLabel)}</button>`:
+      <header ${isGuided?"":`data-drag="${esc(node.id)}"`}><div><strong>${esc(name)}${isGuided?"":` ${index+1}`}</strong>${isGuided&&node.values?`<span class="pc-node-count">${node.values.length} 个候选</span>`:""}</div><button type="button" data-action="remove-node" data-node="${esc(node.id)}" aria-label="移除${esc(name)}">×</button></header>
+      <div class="pc-node-body">${node.type==="parameters"?parameterGroupHtml(node):node.type==="parameter"?candidatesHtml(node):
         `<p>${node.type === "output" ? "接收左边的参数或组合，设置每组出几张。" : "把主题、画风等合成一组组出图方案。例如 2 个主题 × 3 种画风 = 6 组。"}</p>
         ${node.type === "combine" || incoming.length > 1 ? `<label>怎样组合<select data-node="${esc(node.id)}" data-property="mode"><option value="cartesian" ${node.mode!=="zip"?"selected":""}>全部互相搭配</option><option value="zip" ${node.mode==="zip"?"selected":""}>按顺序一一搭配</option></select></label>` : ""}
         ${node.type === "output" ? `<label>每组生成张数<input type="number" min="1" max="200" data-node="${esc(node.id)}" data-property="repeat" value="${node.repeat??1}"></label>` : ""}
@@ -438,11 +521,12 @@
     const points = new Map([...root.querySelectorAll("[data-port]")].map(port => [
       `${port.dataset.port}:${port.dataset.node}`, portPoint(port, svg.parentElement)
     ]));
+    const preview = svg.querySelector(".pc-wire-preview")?.getAttribute("d") || "";
     svg.innerHTML = current.doc.graph.edges.map(edge => {
       const from = points.get(`out:${edge.from}`);
       const to = points.get(`in:${edge.to}`);
       return from && to ? `<path d="${curve(from, to)}"/>` : "";
-    }).join("") + '<path class="pc-wire-preview" d=""/>';
+    }).join("") + `<path class="pc-wire-preview" d="${preview}"/>`;
   }
 
   function closeNodeMenu() {
@@ -459,16 +543,7 @@
   function openNodeMenu(x, y, port = null, position = worldPosition(x, y)) {
     closeNodeMenu();
     clearWire();
-    const choices = [];
-    if (!port || port.direction === "in") {
-      for (const [field, name] of Object.entries(labels)) {
-        if (field !== "style2") choices.push({ type: "parameter", field, name, group: "参数" });
-      }
-    }
-    choices.push({ type: "combine", name: "参数组合", group: "生成流程", detail: "把主题、画风等搭配成多组方案" });
-    if (!port || port.direction === "out") {
-      choices.push({ type: "output", name: "批量出图", group: "生成流程", detail: "接收参数，设置每组出几张" });
-    }
+    const choices = port ? nodeMenuEntries.filter(item=>item[port.direction==="in"?"out":"in"]) : nodeMenuEntries;
     const element = document.createElement("div");
     element.className = "pc-node-menu";
     element.setAttribute("role", "dialog");
@@ -481,20 +556,32 @@
     root.append(element);
     const input = element.querySelector("input");
     const list = element.querySelector(".pc-node-menu-list");
+    let showAdvanced = false;
     const renderChoices = () => {
       const query = input.value.trim().toLowerCase();
       const filtered = choices.filter(item => `${item.name} ${item.detail || ""} ${item.field || ""}`.toLowerCase().includes(query));
-      list.innerHTML = ["参数", "生成流程"].map(group => {
+      const groups = ["生成流程", "高级节点", "单项参数"];
+      const buttons = groups.map(group => {
+        if (!query && !showAdvanced && group !== "生成流程") return "";
         const items = filtered.filter(item => item.group === group);
         if (!items.length) return "";
         return `<p>${group}</p>${items.map(item => `<button type="button" data-action="create-node" data-type="${item.type}" data-field="${item.field || ""}"><strong>${item.name}</strong>${item.detail ? `<small>${item.detail}</small>` : ""}</button>`).join("")}`;
-      }).join("") || '<p>没有匹配的节点</p>';
+      }).join("");
+      const advanced = choices.some(item=>item.group!=="生成流程");
+      list.innerHTML = (buttons || '<p>没有匹配的节点</p>') + (!query && advanced
+        ? `<button type="button" data-action="advanced-nodes" aria-expanded="${showAdvanced}">${showAdvanced?"收起高级节点":"展开高级节点"}</button>` : "");
+      const toggle = list.querySelector('[data-action="advanced-nodes"]');
+      if (toggle) toggle.onclick = () => {
+        showAdvanced = !showAdvanced;
+        renderChoices();
+        list.querySelector('[data-action="advanced-nodes"]')?.focus({preventScroll:true});
+      };
+      const bounds = element.getBoundingClientRect();
+      element.style.left = `${Math.max(8, Math.min(x, window.innerWidth - bounds.width - 8))}px`;
+      element.style.top = `${Math.max(8, Math.min(y, window.innerHeight - bounds.height - 8))}px`;
     };
     input.oninput = renderChoices;
     renderChoices();
-    const bounds = element.getBoundingClientRect();
-    element.style.left = `${Math.max(8, Math.min(x, window.innerWidth - bounds.width - 8))}px`;
-    element.style.top = `${Math.max(8, Math.min(y, window.innerHeight - bounds.height - 8))}px`;
     input.focus({ preventScroll: true });
     document.addEventListener("pointerdown", event => {
       if (!element.contains(event.target) && !event.target.closest('[data-action="add-node-menu"]')) closeNodeMenu();
@@ -522,11 +609,12 @@
 
   function wireHint(message = "") {
     const hint = root?.querySelector("[data-wire-hint]");
-    if (hint) hint.textContent = message || "右键或双击添加节点 · 拖动圆点连线 · 空格或中键拖动画布";
+    if (hint) hint.textContent = message || "拖动空白处移动画布 · 悬停节点后拖线 · 右键或双击添加";
   }
 
   function clearWire() {
     selectedPort = null;
+    root?.classList?.remove("is-wiring");
     root?.querySelectorAll("[data-port]").forEach(port => {
       port.classList.remove("is-available", "is-wire-target");
       port.setAttribute("aria-pressed", "false");
@@ -547,6 +635,7 @@
   function selectPort(port) {
     clearWire();
     selectedPort = portRef(port);
+    root.classList.add("is-wiring");
     port.setAttribute("aria-pressed", "true");
     root.querySelectorAll("[data-port]").forEach(candidate => {
       const edge = portConnection(selectedPort, portRef(candidate));
@@ -606,7 +695,7 @@
       if (!moved) return;
       suppressPortClick = true;
       if (target && target !== port && root.contains(target)) connectPorts(start, portRef(target));
-      else if (hit?.closest(".pc-world") === world && !hit.closest(".pc-node")) openNodeMenu(next.clientX, next.clientY, start);
+      else if (hit?.closest(".pc-board") === world.parentElement && !hit.closest(".pc-node")) openNodeMenu(next.clientX, next.clientY, start);
       else wireHint("把连线放到另一侧的圆点上");
     }, listener);
     port.addEventListener("pointercancel", () => cancelPointer?.(), listener);
@@ -712,15 +801,27 @@
     if(!root||!current||current.closed) return;
     closeNodeMenu();
     cancelPointer?.();
-    selectedPort = null;
+    clearWire();
+    nodeResizeObserver?.disconnect();
     const doc=current.doc,isGuided=guided(),flow=simpleFlow(doc.graph);
     const oldScroll=root.querySelector('.pc-guided-body')?.scrollTop||0;
     const oldCanvas=root.querySelector(".pc-scroll");
-    if (panelCanvasId !== doc.id) {
+    const oldWorld=oldCanvas?.querySelector(".pc-world");
+    const previousPan=oldWorld && oldCanvas.offsetWidth && oldCanvas.dataset.ready
+      ? [oldCanvas.scrollLeft-oldWorld.offsetLeft,oldCanvas.scrollTop-oldWorld.offsetTop] : null;
+    const changedDocument = panelCanvasId !== doc.id;
+    if (changedDocument) {
       panelCanvasId = doc.id;
       activePanel = current.submission ? "preview" : null;
       outputPanelId = null;
+      activeFields = new Map();
+      touchNodes.clear();
     }
+    const nodes=doc.graph.nodes;
+    const left=panMargin-Math.min(0,...nodes.map(node=>node.x||0),previousPan?.[0]||0);
+    const top=panMargin-Math.min(0,...nodes.map(node=>node.y||0),previousPan?.[1]||0);
+    const width=Math.max(1050,...nodes.map(node=>(node.x||0)+420),(previousPan?.[0]||0)+(oldCanvas?.clientWidth||0));
+    const height=Math.max(760,...nodes.map(node=>(node.y||0)+500),(previousPan?.[1]||0)+(oldCanvas?.clientHeight||0));
     root.innerHTML = `<div class="pc-header">
       <div class="pc-document"><input class="pc-name" aria-label="画布名称" data-name value="${esc(doc.name)}"><span data-pc-status role="status"></span></div>
       <div class="pc-toolbar" aria-label="画布工具">
@@ -734,7 +835,9 @@
           <button type="button" data-action="save">保存画布</button>
           <button type="button" data-action="copy" ${current.submission?"disabled":""}>另存副本</button>
           <button type="button" data-action="export">导出画布</button>
-          ${isGuided ? '<button type="button" data-action="free-view">切换到节点画布</button>' : `<button type="button" data-action="arrange">整理节点位置</button>
+          ${flow?.group.type==="combine" && flow.parameters.length ? '<button type="button" data-action="group-parameters">合并参数节点</button>' : ""}
+          ${isGuided ? '<button type="button" data-action="free-view">切换到节点画布</button>' : `<button type="button" data-action="locate-nodes">回到节点</button>
+            <button type="button" data-action="arrange">整理节点位置</button>
             <button type="button" data-action="guided-view" ${!flow?"disabled":""}>切换到搭配视图</button>`}
         </div></details>
       </div></div>
@@ -742,20 +845,33 @@
       ${isGuided?'<nav class="pc-step-nav" aria-label="跳转画布步骤"><button type="button" data-action="step" data-step="parameters">1 准备参数</button><button type="button" data-action="step" data-step="matching">2 搭配方式</button><button type="button" data-action="step" data-step="checkout">3 预览出图</button></nav>':""}
       ${current.removal?'<div class="pc-undo" role="status">已移除，尚可撤销 <button type="button" data-action="undo-remove">撤销移除</button></div>':""}
       <div class="pc-workspace">
-        ${isGuided ? guidedHtml(flow) : `<div class="pc-scroll" tabindex="0" aria-label="参数节点画布" aria-describedby="pc-wire-hint"><div class="pc-world" style="width:${Math.max(1050,...doc.graph.nodes.map(n=>(Number(n.x)||0)+320))}px;height:${Math.max(760,...doc.graph.nodes.map(n=>(Number(n.y)||0)+500))}px"><svg class="pc-edges" aria-hidden="true"></svg>${doc.graph.nodes.map((node,index)=>nodeHtml(node,index)).join("")}</div></div>
+        ${isGuided ? guidedHtml(flow) : `<div class="pc-scroll" tabindex="0" aria-label="参数节点画布" aria-describedby="pc-wire-hint"><div class="pc-board" style="--pc-left:${left}px;--pc-top:${top}px"><div class="pc-world" style="--pc-width:${width}px;--pc-height:${height}px"><svg class="pc-edges" aria-hidden="true"></svg>${nodes.map((node,index)=>nodeHtml(node,index)).join("")}</div></div></div>
           <p id="pc-wire-hint" data-wire-hint aria-live="polite"></p>`}
         <aside id="pc-drawer" class="pc-drawer" hidden><div class="pc-drawer-header"><h2></h2><button type="button" data-action="close-drawer" aria-label="收起面板">×</button></div><div class="pc-drawer-body"></div></aside>
       </div>`;
 
     const canvas=root.querySelector(".pc-scroll");
-    if(canvas && oldCanvas) {canvas.scrollLeft=oldCanvas.scrollLeft;canvas.scrollTop=oldCanvas.scrollTop;}
+    if(canvas) {
+      const world=canvas.querySelector(".pc-world");
+      const start=doc.graph.nodes.length && changedDocument
+        ? [Math.min(0,...doc.graph.nodes.map(node=>(node.x??32)-32)),Math.min(0,...doc.graph.nodes.map(node=>(node.y??32)-32))]
+        : [0,0];
+      const [left,top]=previousPan && !changedDocument ? previousPan : start;
+      canvas.scrollLeft=world.offsetLeft+left;
+      canvas.scrollTop=world.offsetTop+top;
+      if (canvas.offsetWidth) canvas.dataset.ready="true";
+    }
     status();wireHint();drawEdges();
+    if (canvas && typeof ResizeObserver === "function") {
+      nodeResizeObserver ||= new ResizeObserver(() => { if(root?.offsetWidth) drawEdges(); });
+      for (const card of canvas.querySelectorAll("[data-card]")) nodeResizeObserver.observe(card);
+    }
     const body=root.querySelector('.pc-guided-body');if(body) body.scrollTop=oldScroll;
   }
   function guidedHtml(flow) {
     return `<div class="pc-guided-body"><main class="pc-parameters-area" aria-label="准备参数"><div class="pc-step-title"><span>1</span><div><h2>准备参数</h2><p>一个候选固定使用，多个候选参与搭配。</p></div></div>
       <div class="pc-parameter-tools" aria-label="添加参数">${["prompt","style1","layout","ratio","refImages"].map(field=>`<button type="button" data-action="guided-add" data-field="${field}">${flow.parameters.some(n=>n.parameter===field)?"编辑":"＋"} ${labels[field]}</button>`).join("")}<details><summary>更多参数</summary><div>${Object.entries(labels).filter(([key])=>!["prompt","style1","style2","layout","ratio","refImages"].includes(key)).map(([key,label])=>`<button type="button" data-action="guided-add" data-field="${key}">${label}</button>`).join("")}</div></details></div>
-      <div class="pc-parameter-grid">${flow.parameters.map((node,index)=>nodeHtml(node,index,true)).join("")}</div></main>
+      <div class="pc-parameter-grid">${flow.group.type==="parameters" ? nodeHtml(flow.group,0,true) : flow.parameters.map((node,index)=>nodeHtml(node,index,true)).join("")}</div></main>
       <aside class="pc-guide-sidebar"><section class="pc-matching" aria-label="选择搭配方式"><div class="pc-step-title"><span>2</span><div><h2>选择搭配方式</h2><p>这些参数怎么一起用？</p></div></div>
         <div class="pc-match-options">${[["cartesian","全部互相搭配","2 个主题 × 3 种画风 → 6 组","每个主题都试一遍每种画风。"],["zip","按顺序一一搭配","主题 1 + 画风 1，主题 2 + 画风 2","只有一个候选的参数，每组都会使用。"]].map(([mode,title,example,description])=>`<button type="button" data-action="matching" data-mode="${mode}" aria-pressed="${(flow.group.mode||"cartesian")===mode}"><strong>${title}</strong><span>${example}</span><small>${description}</small></button>`).join("")}</div>
         <label class="pc-repeat-label">每组生成<input type="number" min="1" max="200" aria-label="每组生成张数" data-node="${esc(flow.output.id)}" data-property="repeat" value="${flow.output.repeat??1}">张</label>
@@ -767,9 +883,9 @@
     if(!node) return;
     if(target.dataset.property) node[target.dataset.property]=target.dataset.property==="repeat"?Number(target.value):target.value;
     else if(target.dataset.value!=null) {
-      const index=Number(target.dataset.value),field=node.parameter;
-      if(field==="style1") { const old=node.values[index],v={style1:typeof old==="object"?old.style1:old,style2:old?.style2||""};v[target.dataset.fusion]=target.value;node.values[index]=v.style2?v:v.style1; }
-      else node.values[index]=["colors","tones","moods"].includes(field)?target.value.split(/[,，\n]/).map(v=>v.trim()).filter(Boolean):target.value;
+      const {parameter:field,values}=parameterField(node,target.dataset.parameter);
+      const index=Number(target.dataset.value);
+      values[index]=["colors","tones","moods"].includes(field)?target.value.split(/[,，\n]/).map(v=>v.trim()).filter(Boolean):target.value;
     }
     current.edit();
   }
@@ -799,28 +915,48 @@
   function beginPan(event, viewport) {
     const pointerId = event.pointerId;
     const {clientX, clientY} = event;
-    const {scrollLeft, scrollTop} = viewport;
+    let {scrollLeft, scrollTop} = viewport;
+    const board=viewport.querySelector(".pc-board"),world=board.querySelector(".pc-world");
     const controller = new AbortController();
     const listener = {signal:controller.signal};
-    viewport.setPointerCapture(pointerId);
-    viewport.classList.add("is-panning");
+    let moving = false;
     cancelPointer = () => {
       controller.abort();
       if (viewport.hasPointerCapture(pointerId)) viewport.releasePointerCapture(pointerId);
       viewport.classList.remove("is-panning");
       cancelPointer = null;
     };
-    viewport.addEventListener("pointermove", next => {
+    global.addEventListener("pointermove", next => {
       if (next.pointerId !== pointerId) return;
-      viewport.scrollLeft = scrollLeft + clientX - next.clientX;
-      viewport.scrollTop = scrollTop + clientY - next.clientY;
+      if (!moving && Math.hypot(clientX-next.clientX,clientY-next.clientY)<5) return;
+      if (!moving) {
+        moving=true;
+        viewport.setPointerCapture(pointerId);
+        viewport.classList.add("is-panning");
+        clearWire();
+        closeNodeMenu();
+      }
+      let left=scrollLeft+clientX-next.clientX,top=scrollTop+clientY-next.clientY;
+      if (left < 32 && world.offsetLeft < 50640) {
+        board.style.setProperty("--pc-left",`${world.offsetLeft+640}px`);
+        scrollLeft+=640;left+=640;
+      }
+      if (top < 32 && world.offsetTop < 50640) {
+        board.style.setProperty("--pc-top",`${world.offsetTop+640}px`);
+        scrollTop+=640;top+=640;
+      }
+      if (left+viewport.clientWidth > viewport.scrollWidth-32 && world.offsetWidth < 50640)
+        world.style.setProperty("--pc-width",`${world.offsetWidth+640}px`);
+      if (top+viewport.clientHeight > viewport.scrollHeight-32 && world.offsetHeight < 50640)
+        world.style.setProperty("--pc-height",`${world.offsetHeight+640}px`);
+      viewport.scrollTo(left,top);
     }, listener);
     for (const name of ["pointerup","pointercancel","lostpointercapture"]) {
-      viewport.addEventListener(name, next => {
+      global.addEventListener(name, next => {
         if (next.pointerId === pointerId) cancelPointer?.();
       }, listener);
     }
-    event.preventDefault();
+    if (event.button===1) event.preventDefault();
   }
   function bind() {
     root.oninput=event=>{if(event.target.matches("input:not([type=checkbox]),textarea")) valueChanged(event.target);};
@@ -841,6 +977,11 @@
         showPanel(null);trigger?.focus({preventScroll:true});return;
       }
       if(action==="choose-run") {void busy(()=>current.watch(button.dataset.run));return;}
+      if(action==="locate-nodes") {
+        root.querySelector(".pc-document-menu")?.removeAttribute("open");
+        root.querySelector("[data-card]")?.scrollIntoView({block:"center",inline:"center"});
+        return;
+      }
       if(action==="focus-run-output") {focusRunOutput();return;}
       if(action==="open-output"||action==="show-detached-output") {
         const id=button.dataset.node||null;
@@ -860,8 +1001,13 @@
       if(action==="add-node-menu") {
         if(nodeMenu) {closeNodeMenu();return;}
         const bounds=button.getBoundingClientRect();
-        const bottom=Math.max(0,...[...root.querySelectorAll(".pc-node")].map(card=>card.offsetTop+card.offsetHeight));
-        openNodeMenu(bounds.left,bounds.bottom+6,null,{x:32,y:bottom+40});
+        const cards=[...root.querySelectorAll(".pc-node")];
+        const board=root.querySelector(".pc-scroll").getBoundingClientRect();
+        const origin=worldPosition(board.left+32,board.top+32);
+        const bottom=Math.max(origin.y,...cards.filter(card=>card.offsetLeft<origin.x+420 &&
+          card.offsetLeft+card.offsetWidth>origin.x && card.offsetTop<origin.y+440 &&
+          card.offsetTop+card.offsetHeight>origin.y).map(card=>card.offsetTop+card.offsetHeight+40));
+        openNodeMenu(bounds.left,bounds.bottom+6,null,{x:origin.x,y:bottom});
         return;
       }
       if(action==="close-node-menu") {closeNodeMenu();root.querySelector('[data-action="add-node-menu"]')?.focus();return;}
@@ -883,7 +1029,13 @@
         if(section&&body) body.scrollTop+=section.getBoundingClientRect().top-body.getBoundingClientRect().top-18;
         return;
       }
-      if(action==="guided-add") {const added=addGuidedParameter(current,button.dataset.field);focusParameter(added);return;}
+      if(action==="guided-add") {
+        const group=simpleFlow(current.doc.graph)?.group;
+        if(group?.type==="parameters") activeFields.set(group.id,button.dataset.field);
+        const added=addGuidedParameter(current,button.dataset.field);
+        if(group?.type==="parameters") render();
+        focusParameter(added);return;
+      }
       if(action==="matching") {const flow=simpleFlow(current.doc.graph);if(flow) {flow.group.mode=button.dataset.mode;current.edit(true);}return;}
       if(action==="undo-remove") {const graph=current.removal;if(graph) {current.doc.graph=graph;current.edit(true);}return;}
       if(action==="save") return void busy(()=>current.save());
@@ -907,21 +1059,49 @@
         submitFromPreview();return;
       }
       if(action==="export") {const url=URL.createObjectURL(new Blob([JSON.stringify(current.doc,null,2)],{type:"application/json"}));const a=document.createElement("a");a.href=url;a.download="参数画布.json";a.click();URL.revokeObjectURL(url);return;}
-      if(action==="refs") {options.pickReferences?.({currentRefs:node.values[index],onConfirm:items=>{node.values[index]=items.map(item=>item.image).filter(Boolean);current.edit(true);}});return;}
+      if(action==="edit-field" || action==="add-field") {
+        const field=button.dataset.parameter;
+        activeFields.set(node.id,field);
+        if(action==="add-field") {addParameterField(node,field);current.edit(true);}
+        else render();
+        const card=[...root.querySelectorAll("[data-card]")].find(element=>element.dataset.card===node.id);
+        card?.querySelector(`[data-action="edit-field"][data-parameter="${field}"]`)?.focus({preventScroll:true});
+        return;
+      }
+      const fieldNode=parameterField(node,button.dataset.parameter);
+      if(action==="refs") {
+        const store=current,doc=store.doc,values=fieldNode.values,previous=values[index],parameter=fieldNode.parameter;
+        options.pickReferences?.({currentRefs:previous,onConfirm:items=>{
+          if(store.closed||store.doc!==doc||!doc.graph.nodes.includes(node)||parameterField(node,parameter).values!==values||values[index]!==previous) return;
+          values[index]=items.map(item=>item.image).filter(Boolean);store.edit(true);
+        }});
+        return;
+      }
       if(action==="resource"||action==="clear-resource") {
         const field=button.dataset.field;
-        pickResourceCandidate(current,node,index,field,settings=>action==="clear-resource"?settings.onPick(""):options.pickResource?.(settings));return;
+        pickResourceCandidate(current,node,index,field,settings=>action==="clear-resource"?settings.onPick(""):options.pickResource?.(settings),fieldNode.parameter);return;
       }
       if(action==="zoom-resource") {
-        const field=button.dataset.field,code=resourceCode(node.values[index],field);
+        const field=button.dataset.field,code=resourceCode(fieldNode.values[index],field);
         const resource=(options.resources?.(field==="layout"?"layout":"style")||[]).find(item=>(item.id||item.code)===code);
         if(resource?.image) options.openImage?.(resource.image,`${code} ${resource.name_zh||resource.name||""}`);return;
       }
-      const removal=["remove-node","remove-value","disconnect"].includes(action)?clone(current.doc.graph):null;
+      const removal=["remove-node","remove-value","remove-field","disconnect","group-parameters"].includes(action)?clone(current.doc.graph):null;
       if(action==="remove-node") {current.doc.graph.nodes=current.doc.graph.nodes.filter(n=>n!==node);current.doc.graph.edges=current.doc.graph.edges.filter(e=>e.from!==node.id&&e.to!==node.id);}
-      else if(action==="remove-value") node.values.splice(index,1);
-      else if(action==="add-value") node.values.push(initialCandidate(node.parameter));
+      else if(action==="remove-field") {
+        delete node.fields[fieldNode.parameter];
+        if(node.fieldOrder) node.fieldOrder=node.fieldOrder.filter(field=>field!==fieldNode.parameter);
+      }
+      else if(action==="remove-value") fieldNode.values.splice(index,1);
+      else if(action==="add-value") {
+        if(fieldNode.values.length>=200) {wireHint("每个参数最多添加 200 个候选");return;}
+        fieldNode.values.push(initialCandidate(fieldNode.parameter));
+      }
       else if(action==="disconnect") current.doc.graph.edges=current.doc.graph.edges.filter(e=>!(e.from===button.dataset.from&&e.to===node.id));
+      else if(action==="group-parameters") {
+        const graph=current.doc.graph;
+        if(!groupExistingParameters(graph,simpleFlow(graph))) return;
+      }
       else if(action==="arrange") arrangeNodes(current.doc.graph.nodes,new Map(
         Array.from(root.querySelectorAll("[data-card]")).map(card=>[card.dataset.card,{width:card.offsetWidth,height:card.offsetHeight}])
       ));
@@ -931,7 +1111,7 @@
       if(action==="add-value") focusParameter(node,true);
     };
     root.oncontextmenu=root.ondblclick=event=>{
-      if(!event.target.closest(".pc-world") || event.target.closest(".pc-node")) return;
+      if(!event.target.closest(".pc-board") || event.target.closest(".pc-node")) return;
       event.preventDefault();
       openNodeMenu(event.clientX,event.clientY);
     };
@@ -944,12 +1124,25 @@
     root.onpointerdown=event=>{
       if (!event.target.closest(".pc-document-menu")) root.querySelector(".pc-document-menu")?.removeAttribute("open");
       const viewport=event.target.closest(".pc-scroll");
-      if(viewport && (event.button===1 || (event.button===0 && spaceHeld))) {beginPan(event,viewport);return;}
+      if(viewport && event.button===1) {beginPan(event,viewport);return;}
       if(event.button!==0 || !event.isPrimary) return;
       suppressPortClick=false;
       const port=event.target.closest("[data-port]");
       if(port) {beginWire(event,port);return;}
-      if(event.target.closest(".pc-world")) clearWire();
+      const cardTarget=event.target.closest("[data-card]");
+      if (event.pointerType==="touch" && viewport) {
+        if (cardTarget) {
+          touchNodes.add(cardTarget.dataset.card);
+          cardTarget.classList.add("is-touch-selected");
+        } else if (!selectedPort) {
+          touchNodes.clear();
+          root.querySelectorAll(".is-touch-selected").forEach(card=>card.classList.remove("is-touch-selected"));
+        }
+      }
+      if(viewport && (spaceHeld || (!cardTarget && event.target.closest(".pc-board") && event.pointerType!=="touch"))) {
+        clearWire();beginPan(event,viewport);return;
+      }
+      if(event.target.closest(".pc-board") && event.pointerType!=="touch") clearWire();
       const header=event.target.closest("[data-drag]");if(!header||event.target.closest("button")) return;
       const node=current.doc.graph.nodes.find(n=>n.id===header.dataset.drag),card=header.closest(".pc-node"),start={x:event.clientX,y:event.clientY,nx:Number(node.x)||0,ny:Number(node.y)||0};
       const pointerId=event.pointerId;
@@ -957,8 +1150,8 @@
       const world=card.parentElement;
       const syncPosition=()=>{
         card.style.left=node.x+"px";card.style.top=node.y+"px";
-        world.style.width=Math.max(world.offsetWidth,node.x+card.offsetWidth+32)+"px";
-        world.style.height=Math.max(world.offsetHeight,node.y+card.offsetHeight+32)+"px";
+        world.style.setProperty("--pc-width",Math.max(world.offsetWidth,node.x+card.offsetWidth+32)+"px");
+        world.style.setProperty("--pc-height",Math.max(world.offsetHeight,node.y+card.offsetHeight+32)+"px");
         drawEdges();
       };
       header.setPointerCapture(pointerId);
@@ -970,14 +1163,23 @@
       };
       header.addEventListener("pointermove",e=>{
         if(e.pointerId!==pointerId) return;
-        node.x=Math.max(16,Math.min(50000,start.nx+e.clientX-start.x));
-        node.y=Math.max(16,Math.min(50000,start.ny+e.clientY-start.y));
+        node.x=coordinate(start.nx+e.clientX-start.x);
+        node.y=coordinate(start.ny+e.clientY-start.y);
         syncPosition();
       },listener);
       header.addEventListener("pointerup",e=>{
         if(e.pointerId!==pointerId) return;
         controller.abort();cancelPointer=null;
-        if(node.x!==start.nx||node.y!==start.ny) current.edit();
+        if(node.x!==start.nx||node.y!==start.ny) {
+          const board=world.parentElement;
+          const dx=Math.max(0,panMargin-node.x-world.offsetLeft);
+          const dy=Math.max(0,panMargin-node.y-world.offsetTop);
+          board.style.setProperty("--pc-left",`${world.offsetLeft+dx}px`);
+          board.style.setProperty("--pc-top",`${world.offsetTop+dy}px`);
+          viewport.scrollLeft+=dx;
+          viewport.scrollTop+=dy;
+          current.edit();
+        }
       },listener);
       header.addEventListener("pointercancel",()=>cancelPointer?.(),listener);
       header.addEventListener("lostpointercapture",()=>cancelPointer?.(),listener);
@@ -1013,6 +1215,8 @@
     closeNodeMenu();
     cancelPointer?.();
     clearWire();
+    touchNodes.clear();
+    root?.querySelectorAll(".is-touch-selected").forEach(card=>card.classList.remove("is-touch-selected"));
     releaseSpace();
     if (activePanel) showPanel(null);
   }
@@ -1043,6 +1247,6 @@
       if(root.querySelector('[data-action="open-output"]')) focusRunOutput();
       else showPanel("output");
     }
-  },importDocument:document=>current?.importDocument(document),reset:()=>{dismissInteractions();current?.close();current=null;root=null;panelCanvasId=null;}};
-  if(global.__HANDRAW_TESTING__) global.HandrawParameterCanvas.testing={CanvasStore,blank,selectedQuote,arrangeNodes,pickResourceCandidate,simpleFlow,combinationSummary,addGuidedParameter,connectionError,addCanvasNode,outputItems};
+  },importDocument:document=>current?.importDocument(document),reset:()=>{dismissInteractions();nodeResizeObserver?.disconnect();current?.close();current=null;root=null;panelCanvasId=null;}};
+  if(global.__HANDRAW_TESTING__) global.HandrawParameterCanvas.testing={CanvasStore,blank,selectedQuote,arrangeNodes,pickResourceCandidate,simpleFlow,combinationSummary,addGuidedParameter,connectionError,addCanvasNode,outputItems,groupExistingParameters};
 })(window);

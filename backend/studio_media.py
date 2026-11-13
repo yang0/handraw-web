@@ -14,8 +14,10 @@ def studio_media_referenced(conn, url):
           OR EXISTS(SELECT 1 FROM generation_items i WHERE i.spec_json @>
                     jsonb_build_object('refImages',jsonb_build_array(CAST(? AS text))))
           OR EXISTS(SELECT 1 FROM studio_canvases c WHERE c.deleted_at IS NULL AND
-                    jsonb_path_exists(c.graph_json,'$.nodes[*] ? (@.parameter == "refImages").values[*][*] ? (@ == $url)',
-                                      jsonb_build_object('url',CAST(? AS text))))""",
-            (url, url, url, url, url),
+                    (jsonb_path_exists(c.graph_json,'$.nodes[*] ? (@.parameter == "refImages").values[*][*] ? (@ == $url)',
+                                       jsonb_build_object('url',CAST(? AS text)))
+                     OR jsonb_path_exists(c.graph_json,'$.nodes[*].fields.refImages[*][*] ? (@ == $url)',
+                                          jsonb_build_object('url',CAST(? AS text)))))""",
+            (url, url, url, url, url, url),
         ).fetchone()
     )

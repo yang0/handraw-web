@@ -73,19 +73,22 @@ class StudioMediaRetentionTests(unittest.TestCase):
         self.assertTrue(self.file.is_file())
 
     def test_canvas_reference_group_protects_file_and_deleted_canvas_releases_it(self):
-        save_canvas(
-            self.db,
-            self.user,
-            {
-                "id": "canvas",
-                "graph": graph(("prompt", ["A"]), ("refImages", [[self.url]])),
-            },
-        )
-        self.assertEqual(self.collect()["referenced"], 1)
-        self.assertTrue(self.file.is_file())
-        self.db.get_conn().execute(
-            "UPDATE studio_canvases SET deleted_at=now() WHERE id='canvas'"
-        )
+        legacy = graph(("prompt", ["A"]), ("refImages", [[self.url]]))
+        grouped = {
+            "nodes": [
+                {"id": "inputs", "type": "parameters", "fields": {"refImages": [[self.url]]}}
+            ],
+            "edges": [],
+        }
+        for index, document in enumerate((legacy, grouped)):
+            with self.subTest(grouped=bool(index)):
+                canvas_id = f"canvas_{index}"
+                save_canvas(self.db, self.user, {"id": canvas_id, "graph": document})
+                self.assertEqual(self.collect()["referenced"], 1)
+                self.assertTrue(self.file.is_file())
+                self.db.get_conn().execute(
+                    "UPDATE studio_canvases SET deleted_at=now() WHERE id=?", (canvas_id,)
+                )
         self.assertEqual(self.collect()["deleted"], 1)
         self.assertFalse(self.file.exists())
 

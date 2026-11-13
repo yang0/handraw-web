@@ -2,7 +2,7 @@
 const test=require("node:test"),assert=require("node:assert/strict"),vm=require("node:vm"),fs=require("node:fs");
 const context={window:{__HANDRAW_TESTING__:true},setTimeout,clearTimeout,console};
 vm.createContext(context);vm.runInContext(fs.readFileSync("demo/assets/parameter-canvas.js","utf8"),context);
-const {CanvasStore,selectedQuote,arrangeNodes,pickResourceCandidate,simpleFlow,combinationSummary,addGuidedParameter,connectionError,addCanvasNode,outputItems}=context.window.HandrawParameterCanvas.testing;
+const {CanvasStore,selectedQuote,arrangeNodes,pickResourceCandidate,simpleFlow,combinationSummary,addGuidedParameter,connectionError,addCanvasNode,outputItems,groupExistingParameters}=context.window.HandrawParameterCanvas.testing;
 const storage=new Map();
 function store(t,api,scope="user:canvas") {
   const instance=new CanvasStore({api,scope,loggedIn:()=>true,storage:{getItem:key=>storage.get(key),setItem:(key,value)=>storage.set(key,value)}});
@@ -10,9 +10,18 @@ function store(t,api,scope="user:canvas") {
 }
 function preview() {return {planHash:"hash",quote:{freeRemaining:1,unitPrice:2,balance:10},items:[{ordinal:0,spec:{prompt:"A"}},{ordinal:1,spec:{prompt:"B"}}]};}
 function run(id="run") {return {id,status:"success",items:[],count:0,retryQuote:{total:0,unitPrice:2},spentCredits:0,maxCredits:0};}
+function legacyGraph() {
+  return {nodes:[
+    {id:"theme",type:"parameter",parameter:"prompt",values:[""],x:32,y:32},
+    {id:"style",type:"parameter",parameter:"style1",values:["FA-001"],x:32,y:340},
+    {id:"combine",type:"combine",mode:"cartesian",x:370,y:135},
+    {id:"output",type:"output",mode:"cartesian",repeat:1,x:700,y:135}
+  ],edges:[{from:"theme",to:"combine"},{from:"style",to:"combine"},{from:"combine",to:"output"}]};
+}
 
 test("guided combinations explain cross products, sequential pairs and shared singleton values",t=>{
   storage.clear();const s=store(t,async()=>({writeSeq:1}));
+  s.doc.graph=legacyGraph();
   const flow=simpleFlow(s.doc.graph);flow.parameters[0].values=["Forest","Ocean"];flow.parameters[1].values=["FA-001","FA-002","FA-003"];
   const ratio=addGuidedParameter(s,"ratio");assert.equal(ratio.values[0],"3:4");
   assert.ok(ratio.y>flow.parameters[0].y,"New parameters get a separate position in the free view");
@@ -63,8 +72,9 @@ test("node view opens by default and exposes one anchor for each usable directio
   canvas.mount(root,{scope:"node-render",loggedIn:()=>false,resources:()=>[]});
   t.after(()=>{canvas.reset();delete context.window.localStorage;});
   assert.deepEqual([...root.innerHTML.matchAll(/data-port="(in|out)" data-node="([^"]+)"/g)].map(m=>m.slice(1)),[
-    ["out","theme"],["out","style"],["in","combine"],["out","combine"],["in","output"]
+    ["out","params"],["in","output"]
   ]);
+  for(const field of ["prompt","style1","layout","ratio"]) assert.ok(root.innerHTML.includes(`data-parameter="${field}"`));
   assert.match(root.innerHTML,/data-action="add-node-menu"/);
   assert.match(root.innerHTML,/class="pc-drawer" hidden/);
 });
@@ -84,6 +94,7 @@ test("results follow frozen output IDs, with safe fallback for unlinked and dele
 
 test("wiring accepts nested combinations and rejects duplicates, cycles and terminal outputs",t=>{
   storage.clear();const s=store(t,async()=>({writeSeq:1}));
+  s.doc.graph=legacyGraph();
   const graph=s.doc.graph;
   const nested=addCanvasNode(graph,"combine","",{x:400,y:480});
   assert.equal(connectionError(graph,"combine",nested.id),"");
@@ -96,20 +107,34 @@ test("wiring accepts nested combinations and rejects duplicates, cycles and term
   assert.equal(graph.edges.length,4);
 });
 
+test("grouping old parameters preserves edge order, output identity, and combination settings",()=>{
+  const graph=legacyGraph(),flow=simpleFlow(graph);
+  [graph.edges[0],graph.edges[1]]=[graph.edges[1],graph.edges[0]];
+  flow.group.mode="zip";
+  flow.output.repeat=3;
+  assert.equal(groupExistingParameters(graph,flow),true);
+  assert.equal(graph.nodes[1],flow.output);
+  assert.equal(graph.nodes[0].mode,"zip");
+  assert.deepEqual(Array.from(graph.nodes[0].fieldOrder),["style1","prompt"]);
+  assert.equal(graph.nodes[0].fields.style1,flow.parameters[1].values);
+  assert.equal(graph.edges[0].to,"output");
+});
+
 test("visual resource picks change only the chosen candidate and preserve atomic fusion pairs",t=>{
   storage.clear();const s=store(t,async()=>({writeSeq:1}));
-  const node=s.doc.graph.nodes.find(n=>n.id==="style");node.values=[{style1:"FA-001",style2:"FA-002"},"FA-003"];
+  const node=s.doc.graph.nodes[0],values=node.fields.style1=[{style1:"FA-001",style2:"FA-002"},"FA-003"];
   const other=JSON.stringify(s.doc.graph.nodes.filter(n=>n!==node));let picker;
-  const choose=(field,code)=>{pickResourceCandidate(s,node,0,field,settings=>picker=settings);picker.onPick(code);};
-  choose("style1","FA-004");assert.equal(node.values[0].style2,"FA-002");assert.equal(node.values[0].style1,"FA-004");
-  choose("style2","");assert.equal(node.values[0],"FA-004");
-  choose("style2","FA-005");choose("style1","");assert.equal(node.values[0],"");
-  assert.equal(node.values[1],"FA-003");assert.equal(JSON.stringify(s.doc.graph.nodes.filter(n=>n!==node)),other);
+  const choose=(field,code)=>{pickResourceCandidate(s,node,0,field,settings=>picker=settings,"style1");picker.onPick(code);};
+  choose("style1","FA-004");assert.equal(values[0].style2,"FA-002");assert.equal(values[0].style1,"FA-004");
+  choose("style2","");assert.equal(values[0],"FA-004");
+  choose("style2","FA-005");choose("style1","");assert.equal(values[0],"");
+  assert.equal(values[1],"FA-003");assert.equal(JSON.stringify(s.doc.graph.nodes.filter(n=>n!==node)),other);
   assert.equal(s.dirty,true);
 });
 
 test("cancelled or late visual picker results never modify another canvas, removed node or account",t=>{
   storage.clear();const s=store(t,async()=>({writeSeq:1}));
+  s.doc.graph=legacyGraph();
   let node=s.doc.graph.nodes.find(n=>n.id==="style"),picker;
   pickResourceCandidate(s,node,0,"style1",settings=>picker=settings);
   assert.equal(s.dirty,false,"Opening and cancelling a picker does not edit the document");
@@ -122,6 +147,7 @@ test("cancelled or late visual picker results never modify another canvas, remov
 
 test("canvas renders actual thumbnails and names for both fusion styles and layouts with empty states",t=>{
   const canvas=context.window.HandrawParameterCanvas,doc=canvas.testing.blank();
+  doc.graph=legacyGraph();
   doc.graph.nodes.find(n=>n.id==="style").values=[{style1:"FA-001",style2:"FA-002"},"missing"];
   doc.graph.nodes.push({id:"layout",type:"parameter",parameter:"layout",values:["SC-001",""]});
   context.window.localStorage={getItem:()=>JSON.stringify({doc}),setItem(){}};
@@ -151,21 +177,21 @@ test("arranging tall candidate nodes preserves specs and keeps every pair separa
 test("canvas saves serialize and include edits made while the first save is outstanding",async t=>{
   storage.clear();const writes=[];let release;
   const s=store(t,async(url,options)=>{writes.push(JSON.parse(JSON.stringify(options.body)));if(writes.length===1) await new Promise(resolve=>release=resolve);return {writeSeq:writes.length};});
-  s.doc.graph.nodes[0].values=["First"];s.edit();const saving=s.save();
-  s.doc.graph.nodes[0].values=["Second"];s.edit();const concurrent=s.save();
+  s.doc.graph.nodes[0].fields.prompt=["First"];s.edit();const saving=s.save();
+  s.doc.graph.nodes[0].fields.prompt=["Second"];s.edit();const concurrent=s.save();
   release();assert.deepEqual(await Promise.all([saving,concurrent]),[true,true]);
   assert.equal(writes.length,2);assert.equal(writes[0].baseWriteSeq,0);assert.equal(writes[1].baseWriteSeq,1);
-  assert.equal(writes[1].graph.nodes[0].values[0],"Second");assert.equal(s.dirty,false);
+  assert.equal(writes[1].graph.nodes[0].fields.prompt[0],"Second");assert.equal(s.dirty,false);
 });
 test("save conflict retains the local document and can be recovered as an explicit copy",async t=>{
   storage.clear();const s=store(t,async()=>{const error=new Error("changed elsewhere");error.status=409;error.code="canvas_conflict";throw error;});
-  s.doc.graph.nodes[0].values=["Local work"];s.edit();const old=s.doc.id;
-  assert.equal(await s.save(),false);assert.equal(s.conflict,true);assert.equal(s.doc.graph.nodes[0].values[0],"Local work");
+  s.doc.graph.nodes[0].fields.prompt=["Local work"];s.edit();const old=s.doc.id;
+  assert.equal(await s.save(),false);assert.equal(s.conflict,true);assert.equal(s.doc.graph.nodes[0].fields.prompt[0],"Local work");
   await s.create(true);assert.notEqual(s.doc.id,old);assert.equal(s.doc.writeSeq,0);assert.equal(s.conflict,false);
 });
 test("preview uses the saved document and never submits per-image generation requests",async t=>{
   storage.clear();const calls=[];const s=store(t,async(url,options)=>{calls.push(url);if(url.endsWith("/preview")) return preview();return {writeSeq:1};});
-  s.doc.graph.nodes[0].values=["Theme"];s.edit();await s.expand();
+  s.doc.graph.nodes[0].fields.prompt=["Theme"];s.edit();await s.expand();
   assert.equal(calls.length,2);assert.equal(calls[0],"/api/studio/canvases");assert.ok(calls[1].endsWith("/preview"));
   assert.equal(s.selected.size,2);assert.equal(selectedQuote(s.preview,2).total,2);assert.ok(!calls.includes("/api/studio/generate"));
 });
@@ -185,7 +211,7 @@ test("an unknown submission persists its exact idempotency key and survives page
 test("a stale preview is discarded if the user edits during expansion",async t=>{
   storage.clear();let release;const s=store(t,async(url)=>url.endsWith("/preview")?new Promise(resolve=>release=()=>resolve(preview())):{writeSeq:1});
   s.doc.writeSeq=1;const expanding=s.expand();await new Promise(resolve=>setImmediate(resolve));
-  s.doc.graph.nodes[0].values=["Changed"];s.edit();release();await assert.rejects(expanding,/参数已变化/);assert.equal(s.preview,null);
+  s.doc.graph.nodes[0].fields.prompt=["Changed"];s.edit();release();await assert.rejects(expanding,/参数已变化/);assert.equal(s.preview,null);
 });
 test("account scope changes prevent late save responses from modifying the new account",async t=>{
   storage.clear();let release;const old=store(t,async()=>new Promise(resolve=>release=()=>resolve({writeSeq:8})),"user:first");

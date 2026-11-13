@@ -1958,7 +1958,7 @@
     if(!Array.isArray(source.nodes)||!Array.isArray(source.edges)) throw new Error("存档格式不完整，可先导出原文件");
     if(source.nodes.some(node=>["article_plan","article"].includes(node.type)))
       throw new Error("文章请提取到文章工作台，不能作为画布任务执行");
-    if(source.nodes.every(node=>["parameter","combine","output"].includes(node.type))) return source;
+    if(source.nodes.every(node=>["parameter","parameters","combine","output"].includes(node.type))) return source;
     const rows=[];
     for(const control of source.nodes.filter(node=>node.type==="output_control")) {
       if(!["single","graphic-text","image-only"].includes(control.data?.mode || "single"))
