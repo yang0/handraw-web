@@ -1223,7 +1223,113 @@ const {
   assert.equal(api.articleImageProgress(win.CS.myArticles[0]).ready,1);
   win.HANDRAW_SHARED.App.state.serverBacked=false;
 
-  console.log("All studio generation, document isolation, save and history tests passed (29/29).");
+  // 30: Legacy warm caches must be compared with the complete cloud document,
+  // never a summary's missing body; old recovery archives remain available.
+  {
+  win.HANDRAW_SHARED.App.state.loggedIn=true;win.HANDRAW_SHARED.App.state.serverBacked=true;
+  api.switchScope("user_summary_receipt");
+  const complete={id:"summary-receipt",articleTitle:"Saved title",markdown:"Full saved text",cards:[{id:"cover",role:"cover",prompt:"cat"}],createdAtMs:1,updatedAtMs:100};
+  const summaryOf=article=>({id:article.id,articleTitle:article.articleTitle,updatedAtMs:article.updatedAtMs,_summary:true,cards:[]});
+  const response=value=>({ok:true,status:200,json:async()=>value});
+  const archived={id:"old-recovery",markdown:"An older private backup",cards:[]};
+  api.writeScopedCache("handraw_article_conflict_backup_v1",{articles:[archived]});
+  setPrivateState({myArticles:[{...complete,updatedAtMs:900}]});
+  let detailCount=0,postCount=0;
+  fetchHandler=async(url,opts)=>{
+    if(opts?.method==="POST") {postCount++;const article=JSON.parse(opts.body).articles[0];assert.equal(article.baseUpdatedAtMs,100);return response({ok:true,versions:{[article.id]:101},writeSequences:{[article.id]:2}});}
+    if(url.includes("workspace")) return response({loggedIn:true,articles:[summaryOf(complete)]});
+    detailCount++;return response({article:{...complete,cards:[{prompt:"cat",role:"cover",id:"cover",status:"done",imageUrl:"/image.webp"}]}});
+  };
+  await api.hydrateCloudStudioWorkspace();assert.equal(detailCount,1);
+  assert.equal(win.CS.myArticles[0].markdown,"Full saved text");
+  assert.equal(await api.flushCloudArticlesSync(complete.id),true);assert.equal(postCount,0);
+  win.CS.myArticles[0].articleTitle="Edited title";
+  assert.equal(await api.flushCloudArticlesSync(complete.id),true);assert.equal(postCount,1);
+  assert.equal(win.CS.myArticles[0].updatedAtMs,101);
+  assert.equal(api.readScopedCache("handraw_my_articles_v1")[0]._cloudUpdatedAtMs,101);
+  assert.equal(api.readScopedCache("handraw_article_conflict_backup_v1").articles[0].markdown,archived.markdown);
+
+  // 31: Reloading the account uses its persisted save receipt. No full-body
+  // request or spurious write is needed for a known, unchanged cloud version.
+  api.switchScope("receipt_reload_other");api.switchScope("user_summary_receipt");
+  fetchHandler=async(url)=>{assert.ok(url.includes("workspace"));return response({loggedIn:true,articles:[{...summaryOf(complete),updatedAtMs:101}]});};
+  await api.hydrateCloudStudioWorkspace();assert.equal(win.CS.myArticles[0].articleTitle,"Edited title");
+  assert.equal(await api.flushCloudArticlesSync(complete.id),true);
+
+  // 32: Offline edits may resume against their acknowledged base, while a
+  // truly newer cloud document is protected and other articles can still save.
+  api.switchScope("user_offline_conflicts");
+  const offline={...complete,id:"offline",markdown:"Offline edit",_cloudUpdatedAtMs:100,_cloudDirty:true};
+  const conflicting={...complete,id:"changed-elsewhere",markdown:"Private unsaved edit",_cloudUpdatedAtMs:100,_cloudDirty:true};
+  setPrivateState({myArticles:[offline,conflicting]});
+  const remoteConflict={...complete,id:conflicting.id,markdown:"New cloud edit",updatedAtMs:200};
+  const savedOffline=[];
+  fetchHandler=async(url,opts)=>{
+    if(opts?.method==="POST") {const articles=JSON.parse(opts.body).articles;savedOffline.push(...articles);return response({ok:true,versions:Object.fromEntries(articles.map(a=>[a.id,201]))});}
+    if(url.includes("workspace")) return response({loggedIn:true,articles:[summaryOf(offline),summaryOf(remoteConflict)]});
+    assert.ok(url.endsWith(conflicting.id));return response({article:remoteConflict});
+  };
+  await api.hydrateCloudStudioWorkspace();
+  assert.equal(await api.flushCloudArticlesSync(offline.id),true);
+  assert.equal(savedOffline.length,1);assert.equal(savedOffline[0].baseUpdatedAtMs,100);
+  assert.equal(savedOffline[0].markdown,"Offline edit");
+  assert.equal(await api.flushCloudArticlesSync(conflicting.id),false);
+  assert.equal(api.readScopedCache("handraw_article_conflict_backup_v1").articles[0].markdown,"Private unsaved edit");
+  assert.equal(win.CS.myArticles.find(a=>a.id===conflicting.id).markdown,"Private unsaved edit");
+
+  // 33: An atomic batch conflict names its article; unrelated writes retry
+  // with their original concurrency tokens after that transaction rolls back.
+  api.switchScope("user_batch_conflict_isolation");
+  setPrivateState({myArticles:[{...complete,id:"batch-bad"},{...complete,id:"batch-good"}]});
+  const attempts=[];
+  fetchHandler=async(url,opts)=>{
+    const articles=JSON.parse(opts.body).articles;attempts.push(articles);
+    if(attempts.length===1) return {ok:false,status:409,json:async()=>({code:"article_version_conflict",articleId:"batch-bad"})};
+    return response({ok:true,versions:{"batch-good":300}});
+  };
+  assert.equal(await api.flushCloudArticlesSync("batch-good"),true);
+  assert.deepEqual(attempts.map(a=>a.map(b=>b.id)),[["batch-bad","batch-good"],["batch-good"]]);
+  assert.equal(attempts[1][0].baseUpdatedAtMs,0);
+  assert.equal(await api.flushCloudArticlesSync("batch-bad"),false);
+
+  // 34: An older hydration completing after a newer one must not regress its
+  // baseline or overwrite the article loaded by the newer request.
+  api.switchScope("user_hydration_race");setPrivateState({myArticles:[{...complete}]});
+  let releaseOldRead,workspaceReads=0;
+  fetchHandler=async(url)=>{
+    if(url.includes("workspace")) {workspaceReads++;return response({loggedIn:true,articles:[{...summaryOf(complete),updatedAtMs:workspaceReads===1?100:200}]});}
+    if(workspaceReads===1) {await new Promise(resolve=>releaseOldRead=resolve);return response({article:complete});}
+    return response({article:{...complete,updatedAtMs:200}});
+  };
+  const oldHydration=api.hydrateCloudStudioWorkspace();
+  while(!releaseOldRead) await new Promise(resolve=>setImmediate(resolve));
+  await api.hydrateCloudStudioWorkspace();releaseOldRead();await oldHydration;
+  assert.equal(win.CS.myArticles[0]._cloudUpdatedAtMs,200);
+  win.CS.myArticles[0].markdown="After the latest hydration";
+  fetchHandler=async(url,opts)=>{const article=JSON.parse(opts.body).articles[0];assert.equal(article.baseUpdatedAtMs,200);return response({ok:true,versions:{[article.id]:201}});};
+  assert.equal(await api.flushCloudArticlesSync(complete.id),true);
+
+  // 35: Typing while a legacy cache's detail read is outstanding remains a
+  // local edit and saves against the verified cloud base, not an empty summary.
+  api.switchScope("user_edit_during_hydration");const typing={...complete};setPrivateState({myArticles:[typing]});
+  let releaseDetail;
+  fetchHandler=async(url)=>{
+    if(url.includes("workspace")) return response({loggedIn:true,articles:[summaryOf(complete)]});
+    await new Promise(resolve=>releaseDetail=resolve);return response({article:complete});
+  };
+  const reading=api.hydrateCloudStudioWorkspace();while(!releaseDetail) await new Promise(resolve=>setImmediate(resolve));
+  typing.markdown="Typed while loading";
+  let hydratedPosts=0;
+  fetchHandler=async(url,opts)=>{hydratedPosts++;const article=JSON.parse(opts.body).articles[0];assert.equal(article.baseUpdatedAtMs,100);assert.equal(article.markdown,"Typed while loading");return response({ok:true,versions:{[article.id]:101}});};
+  const waitingSave=api.flushCloudArticlesSync(complete.id);
+  await new Promise(resolve=>setImmediate(resolve));assert.equal(hydratedPosts,0,"Saving waits for its cloud baseline instead of sending zero");
+  releaseDetail();await reading;
+  assert.equal(win.CS.myArticles[0].markdown,"Typed while loading");
+  assert.equal(await waitingSave,true);assert.equal(hydratedPosts,1);
+  win.HANDRAW_SHARED.App.state.serverBacked=false;
+  }
+
+  console.log("All studio generation, document isolation, save and history tests passed (35/35).");
 })().catch((err) => {
   console.error(err);
   process.exit(1);

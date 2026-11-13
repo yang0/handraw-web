@@ -39,10 +39,10 @@ _RUNTIME_CARD_FIELDS = {
 }
 
 
-def _error(message, *, status=400, code="invalid_article"):
+def _error(message, *, status=400, code="invalid_article", extra=None):
     from .services import ServiceError
 
-    return ServiceError(message, status=status, code=code)
+    return ServiceError(message, status=status, code=code, extra=extra)
 
 
 def _json(value):
@@ -265,6 +265,7 @@ def save_articles(db, user, articles):
                         "文章已经删除，请另存为新文章",
                         status=409,
                         code="article_deleted",
+                        extra={"articleId": aid},
                     )
                 continue
             title = str(art.get("articleTitle") or "未命名文章")[:140]
@@ -324,6 +325,7 @@ def save_articles(db, user, articles):
                             "文章在另一窗口已更新，本地稿未覆盖云端",
                             status=409,
                             code="article_version_conflict",
+                            extra={"articleId": aid},
                         )
             stamp = (
                 int(row["updated_at_ms"])

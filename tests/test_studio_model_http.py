@@ -88,6 +88,45 @@ class StudioModelHTTPTests(unittest.TestCase):
         except urllib.error.HTTPError as response:
             return response.code, json.load(response)
 
+    def test_article_conflict_identifies_document_and_rolls_back_whole_batch(self):
+        articles = [
+            {"id": aid, "articleTitle": aid, "markdown": "original", "cards": []}
+            for aid in ("healthy", "stale")
+        ]
+        status, first = self.request("/api/studio/articles", {"articles": articles})
+        self.assertEqual(status, 200)
+        status, error = self.request(
+            "/api/studio/articles",
+            {
+                "articles": [
+                    {
+                        **articles[0],
+                        "markdown": "new text",
+                        "baseUpdatedAtMs": first["versions"]["healthy"],
+                    },
+                    {**articles[1], "markdown": "stale text", "baseUpdatedAtMs": 0},
+                ]
+            },
+        )
+        self.assertEqual(status, 409)
+        self.assertEqual(error["code"], "article_version_conflict")
+        self.assertEqual(error["articleId"], "stale")
+        _, stored = self.request("/api/studio/articles/healthy")
+        self.assertEqual(stored["article"]["markdown"], "original")
+        status, _ = self.request(
+            "/api/studio/articles",
+            {
+                "articles": [
+                    {
+                        **articles[0],
+                        "markdown": "new text",
+                        "baseUpdatedAtMs": first["versions"]["healthy"],
+                    },
+                ]
+            },
+        )
+        self.assertEqual(status, 200)
+
     def save_article(self, aid):
         return self.request(
             "/api/studio/articles",

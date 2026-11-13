@@ -168,6 +168,7 @@ test("Issue #62: Article Deletion in Editor, Profile, and History Pagination", a
       flushUnifiedArticleEditor: () => calls.push("flush"),
       removeArticleFromWorkspace: id => calls.push("remove:" + id),
       _articleCloudBases: new Map(), _articleCloudSnapshots: new Map(),
+      _articleConflictIds: new Set(), _articlesCloudConflict:false,
       persistMyArticles() {}, persistOpenTabs() {},
       replaceArticleEditorUrl: id => calls.push("url:" + id),
       openMyArticlesPage: () => assert.fail("Deletion opened the list"),

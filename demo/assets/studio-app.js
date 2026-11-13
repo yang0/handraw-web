@@ -60,6 +60,10 @@
   let _articlesSyncVersion = 0;
   const _articleCloudBases = new Map();
   const _articleCloudSnapshots = new Map();
+  const _articleConflictIds = new Set();
+  let _articleHydrationVersion = 0;
+  let _articleHydrationPending = null;
+  let _articleHydrationFailed = false;
   let _articlesSyncPromise = null;
   let _articlesCloudConflict = false;
   let _articlesSyncedVersion = 0;
@@ -215,6 +219,9 @@
     _articlesSyncVersion = 0;
     _articleCloudBases.clear();
     _articleCloudSnapshots.clear();
+    _articleConflictIds.clear();
+    _articleHydrationPending = null;
+    _articleHydrationFailed = false;
     _articlesDeleting.clear();
     _articlesSyncPromise = null;
     _articlesCloudConflict = false;
@@ -742,24 +749,50 @@
     };
   }
 
-  async function flushCloudArticlesSync() {
+  function rememberArticleConflict(article) {
+    if (!article || article._summary) return;
+    _articleConflictIds.add(String(article.id));
+    _articlesCloudConflict = true;
+    const saved = readJsonStorage(ARTICLE_CONFLICT_BACKUP_KEY, null);
+    const articles = (saved?.articles || []).filter(item => item.id !== article.id);
+    articles.push(JSON.parse(JSON.stringify(article)));
+    writeJsonStorage(ARTICLE_CONFLICT_BACKUP_KEY, {createdAt:Date.now(),articles,activeId:article.id});
+  }
+
+  function articleDocumentSignature(article) {
+    const {createdAtMs,runCount,...document} = articleCloudPayload(article);
+    const sorted = value => Array.isArray(value) ? value.map(sorted) : value && typeof value === "object"
+      ? Object.fromEntries(Object.keys(value).sort().map(key => [key,sorted(value[key])])) : value;
+    return JSON.stringify(sorted(document));
+  }
+
+  async function flushCloudArticlesSync(articleId = "") {
     if (!App.state?.serverBacked || !App.state?.loggedIn) return true;
-    if (_articlesCloudConflict) return false;
+    const waitingScope=activeCacheScope,waitingEpoch=cacheScopeEpoch;
+    while (_articleHydrationPending) await _articleHydrationPending;
+    if (isStaleScope(waitingEpoch,waitingScope)) return false;
+    if (_articleHydrationFailed) {
+      await hydrateCloudStudioWorkspace();
+      while (_articleHydrationPending) await _articleHydrationPending;
+      if (isStaleScope(waitingEpoch,waitingScope) || _articleHydrationFailed) return false;
+    }
+    const targetSaved = () => articleId ? !_articleConflictIds.has(String(articleId)) : !_articleConflictIds.size;
+    if (articleId && !targetSaved()) return false;
     if (_articlesSyncTimer) clearTimeout(_articlesSyncTimer);
     _articlesSyncTimer = null;
-    if (_articlesSyncPromise) return _articlesSyncPromise;
+    if (_articlesSyncPromise) return (await _articlesSyncPromise) && targetSaved();
     const requestScope = activeCacheScope, requestEpoch = cacheScopeEpoch;
     const sameScope = () => requestScope === activeCacheScope && requestEpoch === cacheScopeEpoch;
     _articlesSyncInFlight = true;
     const operation = (async () => {
       try {
         while (sameScope()) {
-          const changed = (CS.myArticles || []).filter(article=>!article._summary && !_articlesDeleting.has(article.id)).map(articleCloudPayload)
+          const changed = (CS.myArticles || []).filter(article=>!article._summary && !_articlesDeleting.has(article.id) && !_articleConflictIds.has(String(article.id))).map(articleCloudPayload)
             .filter(article => _articleCloudSnapshots.get(String(article.id)) !== JSON.stringify(article))
             .slice(0, 50);
           if (!changed.length) {
             _articlesSyncedVersion = _articlesSyncVersion;
-            setArticlesSyncStatus("synced");
+            setArticlesSyncStatus(_articlesCloudConflict ? "conflict" : "synced");
             return true;
           }
           setArticlesSyncStatus("syncing");
@@ -771,12 +804,11 @@
           const result = await response.json().catch(() => ({}));
           if (!sameScope()) return false;
           if (response.status === 409) {
-            _articlesCloudConflict = true;
-            writeJsonStorage(ARTICLE_CONFLICT_BACKUP_KEY, { createdAt: Date.now(),
-              articles: JSON.parse(JSON.stringify(CS.myArticles || [])), activeId: CS.activeArticleId || "" });
+            const ids = changed.some(article => article.id === result.articleId) ? [result.articleId] : changed.map(article => article.id);
+            for (const id of ids) rememberArticleConflict(findArticleById(id));
             setArticlesSyncStatus("conflict");
-            toast("另一窗口已更新文章，已保留本地稿并停止覆盖。请合并内容或另存为新文章。");
-            return false;
+            toast("文章已在另一窗口更新，本地稿已备份。这篇文章可恢复为副本，其他文章仍可保存。");
+            continue;
           }
           if (!response.ok || !result.ok) {
             setArticlesSyncStatus("failed");
@@ -790,7 +822,19 @@
             }
             _articleCloudBases.set(id, Number(result.versions[id]));
             _articleCloudSnapshots.set(id, JSON.stringify(article));
+            const local = findArticleById(id);
+            if (local) {
+              local._cloudUpdatedAtMs = Number(result.versions[id]);
+              delete local._cloudNew;
+              local.writeSeq = result.writeSequences?.[id] ?? local.writeSeq;
+              local._cloudDirty = JSON.stringify(articleCloudPayload(local)) !== JSON.stringify(article);
+              if (!local._cloudDirty) {
+                local.updatedAtMs = local._cloudUpdatedAtMs;
+                local.timeLabel = formatArticleTimeLabel(local.updatedAtMs);
+              }
+            }
           }
+          _articleLocalSaveFailed = !writeJsonStorage(MY_ARTICLES_STORAGE_KEY,CS.myArticles);
         }
         return false;
       } catch (_) {
@@ -799,7 +843,7 @@
       }
     })();
     _articlesSyncPromise = operation;
-    try { return await operation; }
+    try { return (await operation) && targetSaved(); }
     finally {
       if (_articlesSyncPromise === operation) {
         _articlesSyncPromise = null;
@@ -811,7 +855,6 @@
   function scheduleCloudArticlesSync() {
     if (!App.state?.serverBacked || !App.state?.loggedIn) { setArticlesSyncStatus("local"); return; }
     _articlesSyncVersion += 1;
-    if (_articlesCloudConflict) { setArticlesSyncStatus("conflict"); return; }
     setArticlesSyncStatus("pending");
     if (_articlesSyncTimer) clearTimeout(_articlesSyncTimer);
     _articlesSyncTimer = setTimeout(() => { void flushCloudArticlesSync(); }, 450);
@@ -819,7 +862,7 @@
 
   async function selectArticleCardImage(target, card, imageUrl) {
     if (App.state?.serverBacked && App.state?.loggedIn) {
-      if (!(await flushCloudArticlesSync())) throw new Error("文章尚未保存到云端");
+      if (!(await flushCloudArticlesSync(target.art.id))) throw new Error("文章尚未保存到云端");
       const result = await S.apiJson(`/api/studio/articles/${encodeURIComponent(target.art.id)}`, {});
       const current = result?.article?.cards?.find(item => item.id === card.id);
       if (!current) throw new Error("配图位已删除");
@@ -871,8 +914,9 @@
     if(previous && !previous._summary && _articleCloudSnapshots.has(id) &&
         JSON.stringify(articleCloudPayload(previous))!==_articleCloudSnapshots.get(id))
       throw new Error("当前文章有未保存内容，请先保存后再重新载入");
-    CS.myArticles=(CS.myArticles || []).map(item=>item.id===id?{...article,_summary:false}:item);
-    if(!previous) CS.myArticles.push({...article,_summary:false});
+    const loaded={...article,_summary:false,_cloudUpdatedAtMs:Number(article.updatedAtMs),_cloudDirty:false};
+    CS.myArticles=(CS.myArticles || []).map(item=>item.id===id?loaded:item);
+    if(!previous) CS.myArticles.push(loaded);
     _articleCloudBases.set(id,Number(article.updatedAtMs));
     _articleCloudSnapshots.set(id,JSON.stringify(payload));
     writeJsonStorage(MY_ARTICLES_STORAGE_KEY,CS.myArticles);
@@ -883,6 +927,13 @@
     if (!App.state || !App.state.serverBacked) return;
     const requestScope = activeCacheScope;
     const requestEpoch = cacheScopeEpoch;
+    const hydrationVersion = collection ? _articleHydrationVersion : ++_articleHydrationVersion;
+    const sameRequest = () => requestScope === activeCacheScope && requestEpoch === cacheScopeEpoch &&
+      (collection || hydrationVersion === _articleHydrationVersion);
+    const initialArticles = new Map((CS.myArticles || []).map(article => [article.id,article]));
+    const initialBases = new Map(_articleCloudBases);
+    let finishHydration;
+    if (!collection) _articleHydrationPending = new Promise(resolve => {finishHydration=resolve;});
     if (!collection && _workspaceHydrationController) {
       try {
         _workspaceHydrationController.abort();
@@ -896,10 +947,10 @@
       });
       if (!resp.ok) throw new Error("云端记录载入失败，请重试");
       const ws = await resp.json();
-      if (requestScope !== activeCacheScope || requestEpoch !== cacheScopeEpoch) return;
+      if (!sameRequest()) return;
       while(ws.articleCursor) {
         const page=await S.apiJson(`/api/studio/articles?page=1&cursor=${encodeURIComponent(ws.articleCursor)}`);
-        if(requestScope!==activeCacheScope||requestEpoch!==cacheScopeEpoch) return;
+        if(!sameRequest()) return;
         ws.articles.push(...(page.items||[]));ws.articleCursor=page.nextCursor;
       }
       if(collection) _workspaceCollectionsReady.add(collection);
@@ -937,72 +988,78 @@
 
         if (Array.isArray(ws.articles)) {
           ensureMyArticlesInitialized();
-          const conflictBackup = readJsonStorage(ARTICLE_CONFLICT_BACKUP_KEY, null);
-          if (conflictBackup?.articles?.length) {
-            _articlesCloudConflict = true;
-            setArticlesSyncStatus("conflict");
-          }
+          // A recovery archive is not an active conflict. Resolve document
+          // changes against receipts, never against a summary's missing body.
           const serverIds = new Set(ws.articles.map((a) => a.id));
           const artMap = new Map();
-          ws.articles.forEach((ra) => {
-            if (!ra || !ra.id) return;
-            _articleCloudBases.set(String(ra.id), Number(ra.updatedAtMs) || 0);
-            if(!ra._summary) _articleCloudSnapshots.set(String(ra.id), JSON.stringify(articleCloudPayload(ra)));
-            const prev = (CS.myArticles || []).find((a) => a.id === ra.id);
-            // A newer local/offline draft must be recoverable before the
-            // cloud workspace replaces its in-memory representation.
-            if (prev && !prev._summary && Number(prev.updatedAtMs || 0) > Number(ra.updatedAtMs || 0) &&
-                (String(prev.markdown || "") !== String(ra.markdown || "") ||
-                 JSON.stringify(prev.cards || []) !== JSON.stringify(ra.cards || []))) {
-              const saved = readJsonStorage(ARTICLE_CONFLICT_BACKUP_KEY, null);
-              const copy = saved?.articles?.length ? saved.articles.filter((a) => a.id !== prev.id) : [];
-              copy.push(JSON.parse(JSON.stringify(prev)));
-              writeJsonStorage(ARTICLE_CONFLICT_BACKUP_KEY, {
-                createdAt: Date.now(), articles: copy, activeId: prev.id
-              });
-              _articlesCloudConflict = true;
-              setArticlesSyncStatus("conflict");
+          const details = new Map(),readSignatures = new Map();
+          // Finish reads before committing any receipt or replacing cached
+          // documents. A failed/stale read must not advance a save baseline.
+          for (const summary of ws.articles) {
+            const prev=findArticleById(summary?.id),version=Number(summary?.updatedAtMs)||0;
+            if (!summary?._summary || !prev || prev._summary || !initialArticles.has(summary.id) ||
+                Number(_articleCloudBases.get(String(summary.id)))>version || prev._cloudUpdatedAtMs===version ||
+                (prev._cloudUpdatedAtMs!=null && !prev._cloudDirty)) continue;
+            readSignatures.set(summary.id,articleDocumentSignature(prev));
+            const detail=(await S.apiJson(`/api/studio/articles/${encodeURIComponent(summary.id)}`)).article;
+            if (!sameRequest()) return;
+            if (!detail) throw new Error("文章详情载入失败，请重试");
+            details.set(summary.id,detail);
+          }
+          for (const summary of ws.articles) {
+            if (!summary?.id) continue;
+            const id=String(summary.id),version=Number(summary.updatedAtMs)||0;
+            let prev=findArticleById(id),remote=summary;
+            // A save accepted after this list request takes precedence over
+            // its stale summary, including a just-created document.
+            if (prev && (!initialArticles.has(id) || Number(_articleCloudBases.get(id))>version)) {
+              artMap.set(id,prev);continue;
             }
-            artMap.set(ra.id, {
-              ...(prev || {}),
-              id: ra.id,
-              articleTitle: ra.articleTitle || "未命名文章",
-              _summary:Boolean(ra._summary),
-              illustrationCount:ra.illustrationCount,selectedImageCount:ra.selectedImageCount,
-              settings:ra.settings||{},coverRatio:ra.coverRatio||"2.35:1",inlineRatio:ra.inlineRatio||"4:3",
-              markdown: ra.markdown || "",
-              cards: Array.isArray(ra.cards) ? ra.cards : [],
-              style1: ra.style1 || "",
-              layout: ra.layout || "",
-              status: ra.status || "ready",
-              runCount: Number(ra.runCount) || 0,
-              createdAtMs: Number(ra.createdAtMs) || Date.now(),
-              updatedAtMs: Number(ra.updatedAtMs) || Date.now(),
-              timeLabel: typeof formatArticleTimeLabel === "function" ? formatArticleTimeLabel(Number(ra.updatedAtMs) || Date.now()) : "近期"
-            });
-            if(ra._summary && prev && !prev._summary && Number(prev.updatedAtMs)===Number(ra.updatedAtMs))
-              artMap.set(ra.id,prev);
-
-          });
+            if (prev && !prev._summary && prev._cloudUpdatedAtMs===version) {
+              _articleCloudBases.set(id,version);
+              if (!prev._cloudDirty) _articleCloudSnapshots.set(id,JSON.stringify(articleCloudPayload(prev)));
+              artMap.set(id,prev);continue;
+            }
+            if (prev && !prev._summary && (prev._cloudUpdatedAtMs==null || prev._cloudDirty)) {
+              const before=readSignatures.get(id) || articleDocumentSignature(prev);
+              remote=details.get(id) || summary;
+              if (Number(_articleCloudBases.get(id))>Number(remote.updatedAtMs)) {artMap.set(id,prev);continue;}
+              if (before!==articleDocumentSignature(remote) && prev._cloudUpdatedAtMs!==Number(remote.updatedAtMs)) {
+                rememberArticleConflict(prev);
+                artMap.set(id,prev);
+                continue;
+              }
+              if (before!==articleDocumentSignature(prev)) {
+                prev={...prev,_cloudUpdatedAtMs:Number(remote.updatedAtMs),_cloudDirty:true};
+                _articleCloudBases.set(id,Number(remote.updatedAtMs));
+                _articleCloudSnapshots.set(id,JSON.stringify(articleCloudPayload(remote)));
+                artMap.set(id,prev);continue;
+              }
+            }
+            const loaded={...remote,_summary:Boolean(remote._summary),
+              _cloudUpdatedAtMs:Number(remote.updatedAtMs)||0,_cloudDirty:false,
+              timeLabel:formatArticleTimeLabel(Number(remote.updatedAtMs)||Date.now())};
+            _articleCloudBases.set(id,loaded._cloudUpdatedAtMs);
+            if (!loaded._summary) _articleCloudSnapshots.set(id,JSON.stringify(articleCloudPayload(loaded)));
+            else _articleCloudSnapshots.delete(id);
+            artMap.set(id,loaded);
+          }
           (CS.myArticles || []).forEach((a) => {
             if (!a || !a.id || serverIds.has(a.id)) return;
-            if (a.isNewDraft) {
+            if (a.isNewDraft || a._cloudNew || !initialArticles.has(a.id) || _articlesDeleting.has(a.id) ||
+                _articleCloudBases.get(String(a.id))!==initialBases.get(String(a.id))) {
               artMap.set(a.id, a);
               return;
             }
-            // Could be an offline-created article or one deleted remotely.
-            // Preserve a private recoverable copy; never resurrect it silently.
-            const saved = readJsonStorage(ARTICLE_CONFLICT_BACKUP_KEY, null);
-            const copies = (saved?.articles || []).filter((b) => b.id !== a.id);
-            copies.push(JSON.parse(JSON.stringify(a)));
-            writeJsonStorage(ARTICLE_CONFLICT_BACKUP_KEY, {
-              createdAt: Date.now(), articles: copies, activeId: a.id
-            });
-            _articlesCloudConflict = true;
-            setArticlesSyncStatus("conflict");
+            if (!a._summary && (a._cloudUpdatedAtMs==null || a._cloudDirty)) {
+              rememberArticleConflict(a);
+              artMap.set(a.id,a);
+            }
           });
           CS.myArticles = [...artMap.values()];
           writeJsonStorage(MY_ARTICLES_STORAGE_KEY, CS.myArticles);
+          _articlesCloudConflict = _articleConflictIds.size>0;
+          setArticlesSyncStatus(_articlesCloudConflict ? "conflict" : "synced");
         }
 
         if (Array.isArray(ws.uploads) && ws.uploads.length) {
@@ -1038,15 +1095,22 @@
         CS.savedWorkflows = [...customOnly, ...officialList];
         writeJsonStorage(SAVED_WORKFLOWS_KEY, CS.savedWorkflows);
       }
+      if (!collection && sameRequest()) _articleHydrationFailed=false;
     } catch (_) {
+      if (!collection && sameRequest()) {
+        _articleHydrationFailed=true;
+        setArticlesSyncStatus("failed");
+      }
       if(collection==="history" && !isStaleScope(requestEpoch,requestScope))
         CS.historyError="云端记录载入失败，请重试";
       // Abort and stale responses are expected during account switches. Do
       // not let an old account repopulate the newly selected cache scope.
     } finally {
-      if (requestScope === activeCacheScope && requestEpoch === cacheScopeEpoch) {
+      if (!collection && sameRequest()) {
         _workspaceHydrationController = null;
+        _articleHydrationPending = null;
       }
+      finishHydration?.();
     }
   }
 
@@ -4511,6 +4575,8 @@
 
   function persistMyArticles() {
     ensureMyArticlesInitialized();
+    for (const article of CS.myArticles) if (!article._summary)
+      article._cloudDirty = _articleCloudSnapshots.get(String(article.id)) !== JSON.stringify(articleCloudPayload(article));
     _articleLocalSaveFailed = !writeJsonStorage(MY_ARTICLES_STORAGE_KEY, CS.myArticles);
     if (_articlesCloudConflict) {
       // Keep entries omitted from the hydrated workspace; merge later edits
@@ -4518,7 +4584,7 @@
       const existing = readJsonStorage(ARTICLE_CONFLICT_BACKUP_KEY, null);
       const byId = new Map((existing?.articles || []).map(a => [a.id, a]));
       (CS.myArticles || []).forEach((a) => {
-        if (a && byId.has(a.id)) byId.set(a.id, JSON.parse(JSON.stringify(a)));
+        if (a && _articleConflictIds.has(String(a.id)) && byId.has(a.id)) byId.set(a.id, JSON.parse(JSON.stringify(a)));
       });
       writeJsonStorage(ARTICLE_CONFLICT_BACKUP_KEY, {
         createdAt: Date.now(), articles: [...byId.values()],
@@ -5989,7 +6055,7 @@
 
       if (useLiveApi) {
         const refImages = card.refImages || [];
-        if (!(await flushCloudArticlesSync())) throw new Error("文章尚未保存到云端，请先处理保存状态");
+        if (!(await flushCloudArticlesSync(target.art.id))) throw new Error("文章尚未保存到云端，请先处理保存状态");
         const requestId = card.requestId = ensureStableRequestId(card.requestId, `article_${card.id || "card"}`);
         submittedRequestId = requestId;
         card.taskId = "";
@@ -12191,6 +12257,8 @@
     removeArticleFromWorkspace(aid);
     _articleCloudBases.delete(aid);
     _articleCloudSnapshots.delete(aid);
+    _articleConflictIds.delete(String(aid));
+    _articlesCloudConflict = _articleConflictIds.size > 0;
     persistMyArticles();
     persistOpenTabs();
     if (editing && wasActive) {
@@ -12228,7 +12296,7 @@
           if (!App.state?.serverBacked || !App.state?.loggedIn)
             return {ok:true,id:aid,deleted:true};
           // A new local article needs its first server receipt before DELETE.
-          if (!_articleCloudBases.has(aid) && !(await flushCloudArticlesSync()))
+          if (!_articleCloudBases.has(aid) && !(await flushCloudArticlesSync(aid)))
             throw new Error("文章尚未同步成功，请重试删除。本地稿已保留");
           if (isStaleScope(epoch, scope)) throw new Error("账号已切换，请重新打开文章");
           _articlesDeleting.add(aid);
@@ -13221,6 +13289,7 @@
       draft.isNewDraft = false;
       targetArt = {
         id: newId,
+        _cloudNew: true,
         title: title || "未命名文章",
         articleTitle: title || "未命名文章",
         markdown: md,
@@ -13292,12 +13361,23 @@
             copy.isNewDraft = false;
             copy.createdAtMs = Date.now();
             copy.updatedAtMs = Date.now();
+            delete copy._cloudUpdatedAtMs;
+            copy._cloudNew = true;
+            copy._cloudDirty = true;
+            if (_articleConflictIds.has(String(source.id))) {
+              // The recovered copy owns the local edits. Reload the original
+              // from the server when opened instead of resubmitting that draft.
+              const original=findArticleById(source.id);
+              if (original) original._summary=true;
+              _articleCloudSnapshots.delete(String(source.id));
+            }
             CS.myArticles.unshift(copy);
             const remaining = items.filter((a) => a.id !== source.id);
             writeJsonStorage(ARTICLE_CONFLICT_BACKUP_KEY, remaining.length ? {
               createdAt: Date.now(), articles: remaining, activeId: remaining[0].id
             } : null);
-            _articlesCloudConflict = remaining.length > 0;
+            _articleConflictIds.delete(String(source.id));
+            _articlesCloudConflict = _articleConflictIds.size > 0;
             S.closeModal();
             persistMyArticles();
             openUnifiedArticleEditor(copy.id, {renderNow:true});
@@ -15335,21 +15415,21 @@
       const retry = DOM.previewStage.querySelector("#editor-sync-retry");
       const remote = Boolean(App.state?.serverBacked && App.state?.loggedIn);
       if (retry) {
-        retry.hidden = !remote || !["failed", "conflict"].includes(_articlesSyncStatus);
-        retry.textContent = _articlesSyncStatus === "conflict" ? "恢复为新文章" : "重试云端同步";
+        retry.hidden = !remote || (!_articleConflictIds.has(String(draft.id)) && _articlesSyncStatus !== "failed");
+        retry.textContent = _articleConflictIds.has(String(draft.id)) ? "恢复为新文章" : "重试云端同步";
       }
       if (state === "dirty") el.textContent = "本地保存中…";
       else if (state === "empty") el.textContent = "未填写";
       else if (!remote || _articlesSyncStatus === "local") el.textContent = _articleLocalSaveFailed ? "本地保存失败" : "已保存到此浏览器";
-      else if (_articlesSyncStatus === "conflict") el.textContent = _articleLocalSaveFailed ? "版本冲突 · 本地保存失败" : "版本冲突 · 本地稿已保留，云端未覆盖";
+      else if (_articleConflictIds.has(String(draft.id))) el.textContent = _articleLocalSaveFailed ? "版本冲突 · 本地保存失败" : "版本冲突 · 本地稿已保留，云端未覆盖";
       else if (_articlesSyncStatus === "failed") el.textContent = _articleLocalSaveFailed ? "保存失败 · 请重试" : "本地已保存 · 云端同步失败";
       else if (_articlesSyncStatus === "pending" || _articlesSyncStatus === "syncing") el.textContent = "正在同步云端…";
-      else if (_articlesSyncStatus === "synced") el.textContent = "已同步到云端";
+      else if (_articlesSyncStatus === "synced" || _articlesSyncStatus === "conflict") el.textContent = "已同步到云端";
       else el.textContent = "已保存到此浏览器 · 云端状态待确认";
     };
     const syncRetryBtn = DOM.previewStage.querySelector("#editor-sync-retry");
     if (syncRetryBtn) syncRetryBtn.onclick = () => {
-      if (_articlesCloudConflict) {
+      if (_articleConflictIds.has(String(draft.id))) {
         restoreArticleConflictBackup();
         return;
       }
@@ -15434,7 +15514,7 @@
       saveButton.textContent = "保存中…";
       saveButton.setAttribute("aria-busy", "true");
       const savedInputVersion = editorInputVersion;
-      const synced = remote && await flushCloudArticlesSync();
+      const synced = remote && await flushCloudArticlesSync(draft.id);
       if (!isCurrentEditor()) return;
       saveButton.disabled = false;
       saveButton.removeAttribute("aria-busy");
@@ -15446,7 +15526,7 @@
       saveButton.textContent = synced || (!remote && !_articleLocalSaveFailed) ? "已保存" : "重试保存";
       updateSavedState("saved");
       if (synced) toast("文章已保存到云端");
-      else if (_articlesCloudConflict) toast(_articleLocalSaveFailed ? "文章保存冲突，本地保存也未成功" : "文章已保留在本机，请处理云端冲突");
+      else if (_articleConflictIds.has(String(draft.id))) toast(_articleLocalSaveFailed ? "文章保存冲突，本地保存也未成功" : "文章已保留在本机，请处理云端冲突");
       else if (_articleLocalSaveFailed) toast("文章保存失败，请重试");
       else toast(remote ? "文章已保存到本机，云端同步失败" : "文章已保存到此浏览器");
     };
