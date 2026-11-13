@@ -90,20 +90,21 @@ class Fix65SmallDesignGapsTests(unittest.TestCase):
         self.assertTrue(res_ok.get("ok"))
 
     def test_03_seed_announcement_facts(self):
-        """Seed announcement has no '72h', and reflects accurate counts '360+' and '160+'."""
+        """Seed announcement explains separate accounts and lifetime signup quota."""
         announcement = DEFAULT_SITE_SETTINGS.get("announcement", {})
         text = str(announcement.get("text", ""))
 
         self.assertNotIn("72h", text)
-        self.assertIn("360+", text)
-        self.assertIn("160+", text)
+        self.assertIn("生图余额与社区积分独立记账", text)
+        self.assertIn("10张1K", text)
+        self.assertIn("规划免费", text)
+        self.assertNotIn("首晒立奖", text)
 
         # Also verify database seeded settings match
         db_settings = services.get_site_settings(self.db.get_conn())
         db_ann_text = str(db_settings.get("announcement", {}).get("text", ""))
         self.assertNotIn("72h", db_ann_text)
-        self.assertIn("360+", db_ann_text)
-        self.assertIn("160+", db_ann_text)
+        self.assertEqual(db_ann_text, text)
 
         # Default moderation setting in seed
         self.assertFalse(DEFAULT_SITE_SETTINGS.get("moderation", {}).get("allow_self_review_for_admin"))
