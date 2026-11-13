@@ -3504,6 +3504,22 @@ class HandrawRequestHandler(BaseHTTPRequestHandler):
     def _handle_post(self) -> None:
         parsed = urlparse(self.path)
         req_path = unquote(parsed.path)
+        if req_path == "/api/webhooks/xorpay":
+            self._body_consumed = True
+            from .billing import MAX_WEBHOOK_BYTES, process_xorpay_webhook
+            try:
+                hook_size = int(self.headers.get("Content-Length") or "0")
+            except ValueError as exc:
+                raise ServiceError("Content-Length 无效", status=400, code="invalid_content_length") from exc
+            if hook_size <= 0:
+                raise ServiceError("Webhook 请求体为空", status=400, code="empty_webhook_body")
+            if hook_size > MAX_WEBHOOK_BYTES:
+                raise ServiceError("Webhook 请求体过大", status=413, code="webhook_payload_too_large")
+            raw_hook_body = self.rfile.read(hook_size)
+            result = process_xorpay_webhook(self.db, raw_hook_body)
+            resp_text = str(result.get("response_body") or "ok")
+            self._send_bytes(resp_text.encode("utf-8"), "text/plain; charset=utf-8")
+            return
         if req_path == "/api/webhooks/creem":
             self._body_consumed = True
             from .billing import MAX_WEBHOOK_BYTES, process_creem_webhook

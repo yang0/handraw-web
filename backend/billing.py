@@ -1,4 +1,4 @@
-"""Creem credit recharge checkout, webhook verification, and order sync."""
+"""XorPay (and Creem) credit recharge checkout, webhook verification, and order sync."""
 from __future__ import annotations
 
 import datetime as _dt
@@ -45,13 +45,19 @@ def get_billing_public_state() -> dict[str, Any]:
     return get_public_billing_summary()
 
 
+def xorpay_sign(*args: str) -> str:
+    """Compute XorPay MD5 signature (UTF-8 concatenated strings, 32-char lowercase hex)."""
+    return hashlib.md5("".join(args).encode("utf-8")).hexdigest().lower()
+
+
 def _serialize_order(row: Any) -> dict[str, Any]:
     return {
         "id": str(row["id"]),
+        "provider": str(row["provider"] or "xorpay"),
         "packId": str(row["pack_id"]),
         "credits": int(row["credits"]),
         "amountCents": int(row["amount_cents"]),
-        "currency": str(row["currency"] or "USD"),
+        "currency": str(row["currency"] or "CNY"),
         "status": str(row["status"] or "pending"),
         "checkoutId": str(row["checkout_id"] or ""),
         "checkoutUrl": str(row["checkout_url"] or "") if row["status"] == "pending" else "",
@@ -130,6 +136,90 @@ def resolve_main_portal_origin(headers: Mapping[str, str], *, server_port: int |
 def _wallet_balance(conn: Any, user_id: int) -> int:
     row = conn.execute("SELECT balance FROM wallets WHERE user_id = ?", (int(user_id),)).fetchone()
     return int(row["balance"]) if row else 0
+
+
+def _xorpay_api_request(
+    method: str,
+    path: str,
+    data: dict[str, Any] | None = None,
+    *,
+    api_base: str = "https://xorpay.com",
+    timeout: float = 20.0,
+) -> dict[str, Any]:
+    url = f"{api_base.rstrip('/')}{path}"
+    data_bytes: bytes | None = None
+    if method.upper() == "POST" and data is not None:
+        data_bytes = urllib.parse.urlencode(data).encode("utf-8")
+    elif method.upper() == "GET" and data:
+        sep = "&" if "?" in url else "?"
+        url = f"{url}{sep}{urllib.parse.urlencode(data)}"
+
+    for attempt in range(2):
+        req = urllib.request.Request(
+            url,
+            data=data_bytes,
+            method=method.upper(),
+            headers={
+                "Accept": "application/json",
+                "Content-Type": "application/x-www-form-urlencoded",
+                "User-Agent": "HandrawWeb/2.0",
+                "Connection": "close",
+            },
+        )
+        started = _dt.datetime.now(_dt.timezone.utc)
+        try:
+            with open_url(req, timeout=timeout) as resp:
+                raw = resp.read().decode("utf-8")
+                parsed = json.loads(raw) if raw else {}
+                if not isinstance(parsed, dict):
+                    raise RuntimeError("Invalid XorPay response payload")
+                return parsed
+        except urllib.error.HTTPError as exc:
+            elapsed_ms = (_dt.datetime.now(_dt.timezone.utc) - started).total_seconds() * 1000
+            err_bytes = b""
+            try:
+                err_bytes = exc.read(16384)
+            except Exception:
+                pass
+            detail = extract_http_error_summary(err_bytes)
+            logger.warning(
+                "XorPay API error: method=%s path=%s status=%s elapsed_ms=%.1f body_len=%d detail=%s",
+                method.upper(),
+                path,
+                exc.code,
+                elapsed_ms,
+                len(err_bytes),
+                sanitize_log_text(detail, 260) or "none",
+            )
+            if local_debug_stacks_enabled():
+                trace_logger.warning(
+                    "XorPay API error trace: method=%s path=%s status=%s\n%s",
+                    method.upper(),
+                    path,
+                    exc.code,
+                    "".join(traceback.format_stack(limit=12)),
+                )
+            raise ServiceError("支付网关请求失败，请稍后重试", status=502, code="payment_gateway_error") from exc
+        except Exception as exc:
+            elapsed_ms = (_dt.datetime.now(_dt.timezone.utc) - started).total_seconds() * 1000
+            if attempt == 0 and isinstance(exc, (urllib.error.URLError, OSError, TimeoutError)):
+                logger.warning(
+                    "XorPay API transient transport error (retrying): method=%s path=%s elapsed_ms=%.1f err=%s",
+                    method.upper(),
+                    path,
+                    elapsed_ms,
+                    redact_sensitive_text(str(exc)),
+                )
+                continue
+            logger.exception(
+                "XorPay API transport failed: method=%s path=%s elapsed_ms=%.1f err=%s",
+                method.upper(),
+                path,
+                elapsed_ms,
+                redact_sensitive_text(str(exc)),
+            )
+            raise ServiceError("暂时无法连接支付网关，请稍后重试", status=502, code="payment_gateway_error") from exc
+    raise ServiceError("暂时无法连接支付网关，请稍后重试", status=502, code="payment_gateway_error")
 
 
 def _creem_api_base(api_key: str, test_mode: bool) -> str:
@@ -233,7 +323,7 @@ def verify_webhook_signature(raw_body: bytes, signature_header: str, secret: str
 
 
 def verify_creem_redirect_signature(query_string: str, api_key: str) -> bool:
-    """Verify Creem's redirect URL `signature` parameter (SHA-256 over pipe-delimited params + salt)."""
+    """Verify Creem's redirect URL `signature` parameter."""
     clean_query = str(query_string or "").lstrip("?").strip()
     if not clean_query or not api_key:
         return False
@@ -267,7 +357,6 @@ def verify_creem_redirect_signature(query_string: str, api_key: str) -> bool:
 
 
 def _creem_compatible_origin(origin: str) -> str:
-    """Rewrite numeric loopback IPs to `localhost` because Creem's URL validator rejects literal IPs."""
     parsed = urllib.parse.urlparse(origin)
     if (parsed.hostname or "").lower() in {"127.0.0.1", "::1"}:
         port_part = f":{parsed.port}" if parsed.port else ""
@@ -292,13 +381,147 @@ def create_checkout_order(
     if not package:
         raise ServiceError("无效的积分充值档位", status=400, code="invalid_package")
 
+    provider = str(cfg.get("provider") or "xorpay").strip().lower()
     uid = int(user["id"])
     order_id = f"ord_{uuid.uuid4().hex}"
     now = utc_now_iso()
-    main_origin = _creem_compatible_origin(resolve_main_portal_origin(request_headers, server_port=server_port))
-    redirect_url = f"{main_origin}/?view=wallet&order={urllib.parse.quote(order_id)}"
-    product_id = str(package["product_id"])
-    test_mode = bool(cfg.get("test_mode", True))
+    main_origin = resolve_main_portal_origin(request_headers, server_port=server_port)
+    test_mode = bool(cfg.get("test_mode", False))
+
+    if provider == "xorpay":
+        price_cents = int(package["price_cents"])
+        price_str = f"{price_cents / 100:.2f}"
+        pay_type = str(cfg.get("pay_type") or "alipay").strip().lower()
+        order_name = f"Handraw 积分充值 - {package['title']}"
+        notify_url = str(cfg.get("notify_url") or f"{main_origin}/api/webhooks/xorpay").strip()
+        aid = str(cfg["aid"]).strip()
+        app_secret = str(cfg["app_secret"]).strip()
+        api_base = str(cfg.get("api_base") or "https://xorpay.com").strip().rstrip("/")
+
+        sign = xorpay_sign(order_name, pay_type, price_str, order_id, notify_url, app_secret)
+        cashier_params = {
+            "name": order_name,
+            "pay_type": pay_type,
+            "price": price_str,
+            "order_id": order_id,
+            "notify_url": notify_url,
+            "sign": sign,
+        }
+        cashier_url = f"{api_base}/api/cashier/{aid}?" + urllib.parse.urlencode(cashier_params)
+
+        with db.transaction() as tx:
+            tx.execute(
+                """
+                INSERT INTO payment_orders (
+                    id, user_id, provider, pack_id, variant_id, credits, amount_cents, currency,
+                    status, checkout_id, checkout_url, provider_order_id, provider_order_number,
+                    test_mode, meta_json, created_at, updated_at, paid_at
+                ) VALUES (?, ?, 'xorpay', ?, ?, ?, ?, ?, 'pending', '', ?, '', '', ?, ?, ?, ?, NULL)
+                """,
+                (
+                    order_id,
+                    uid,
+                    clean_pack_id,
+                    clean_pack_id,
+                    int(package["credits"]),
+                    price_cents,
+                    str(cfg["currency"]),
+                    cashier_url,
+                    1 if test_mode else 0,
+                    json.dumps(
+                        {
+                            "packTitle": package["title"],
+                            "payType": pay_type,
+                            "priceStr": price_str,
+                            "cashierUrl": cashier_url,
+                        },
+                        ensure_ascii=False,
+                    ),
+                    now,
+                    now,
+                ),
+            )
+
+        pay_payload = {
+            "name": order_name,
+            "pay_type": pay_type,
+            "price": price_str,
+            "order_id": order_id,
+            "notify_url": notify_url,
+            "sign": sign,
+        }
+
+        try:
+            res = _xorpay_api_request("POST", f"/api/pay/{aid}", pay_payload, api_base=api_base)
+        except Exception:
+            with db.transaction() as tx:
+                tx.execute(
+                    "UPDATE payment_orders SET status = 'failed', updated_at = ? WHERE id = ? AND status = 'pending'",
+                    (utc_now_iso(), order_id),
+                )
+            raise
+
+        res_status = str(res.get("status") or "").strip().lower()
+        if res_status == "fee_error":
+            with db.transaction() as tx:
+                tx.execute(
+                    "UPDATE payment_orders SET status = 'failed', updated_at = ? WHERE id = ? AND status = 'pending'",
+                    (utc_now_iso(), order_id),
+                )
+            raise ServiceError("XorPay 平台手续费余额不足，请前往商户后台 xorpay.com 充值平台手续费", status=502, code="xorpay_fee_error")
+
+        if res_status != "ok":
+            with db.transaction() as tx:
+                tx.execute(
+                    "UPDATE payment_orders SET status = 'failed', updated_at = ? WHERE id = ? AND status = 'pending'",
+                    (utc_now_iso(), order_id),
+                )
+            msg = str(res.get("msg") or res.get("status") or "未知网关错误")
+            raise ServiceError(f"支付网关下单失败：{msg}", status=502, code="payment_gateway_error")
+
+        info = res.get("info") if isinstance(res.get("info"), dict) else {}
+        aoid = str(info.get("aoid") or "").strip()
+        qr = str(info.get("qr") or "").strip()
+
+        updated_at = utc_now_iso()
+        with db.transaction() as tx:
+            tx.execute(
+                """
+                UPDATE payment_orders
+                SET checkout_id = ?, checkout_url = ?, meta_json = ?, updated_at = ?
+                WHERE id = ?
+                """,
+                (
+                    aoid,
+                    cashier_url,
+                    json.dumps(
+                        {
+                            "packTitle": package["title"],
+                            "payType": pay_type,
+                            "priceStr": price_str,
+                            "cashierUrl": cashier_url,
+                            "aoid": aoid,
+                            "qr": qr,
+                        },
+                        ensure_ascii=False,
+                    ),
+                    updated_at,
+                    order_id,
+                ),
+            )
+            row = tx.execute("SELECT * FROM payment_orders WHERE id = ?", (order_id,)).fetchone()
+
+        return {
+            "ok": True,
+            "order": _serialize_order(row),
+            "checkoutUrl": cashier_url,
+            "qr": qr,
+        }
+
+    # Creem provider branch (backward compatibility)
+    creem_origin = _creem_compatible_origin(main_origin)
+    redirect_url = f"{creem_origin}/?view=wallet&order={urllib.parse.quote(order_id)}"
+    product_id = str(package.get("product_id") or "")
 
     with db.transaction() as tx:
         tx.execute(
@@ -307,27 +530,20 @@ def create_checkout_order(
                 id, user_id, provider, pack_id, variant_id, credits, amount_cents, currency,
                 status, checkout_id, checkout_url, provider_order_id, provider_order_number,
                 test_mode, meta_json, created_at, updated_at, paid_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ) VALUES (?, ?, 'creem', ?, ?, ?, ?, ?, 'pending', '', '', '', '', ?, ?, ?, ?, NULL)
             """,
             (
                 order_id,
                 uid,
-                "creem",
                 clean_pack_id,
                 product_id,
                 int(package["credits"]),
                 int(package["price_cents"]),
                 str(cfg["currency"]),
-                "pending",
-                "",
-                "",
-                "",
-                "",
                 1 if test_mode else 0,
-                json.dumps({"packTitle": package["title"], "redirectBase": main_origin}, ensure_ascii=False),
+                json.dumps({"packTitle": package["title"], "redirectBase": creem_origin}, ensure_ascii=False),
                 now,
                 now,
-                None,
             ),
         )
 
@@ -429,7 +645,6 @@ def _assert_creem_order_matches_local(
     raw_amount = provider_order_obj.get("amount")
     paid_val = raw_paid if isinstance(raw_paid, (int, float)) else raw_amount
     if isinstance(paid_val, (int, float)) and expected_cents > 0 and int(round(paid_val)) < expected_cents:
-        # Allow discount_amount only if total order base price itself >= expected_cents
         base_val = raw_amount if isinstance(raw_amount, (int, float)) else paid_val
         if int(round(base_val)) < expected_cents:
             raise ServiceError("支付金额低于订单应收金额", status=400, code="amount_mismatch")
@@ -442,7 +657,7 @@ def _settle_paid_order_tx(
     provider_order_id: str,
     provider_order_number: str = "",
     product_id: str = "",
-    provider: str = "creem",
+    provider: str = "xorpay",
     meta_patch: dict[str, Any] | None = None,
 ) -> tuple[dict[str, Any], int, bool]:
     query = "SELECT * FROM payment_orders WHERE id = ?"
@@ -451,7 +666,7 @@ def _settle_paid_order_tx(
     if not order:
         raise ServiceError("充值订单不存在", status=404, code="order_not_found")
 
-    clean_provider = str(order["provider"] or provider or "creem").strip().lower()
+    clean_provider = str(order["provider"] or provider or "xorpay").strip().lower()
     clean_provider_order_id = str(provider_order_id or "").strip()
     if not clean_provider_order_id:
         raise ServiceError("缺少上游订单号", status=400, code="missing_provider_order_id")
@@ -482,7 +697,7 @@ def _settle_paid_order_tx(
 
     credits = int(order["credits"])
     now = utc_now_iso()
-    event_prefix = "creem" if clean_provider == "creem" else clean_provider
+    event_prefix = clean_provider
     new_bal, applied = apply_wallet_delta(
         tx,
         uid,
@@ -522,7 +737,7 @@ def _settle_paid_order_tx(
 def _refund_order_tx(
     tx: Any,
     *,
-    provider: str = "creem",
+    provider: str = "xorpay",
     provider_order_id: str,
     order_id_hint: str = "",
     meta_patch: dict[str, Any] | None = None,
@@ -554,7 +769,7 @@ def _refund_order_tx(
     new_bal: int | None = None
     if was_paid and effective_poid:
         credits = int(order["credits"])
-        event_prefix = "creem" if provider == "creem" else provider
+        event_prefix = provider
         new_bal, applied = apply_wallet_delta(
             tx,
             uid,
@@ -576,6 +791,143 @@ def _refund_order_tx(
             )
     refreshed = tx.execute("SELECT * FROM payment_orders WHERE id = ?", (oid,)).fetchone()
     return _serialize_order(refreshed), new_bal, applied
+
+
+def process_xorpay_webhook(
+    db: Database,
+    raw_body_or_form: bytes | Mapping[str, Any],
+) -> dict[str, Any]:
+    """Process XorPay webhook callback (application/x-www-form-urlencoded)."""
+    cfg = load_payment_config()
+    secret = str(cfg.get("app_secret") or "").strip()
+    if not secret:
+        raise ServiceError("XorPay app_secret 尚未配置", status=503, code="webhook_not_configured")
+
+    if isinstance(raw_body_or_form, (bytes, bytearray)):
+        parsed = urllib.parse.parse_qs(raw_body_or_form.decode("utf-8", errors="replace"), keep_blank_values=True)
+        form_dict: dict[str, str] = {k: v[0] if v else "" for k, v in parsed.items()}
+    elif isinstance(raw_body_or_form, Mapping):
+        form_dict = {str(k): str(v or "") for k, v in raw_body_or_form.items()}
+    else:
+        raise ServiceError("无效的 Webhook 载荷格式", status=400, code="invalid_webhook_payload")
+
+    aoid = form_dict.get("aoid", "").strip()
+    order_id = form_dict.get("order_id", "").strip()
+    pay_price = form_dict.get("pay_price", "").strip()
+    pay_time = form_dict.get("pay_time", "").strip()
+    sign = form_dict.get("sign", "").strip().lower()
+    more = form_dict.get("more", "").strip()
+    detail_raw = form_dict.get("detail", "").strip()
+
+    if not aoid or not order_id or not pay_price or not pay_time or not sign:
+        raise ServiceError("缺少必要的支付回调字段", status=400, code="missing_webhook_fields")
+
+    expected_sign = xorpay_sign(aoid, order_id, pay_price, pay_time, secret)
+    if not hmac.compare_digest(expected_sign, sign):
+        logger.warning(
+            "XorPay webhook signature mismatch: aoid=%s order_id=%s got=%s expected=%s",
+            aoid,
+            order_id,
+            sign,
+            expected_sign,
+        )
+        raise ServiceError("Webhook 签名校验失败", status=401, code="invalid_webhook_signature")
+
+    try:
+        detail_obj = json.loads(detail_raw) if detail_raw else {}
+    except Exception:
+        detail_obj = {}
+
+    event_key = f"xorpay:{order_id}:{aoid}"
+    now = utc_now_iso()
+
+    with db.transaction() as tx:
+        dup = tx.execute(
+            "SELECT id FROM payment_webhook_events WHERE provider = 'xorpay' AND event_key = ?",
+            (event_key,),
+        ).fetchone()
+        if dup:
+            return {"ok": True, "duplicate": True, "event": "pay", "response_body": "ok"}
+
+        tx.execute(
+            """
+            INSERT INTO payment_webhook_events (
+                provider, event_key, event_name, provider_order_id, signature_valid, payload_json, status, created_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                "xorpay",
+                event_key,
+                "pay",
+                aoid,
+                1,
+                json.dumps(
+                    {
+                        "aoid": aoid,
+                        "order_id": order_id,
+                        "pay_price": pay_price,
+                        "pay_time": pay_time,
+                        "more": more,
+                        "detail": detail_obj,
+                    },
+                    ensure_ascii=False,
+                ),
+                "received",
+                now,
+            ),
+        )
+
+        target_row = tx.execute("SELECT * FROM payment_orders WHERE id = ?", (order_id,)).fetchone()
+        if not target_row:
+            tx.execute(
+                "UPDATE payment_webhook_events SET status = 'ignored_unknown_order' WHERE provider = 'xorpay' AND event_key = ?",
+                (event_key,),
+            )
+            logger.warning("XorPay webhook unknown order: order_id=%s aoid=%s", order_id, aoid)
+            return {"ok": True, "ignored": True, "reason": "unknown_order", "response_body": "ok"}
+
+        try:
+            paid_cents = int(round(float(pay_price) * 100))
+        except (ValueError, TypeError):
+            paid_cents = 0
+
+        expected_cents = int(target_row["amount_cents"] or 0)
+        if paid_cents < expected_cents:
+            tx.execute(
+                "UPDATE payment_webhook_events SET status = 'amount_mismatch' WHERE provider = 'xorpay' AND event_key = ?",
+                (event_key,),
+            )
+            raise ServiceError("支付金额低于订单应收金额", status=400, code="amount_mismatch")
+
+        provider_txn = str(detail_obj.get("transaction_id") or aoid).strip()
+        settled_order, new_bal, applied = _settle_paid_order_tx(
+            tx,
+            order_id=order_id,
+            provider_order_id=aoid,
+            provider_order_number=provider_txn,
+            product_id=str(target_row["variant_id"] or ""),
+            provider="xorpay",
+            meta_patch={
+                "settledVia": "webhook",
+                "aoid": aoid,
+                "payPrice": pay_price,
+                "payTime": pay_time,
+                "more": more,
+                "detail": detail_obj,
+            },
+        )
+        tx.execute(
+            "UPDATE payment_webhook_events SET status = 'processed' WHERE provider = 'xorpay' AND event_key = ?",
+            (event_key,),
+        )
+        return {
+            "ok": True,
+            "event": "pay",
+            "applied": applied,
+            "order": settled_order,
+            "credits": new_bal,
+            "response_body": "ok",
+        }
 
 
 def _extract_creem_order_id_hint(obj: Mapping[str, Any]) -> str:
@@ -827,6 +1179,82 @@ def sync_payment_order_from_provider(
     if not cfg.get("enabled"):
         raise ServiceError("在线充值尚未配置完成", status=503, code="billing_not_configured")
 
+    provider = str(order["provider"] or cfg.get("provider") or "xorpay").strip().lower()
+
+    if provider == "xorpay":
+        aid = str(cfg["aid"]).strip()
+        app_secret = str(cfg["app_secret"]).strip()
+        api_base = str(cfg.get("api_base") or "https://xorpay.com").strip().rstrip("/")
+        query_sign = xorpay_sign(clean_order_id, app_secret)
+
+        res = _xorpay_api_request(
+            "GET",
+            f"/api/query2/{aid}?order_id={urllib.parse.quote(clean_order_id)}&sign={query_sign}",
+            api_base=api_base,
+        )
+
+        xorpay_status = str(res.get("status") or "").strip().lower()
+        if xorpay_status in ("payed", "success"):
+            aoid = str(res.get("aoid") or (res.get("info") or {}).get("aoid") or order["checkout_id"] or f"xor_{clean_order_id}").strip()
+            raw_price = res.get("pay_price") or res.get("price") or (res.get("info") or {}).get("price")
+            if raw_price is not None:
+                try:
+                    paid_cents = int(round(float(raw_price) * 100))
+                    if paid_cents < int(order["amount_cents"] or 0):
+                        raise ServiceError("支付金额低于订单应收金额", status=400, code="amount_mismatch")
+                except (ValueError, TypeError):
+                    pass
+
+            detail = res.get("detail") if isinstance(res.get("detail"), dict) else {}
+            provider_txn = str(detail.get("transaction_id") or res.get("transaction_id") or aoid).strip()
+
+            with db.transaction() as tx:
+                settled_order, new_bal, applied = _settle_paid_order_tx(
+                    tx,
+                    order_id=clean_order_id,
+                    provider_order_id=aoid,
+                    provider_order_number=provider_txn,
+                    product_id=str(order["variant_id"] or ""),
+                    provider="xorpay",
+                    meta_patch={
+                        "settledVia": "return_sync",
+                        "xorpayStatus": xorpay_status,
+                        "payPrice": raw_price,
+                        "detail": detail,
+                    },
+                )
+            return {
+                "ok": True,
+                "order": settled_order,
+                "credits": new_bal,
+                "applied": applied,
+            }
+
+        if xorpay_status == "expire":
+            now = utc_now_iso()
+            with db.transaction() as tx:
+                tx.execute(
+                    "UPDATE payment_orders SET status = 'expired', updated_at = ? WHERE id = ? AND status = 'pending'",
+                    (now, clean_order_id),
+                )
+                refreshed = tx.execute("SELECT * FROM payment_orders WHERE id = ?", (clean_order_id,)).fetchone()
+            return {
+                "ok": True,
+                "order": _serialize_order(refreshed),
+                "credits": _wallet_balance(conn, uid),
+                "applied": False,
+                "providerStatus": "expire",
+            }
+
+        return {
+            "ok": True,
+            "order": _serialize_order(order),
+            "credits": _wallet_balance(conn, uid),
+            "applied": False,
+            "providerStatus": xorpay_status or "pending",
+        }
+
+    # Creem branch
     stored_checkout_id = str(order["checkout_id"] or "").strip()
     supplied_checkout_id = str(checkout_id or "").strip()
     if supplied_checkout_id and stored_checkout_id and supplied_checkout_id != stored_checkout_id:

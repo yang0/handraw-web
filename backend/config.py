@@ -191,40 +191,40 @@ DEFAULT_PAYMENT_PACKAGES: list[dict[str, Any]] = [
         "title": "50 积分尝鲜包",
         "description": "可生成约 25 张云端高清图像，永久有效",
         "credits": 50,
-        "price_cents": 100,
-        "price_display": "$1",
+        "price_cents": 500,
+        "price_display": "¥5",
         "badge": "",
-        "product_id": "",
+        "product_id": "pack_50",
     },
     {
         "id": "pack_100",
         "title": "100 积分标准包",
         "description": "常用创作补充包，可生成约 50 张图像",
         "credits": 100,
-        "price_cents": 199,
-        "price_display": "$1.99",
+        "price_cents": 990,
+        "price_display": "¥9.9",
         "badge": "推荐",
-        "product_id": "",
+        "product_id": "pack_100",
     },
     {
         "id": "pack_200",
         "title": "200 积分进阶包",
         "description": "高性价比进阶包，可生成约 100 张图像",
         "credits": 200,
-        "price_cents": 399,
-        "price_display": "$3.99",
+        "price_cents": 1900,
+        "price_display": "¥19",
         "badge": "",
-        "product_id": "",
+        "product_id": "pack_200",
     },
     {
         "id": "pack_500",
         "title": "500 积分加油包",
         "description": "高频创作囤货包，优惠幅度最大",
         "credits": 500,
-        "price_cents": 699,
-        "price_display": "$6.99",
+        "price_cents": 4500,
+        "price_display": "¥45",
         "badge": "超值",
-        "product_id": "",
+        "product_id": "pack_500",
     },
 ]
 
@@ -247,13 +247,14 @@ def _parse_bool_flag(raw: Any, default: bool = False) -> bool:
 
 
 def _format_price_display(price_cents: int, currency: str) -> str:
-    cur = (currency or "USD").strip().upper()
+    cur = (currency or "CNY").strip().upper()
     sym = "¥" if cur == "CNY" else ("€" if cur == "EUR" else ("£" if cur == "GBP" else "$"))
-    return f"{sym}{price_cents / 100:.2f}".removesuffix(".00")
+    raw = f"{price_cents / 100:.2f}"
+    return f"{sym}{raw}".removesuffix(".00")
 
 
 def load_payment_config() -> dict[str, Any]:
-    """Load Creem billing configuration from file and environment overrides."""
+    """Load XorPay (or Creem) billing configuration from file and environment overrides."""
     data: dict[str, Any] = {}
     cfg_path = get_payment_config_path()
     if cfg_path.is_file():
@@ -264,15 +265,45 @@ def load_payment_config() -> dict[str, Any]:
         except Exception:
             return {}
 
-    provider = str(os.environ.get("HANDRAW_PAYMENT_PROVIDER") or data.get("provider") or "creem").strip().lower()
-    api_key = str(os.environ.get("HANDRAW_CREEM_API_KEY") or data.get("api_key") or "").strip()
-    webhook_secret = str(os.environ.get("HANDRAW_CREEM_WEBHOOK_SECRET") or data.get("webhook_secret") or "").strip()
-    currency = str(os.environ.get("HANDRAW_CREEM_CURRENCY") or data.get("currency") or "USD").strip().upper() or "USD"
-    raw_test_flag = (
-        os.environ.get("HANDRAW_CREEM_TEST_MODE") if "HANDRAW_CREEM_TEST_MODE" in os.environ else data.get("test_mode")
+    provider = str(os.environ.get("HANDRAW_PAYMENT_PROVIDER") or data.get("provider") or "xorpay").strip().lower()
+    currency = (
+        str(
+            os.environ.get("HANDRAW_PAYMENT_CURRENCY")
+            or os.environ.get("HANDRAW_XORPAY_CURRENCY")
+            or data.get("currency")
+            or ("CNY" if provider == "xorpay" else "USD")
+        )
+        .strip()
+        .upper()
+        or ("CNY" if provider == "xorpay" else "USD")
     )
-    test_mode = _parse_bool_flag(raw_test_flag, default=True)
-    if api_key.startswith("creem_test_"):
+
+    # XorPay settings
+    xorpay_aid = str(os.environ.get("HANDRAW_XORPAY_AID") or data.get("aid") or "").strip()
+    xorpay_app_secret = str(os.environ.get("HANDRAW_XORPAY_APP_SECRET") or data.get("app_secret") or "").strip()
+    xorpay_api_base = str(os.environ.get("HANDRAW_XORPAY_API_BASE") or data.get("api_base") or "https://xorpay.com").strip().rstrip("/")
+    xorpay_notify_url = str(os.environ.get("HANDRAW_XORPAY_NOTIFY_URL") or data.get("notify_url") or "").strip()
+    xorpay_pay_type = str(os.environ.get("HANDRAW_XORPAY_PAY_TYPE") or data.get("pay_type") or "alipay").strip().lower()
+
+    # Creem settings (backward compatibility)
+    creem_api_key = str(os.environ.get("HANDRAW_CREEM_API_KEY") or data.get("api_key") or "").strip()
+    creem_webhook_secret = str(os.environ.get("HANDRAW_CREEM_WEBHOOK_SECRET") or data.get("webhook_secret") or "").strip()
+
+    raw_test_flag = (
+        os.environ.get("HANDRAW_PAYMENT_TEST_MODE")
+        if "HANDRAW_PAYMENT_TEST_MODE" in os.environ
+        else (
+            os.environ.get("HANDRAW_XORPAY_TEST_MODE")
+            if "HANDRAW_XORPAY_TEST_MODE" in os.environ
+            else (
+                os.environ.get("HANDRAW_CREEM_TEST_MODE")
+                if "HANDRAW_CREEM_TEST_MODE" in os.environ
+                else data.get("test_mode")
+            )
+        )
+    )
+    test_mode = _parse_bool_flag(raw_test_flag, default=(False if provider == "xorpay" else True))
+    if creem_api_key.startswith("creem_test_"):
         test_mode = True
 
     raw_packages = data.get("packages")
@@ -285,7 +316,7 @@ def load_payment_config() -> dict[str, Any]:
         if not isinstance(item, dict):
             continue
         pack_id = str(item.get("id") or "").strip()
-        product_id = str(item.get("product_id") or "").strip()
+        product_id = str(item.get("product_id") or pack_id).strip()
         try:
             credits = int(item.get("credits") or 0)
             price_cents = int(item.get("price_cents") or 0)
@@ -293,14 +324,6 @@ def load_payment_config() -> dict[str, Any]:
             continue
         if not pack_id or pack_id in seen_ids or credits <= 0 or price_cents <= 0:
             continue
-        if (
-            not product_id
-            or product_id.startswith("PRODUCT_ID_")
-            or product_id.startswith("YOUR_")
-            or not product_id.startswith("prod_")
-            or len(product_id) <= 8
-        ):
-            product_id = ""
         seen_ids.add(pack_id)
         packages.append(
             {
@@ -315,17 +338,46 @@ def load_payment_config() -> dict[str, Any]:
             }
         )
 
-    active_packages = [p for p in packages if p["product_id"]]
+    if provider == "xorpay":
+        configured = bool(
+            xorpay_aid
+            and xorpay_app_secret
+            and not xorpay_aid.startswith("YOUR_")
+            and not xorpay_app_secret.startswith("YOUR_")
+            and packages
+        )
+        return {
+            "provider": "xorpay",
+            "aid": xorpay_aid,
+            "app_secret": xorpay_app_secret,
+            "api_base": xorpay_api_base,
+            "notify_url": xorpay_notify_url,
+            "pay_type": xorpay_pay_type,
+            "currency": currency,
+            "test_mode": test_mode,
+            "packages": packages,
+            "active_packages": packages,
+            "enabled": configured,
+        }
+
+    # Creem provider branch
+    active_packages = [
+        p
+        for p in packages
+        if p["product_id"]
+        and not p["product_id"].startswith("PRODUCT_ID_")
+        and not p["product_id"].startswith("YOUR_")
+        and p["product_id"].startswith("prod_")
+    ]
     configured = bool(
-        provider == "creem"
-        and api_key
-        and not api_key.startswith("YOUR_")
+        creem_api_key
+        and not creem_api_key.startswith("YOUR_")
         and active_packages
     )
     return {
         "provider": provider,
-        "api_key": api_key,
-        "webhook_secret": webhook_secret,
+        "api_key": creem_api_key,
+        "webhook_secret": creem_webhook_secret,
         "currency": currency,
         "test_mode": test_mode,
         "packages": packages,
@@ -340,9 +392,10 @@ def get_public_billing_summary(cfg: dict[str, Any] | None = None) -> dict[str, A
     if not resolved or not resolved.get("enabled"):
         return {
             "enabled": False,
-            "provider": str((resolved or {}).get("provider") or "creem"),
-            "testMode": bool((resolved or {}).get("test_mode", True)),
-            "currency": str((resolved or {}).get("currency") or "USD"),
+            "provider": str((resolved or {}).get("provider") or "xorpay"),
+            "testMode": bool((resolved or {}).get("test_mode", False)),
+            "currency": str((resolved or {}).get("currency") or "CNY"),
+            "payType": str((resolved or {}).get("pay_type") or "alipay"),
             "packages": [],
         }
     return {
@@ -350,6 +403,7 @@ def get_public_billing_summary(cfg: dict[str, Any] | None = None) -> dict[str, A
         "provider": resolved["provider"],
         "testMode": bool(resolved["test_mode"]),
         "currency": resolved["currency"],
+        "payType": str(resolved.get("pay_type") or "alipay"),
         "packages": [
             {
                 "id": p["id"],

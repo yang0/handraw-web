@@ -1,47 +1,44 @@
 {
-  "provider": "creem",
-  "test_mode": true,
-  "currency": "USD",
-  "api_key": "YOUR_CREEM_API_KEY",
-  "webhook_secret": "YOUR_CREEM_WEBHOOK_SECRET",
+  "provider": "xorpay",
+  "aid": "YOUR_XORPAY_AID",
+  "app_secret": "YOUR_XORPAY_APP_SECRET",
+  "currency": "CNY",
+  "test_mode": false,
+  "pay_type": "alipay",
   "packages": [
     {
       "id": "pack_50",
       "title": "50 积分尝鲜包",
       "description": "可生成约 25 张云端高清图像，永久有效",
       "credits": 50,
-      "price_cents": 100,
-      "price_display": "$1",
-      "product_id": "PRODUCT_ID_50"
+      "price_cents": 500,
+      "price_display": "¥5"
     },
     {
       "id": "pack_100",
       "title": "100 积分标准包",
       "description": "常用创作补充包，可生成约 50 张图像",
       "credits": 100,
-      "price_cents": 199,
-      "price_display": "$1.99",
-      "badge": "推荐",
-      "product_id": "PRODUCT_ID_100"
+      "price_cents": 990,
+      "price_display": "¥9.9",
+      "badge": "推荐"
     },
     {
       "id": "pack_200",
       "title": "200 积分进阶包",
       "description": "高性价比进阶包，可生成约 100 张图像",
       "credits": 200,
-      "price_cents": 399,
-      "price_display": "$3.99",
-      "product_id": "PRODUCT_ID_200"
+      "price_cents": 1900,
+      "price_display": "¥19"
     },
     {
       "id": "pack_500",
       "title": "500 积分加油包",
       "description": "高频创作囤货包，优惠幅度最大",
       "credits": 500,
-      "price_cents": 699,
-      "price_display": "$6.99",
-      "badge": "超值",
-      "product_id": "PRODUCT_ID_500"
+      "price_cents": 4500,
+      "price_display": "¥45",
+      "badge": "超值"
     }
   ]
 }

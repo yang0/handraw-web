@@ -272,8 +272,8 @@
         const rawSig = (p.get("signature") || "").trim();
         UI.pendingPaymentSync = {
           orderId: ordId,
-          checkoutId: /^ch_[a-zA-Z0-9_-]{6,80}$/.test(rawCheckoutId) ? rawCheckoutId : "",
-          providerOrderId: /^ord_[a-zA-Z0-9_-]{6,80}$/.test(rawOrderId) ? rawOrderId : "",
+          checkoutId: /^[a-zA-Z0-9_-]{1,80}$/.test(rawCheckoutId) ? rawCheckoutId : "",
+          providerOrderId: /^[a-zA-Z0-9_-]{1,80}$/.test(rawOrderId) ? rawOrderId : "",
           redirectQuery: rawSig ? String(window.location.search || "").replace(/^\?/, "") : "",
           autoAttempted: false,
         };
@@ -3365,7 +3365,7 @@
             <div>
               <h3 style="margin:0;font-size:17px;">💎 在线积分充值</h3>
               <p style="margin:4px 0 0;font-size:12.8px;color:var(--ink-muted);">
-                通过 Creem 安全收银台付款（支持支付宝 / 银行卡），支付完成后积分自动入账${billing.testMode ? "（当前处于 Test Mode 测试环境，仅用于联调测试）" : ""}。
+                通过安全收银台付款（支持支付宝扫码 / 当面付与微信支付），支付完成后积分自动入账${billing.testMode ? "（当前处于测试环境，仅用于联调测试）" : ""}。
               </p>
             </div>
             ${billing.testMode ? `<span class="hw-order-status is-pending">Test Mode</span>` : ""}
@@ -3564,7 +3564,7 @@
           });
           UI.walletOrdersLoadedFor = "";
           if (res && res.checkoutUrl) {
-            toast("正在前往 Creem 收银台…");
+            toast("正在前往收银台…");
             window.location.href = res.checkoutUrl;
             return;
           }
