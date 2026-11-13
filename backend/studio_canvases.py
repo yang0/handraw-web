@@ -168,11 +168,11 @@ def compile_canvas(graph):
                 not isinstance(value, list)
                 or not all(isinstance(v, str) for v in value)
             ):
-                raise _error("配色、色调和氛围候选必须为字符串数组")
+                raise _error("配色、影调和氛围候选必须为字符串数组")
             if parameter in ("colors", "tones", "moods") and (
                 len(value) > 10 or any(len(v) > 128 for v in value)
             ):
-                raise _error("单套配色、色调或氛围方案过大")
+                raise _error("单套配色、影调或氛围方案过大")
             if parameter not in (
                 "refImages",
                 "colors",
@@ -187,8 +187,8 @@ def compile_canvas(graph):
                 raise _error("主题不能为空且不能超过 4000 字符")
             if parameter == "ratio" and value not in _RATIOS:
                 raise _error("图片比例无效")
-            if parameter == "mode" and value not in ("graphic-text", "image-only"):
-                raise _error("请选择图文或纯图模式")
+            if parameter == "mode" and value not in ("graphic-text", "image-only", "poster"):
+                raise _error("请选择纯图、图文或海报模式")
             if parameter == "whitespace" and len(value) > 256:
                 raise _error("留白说明过长")
             rows.append(row)
@@ -377,9 +377,13 @@ def preview_canvas(db, user, cid, *, _include_resources=False):
             if resource.get("kind") != ("layout" if key == "layout" else "style"):
                 raise _error("画风和图型编号类型不匹配", code="asset_kind_mismatch")
             inject = (resource.get("access") or {}).get("inject")
+            definition = resource.get("_raw_definition") or ""
+            if not definition and resource.get("source_type") == "official":
+                definition = (resource_registry.static_catalog().get(code) or {}).get("definition") or ""
             assets[code] = {
                 "inject": inject,
-                "_raw_definition": resource.get("_raw_definition") or "",
+                "name": resource.get("name") or code,
+                "_raw_definition": definition,
                 "secret_blackbox_prompt": resource.get("secret_blackbox_prompt") or "",
                 "private": inject == "blackbox"
                 or int(resource.get("unlock_cost") or 0) > 0

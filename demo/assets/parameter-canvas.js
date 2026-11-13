@@ -1,7 +1,7 @@
 /* Independent parameter documents and durable generation batches. */
 (function (global) {
   "use strict";
-  const labels={prompt:"主题",style1:"画风方案",style2:"副画风",layout:"图型",ratio:"比例",refImages:"参考图组",colors:"配色",tones:"色调",moods:"氛围",whitespace:"留白",mode:"创作模式"};
+  const labels={prompt:"主题",style1:"画风方案",style2:"副画风",layout:"图型",ratio:"比例",refImages:"参考图组",colors:"配色",tones:"影调",moods:"氛围",whitespace:"留白",mode:"创作模式"};
   const ratios=["1:1","3:4","4:3","9:16","16:9","2.35:1","3:2","2:3"];
   const uid=prefix=>prefix+"_"+(global.crypto?.randomUUID?.().replace(/-/g,"") || Date.now().toString(36)+Math.random().toString(36).slice(2));
   const clone=value=>JSON.parse(JSON.stringify(value));
@@ -13,6 +13,14 @@
   const defaultFields = () => ({prompt:[""],style1:["FA-001"],layout:[""],ratio:["3:4"]});
   const coordinate = value => Math.max(-50000, Math.min(50000, value));
   const panMargin = 320;
+  const creationModes=[{value:"image-only",label:"纯图"},{value:"graphic-text",label:"图文"},{value:"poster",label:"海报"}];
+  function choiceOptions(field,items=[]) {
+    return [...new Map(items.map(item=>typeof item==="string"?{value:item,label:item}:({value:String(item.value??item.id??""),label:item.label||item.name_zh||item.name||item.value||item.id||"不限",image:item.image||""})).map(item=>[item.value,item])).values()];
+  }
+  function customSelection(previous,text,choices) {
+    const known=new Set(choices.map(item=>item.value));
+    return [...new Set([...(Array.isArray(previous)?previous:[]).filter(value=>known.has(value)),...String(text||"").split(/[,，、;；\n]/).map(value=>value.trim()).filter(Boolean)])];
+  }
   function sketchIcon(kind) {
     const marks={
       new:'<path d="M5.2 3.6 15.2 3.2 19.5 7.4 19.7 21 5 20.6Z"/><path d="m15.2 3.4-.2 4.3 4.6-.3"/><path d="M12.1 10.4v7.3M8.6 14.1l7.3-.2"/>',
@@ -288,7 +296,11 @@
       return {label:resource?.name_zh||resource?.name||value,image:resource?.image};
     }
     if(field==="refImages") return {label:value.length?`${value.length} 张参考图`:""};
-    if(field==="mode") return {label:value==="image-only"?"纯图":"图文"};
+    if(field==="mode") return {label:creationModes.find(item=>item.value===value)?.label||value};
+    if(["colors","tones","moods","whitespace"].includes(field)) {
+      const choices=presetChoices(field),name=value=>choices.find(item=>item.value===value)?.label||value;
+      return {label:Array.isArray(value)?value.map(name).join("、"):name(value)};
+    }
     return {label:Array.isArray(value)?value.join("、"):String(value??"")};
   }
 
@@ -591,6 +603,7 @@
   let panelCanvasId = null;
   let nodeResizeObserver = null;
   let saveDialog = null;
+  let parameterDialog = null;
   let spaceHeld = false;
   let cancelPointer = null;
   let suppressPortClick = false;
@@ -623,7 +636,7 @@
     if(recent) updateMarkup(recent,recentCanvasHtml());
     const undo=root.querySelector('[data-action="undo"]');
     if(undo) undo.disabled=!current.undoStack.length;
-    updateSummary();renderPanels();
+    updateChoiceWidgets();updateSummary();renderPanels();
   }
   function recentCanvasHtml() {
     const items=recentCanvases(current.list);
@@ -648,6 +661,7 @@
   }
   function openSaveDialog() {
     if(!current || current.closed || !root?.offsetWidth) return;
+    if(parameterDialog) return;
     if(saveDialog) {saveDialog.element.querySelector('input')?.focus();return;}
     closeRecentCanvases();closeNodeMenu();
     const store=current,documentId=store.doc.id,element=document.createElement("dialog");
@@ -688,10 +702,66 @@
     if(field==="refImages") return `<button type="button" ${base} data-action="refs">选择一组参考图（${value.length}/6）</button><div class="pc-references">${value.map(url=>`<img src="${esc(url)}" alt="已选参考图" loading="lazy">`).join("")}</div>`;
     if(field==="prompt") return `<textarea aria-label="主题候选 ${index+1}" placeholder="描述想画的内容，例如雨后森林中的小屋" ${base}>${esc(value)}</textarea>`;
     if(field==="ratio") return `<select aria-label="比例候选 ${index+1}" ${base}>${ratios.map(r=>`<option ${r===value?"selected":""}>${r}</option>`).join("")}</select>`;
-    if(field==="mode") return `<select aria-label="创作模式候选 ${index+1}" ${base}><option value="graphic-text" ${value!=="image-only"?"selected":""}>图文</option><option value="image-only" ${value==="image-only"?"selected":""}>纯图</option></select>`;
+    if(field==="mode") return `<div class="pc-option-pills" role="group" aria-label="创作模式候选 ${index+1}">${creationModes.map(item=>`<button type="button" data-action="choose-single" ${base} data-option="${item.value}" aria-pressed="${value===item.value}">${item.label}</button>`).join("")}</div>`;
     if(field==="style1") return resourceValue(node,value,index,"style1")+resourceValue(node,value,index,"style2");
     if(field==="layout") return resourceValue(node,value,index,"layout");
+    if(["colors","tones","moods","whitespace"].includes(field)) return choiceValue(node,value,index);
     return `<input aria-label="${labels[field]||field}候选 ${index+1}" ${base} ${field==="layout"?'list="pc-layout-codes"':''} placeholder="${["colors","tones","moods"].includes(field)?"同一方案中的值用逗号分隔":"填写参数值"}" value="${esc(Array.isArray(value)?value.join("，"):value)}">`;
+  }
+  function presetChoices(field) {return choiceOptions(field,options.parameterChoices?.(field)||[]);}
+  function selectedPresetHtml(field,value) {
+    const values=Array.isArray(value)?value:[value];
+    return presetChoices(field).filter(item=>values.includes(item.value)&&item.value).map(item=>`<span class="pc-selected-preset">${item.image?`<img src="${esc(item.image)}" alt="">`:""}<span>${esc(item.label)}</span></span>`).join("");
+  }
+  function choiceValue(node,value,index) {
+    const field=node.parameter,base=`data-node="${esc(node.id)}" data-parameter="${field}" data-value="${index}"`,choices=presetChoices(field),known=new Set(choices.map(item=>item.value));
+    const custom=field==="whitespace"?(known.has(value)?"":value):(Array.isArray(value)?value:[]).filter(item=>!known.has(item)).join("，");
+    return `<div class="pc-choice-widget" data-choice-widget ${base}>
+      ${field==="whitespace"?`<div class="pc-option-pills" role="group" aria-label="留白预设">${choices.map(item=>`<button type="button" data-action="choose-single" ${base} data-option="${esc(item.value)}" aria-pressed="${value===item.value}">${esc(item.label)}</button>`).join("")}</div>`
+        :`<button type="button" data-action="choose-parameters" ${base} aria-haspopup="dialog">选择${labels[field]}</button><div class="pc-selected-presets">${selectedPresetHtml(field,value)}</div>`}
+      <label>自定义${labels[field]}<input ${base} data-custom-choice aria-label="自定义${labels[field]}候选 ${index+1}" placeholder="${field==="whitespace"?"也可填写具体留白要求":"也可填写其他内容，多项用逗号分隔"}" value="${esc(custom)}"></label>
+    </div>`;
+  }
+  function updateChoiceWidgets() {
+    for(const element of root?.querySelectorAll('[data-choice-widget]')||[]) {
+      const node=current.doc.graph.nodes.find(item=>item.id===element.dataset.node),field=element.dataset.parameter;
+      const value=parameterField(node,field)?.values?.[Number(element.dataset.value)];
+      const selected=element.querySelector('.pc-selected-presets');if(selected) selected.innerHTML=selectedPresetHtml(field,value);
+      element.querySelectorAll('[data-action="choose-single"]').forEach(button=>button.setAttribute('aria-pressed',String(button.dataset.option===value)));
+    }
+  }
+  function closeParameterDialog(restoreFocus=true) {
+    if(!parameterDialog) return;
+    const {element,nodeId,field,index}=parameterDialog;parameterDialog=null;element.close();element.remove();
+    if(restoreFocus) [...root?.querySelectorAll('[data-action="choose-parameters"]')||[]].find(button=>button.dataset.node===nodeId&&button.dataset.parameter===field&&Number(button.dataset.value)===index)?.focus({preventScroll:true});
+  }
+  function openParameterDialog(node,field,index) {
+    closeParameterDialog(false);closeRecentCanvases();
+    const store=current,doc=store.doc,values=parameterField(node,field).values,previous=values[index],choices=presetChoices(field),known=new Set(choices.map(item=>item.value));
+    const custom=(previous||[]).filter(value=>!known.has(value)),selected=new Set((previous||[]).filter(value=>known.has(value)));
+    const element=document.createElement('dialog');element.className='pc-parameter-dialog';element.setAttribute('aria-labelledby','pc-parameter-title');
+    parameterDialog={element,nodeId:node.id,field,index,documentId:doc.id};
+    const isCurrent=()=>current===store&&!store.closed&&store.doc===doc&&doc.graph.nodes.includes(node)&&parameterField(node,field).values===values&&values[index]===previous;
+    element.innerHTML=`<form><h2 id="pc-parameter-title">选择${labels[field]}</h2><p>同一方案可以多选。要分别比较不同方案，请添加候选。</p><input type="search" aria-label="搜索${labels[field]}" placeholder="搜索名称或编号"><div class="pc-parameter-grid-picker"></div><p class="pc-choice-error" role="alert" hidden></p><div class="pc-picker-actions"><button type="button" data-clear-presets>清空预设</button><span></span><button type="button" data-cancel-presets>取消</button><button type="submit" class="pc-picker-confirm">应用所选</button></div></form>`;
+    const grid=element.querySelector('.pc-parameter-grid-picker'),search=element.querySelector('[type=search]'),error=element.querySelector('[role=alert]');
+    const render=()=>{
+      const query=search.value.trim().toLowerCase();
+      grid.innerHTML=choices.filter(item=>(item.value+' '+item.label).toLowerCase().includes(query)).map(item=>`<button type="button" data-preset-value="${esc(item.value)}" aria-pressed="${selected.has(item.value)}">${item.image?`<img src="${esc(item.image)}" alt="" loading="lazy">`:""}<strong>${esc(item.label)}</strong>${item.value!==item.label?`<small>${esc(item.value)}</small>`:""}</button>`).join('')||'<p>暂无匹配预设，仍可在节点中填写自定义内容。</p>';
+      element.querySelector('.pc-picker-confirm').textContent=selected.size?`应用所选（${selected.size}）`:'应用所选';
+    };
+    search.oninput=render;
+    grid.onclick=event=>{const button=event.target.closest('[data-preset-value]');if(!button) return;const value=button.dataset.presetValue;selected.has(value)?selected.delete(value):selected.add(value);error.hidden=true;render();[...grid.querySelectorAll('[data-preset-value]')].find(item=>item.dataset.presetValue===value)?.focus({preventScroll:true});};
+    element.querySelector('[data-clear-presets]').onclick=()=>{selected.clear();render();};
+    element.querySelector('[data-cancel-presets]').onclick=()=>closeParameterDialog();
+    element.oncancel=event=>{event.preventDefault();closeParameterDialog();};
+    element.querySelector('form').onsubmit=event=>{
+      event.preventDefault();if(!isCurrent()) {closeParameterDialog();return;}
+      const result=[...selected,...custom];
+      if(result.length>10) {error.textContent='同一方案最多包含 10 项，请减少选择。';error.hidden=false;return;}
+      values[index]=result;closeParameterDialog(false);store.edit(true);
+      [...root.querySelectorAll('[data-action="choose-parameters"]')].find(button=>button.dataset.node===node.id&&button.dataset.parameter===field&&Number(button.dataset.value)===index)?.focus({preventScroll:true});
+    };
+    document.body.appendChild(element);render();element.showModal();search.focus();
   }
   function resourceValue(node,value,index,field) {
     const code=resourceCode(value,field),kind=field==="layout"?"layout":"style";
@@ -1032,7 +1102,7 @@
         : `<button type="button" class="pc-primary" data-action="submit" ${!q.count || !q.affordable ? "disabled" : ""}>生成选中的 ${q.count} 张</button>`}
       <button type="button" data-action="recheck-preview" ${current.expanding ? "disabled" : ""}>重新核对费用</button>
       ${!q.affordable ? '<p class="pc-next-action">积分不足，请减少勾选数量。</p>' : ""}
-      <div class="pc-plan-list">${preview.items.map(item => `<label><input type="checkbox" data-select="${item.ordinal}" ${current.selected.has(item.ordinal) ? "checked" : ""}><span><b>${item.ordinal + 1}.</b> ${esc(String(item.spec?.prompt || "").slice(0,100))}<small>${esc([item.spec?.style1,item.spec?.style2,item.spec?.layout,item.spec?.ratio].filter(Boolean).join(" · "))}</small></span></label>`).join("")}</div>`;
+      <div class="pc-plan-list">${preview.items.map(item => `<label><input type="checkbox" data-select="${item.ordinal}" ${current.selected.has(item.ordinal) ? "checked" : ""}><span><b>${item.ordinal + 1}.</b> ${esc(String(item.spec?.prompt || "").slice(0,100))}<small>${esc([creationModes.find(mode=>mode.value===item.spec?.mode)?.label,item.spec?.style1,item.spec?.style2,item.spec?.layout,item.spec?.ratio].filter(Boolean).join(" · "))}</small></span></label>`).join("")}</div>`;
   }
 
   function historyHtml(run, orphaned) {
@@ -1106,6 +1176,7 @@
     const changedDocument = panelCanvasId !== doc.id;
     if (changedDocument) {
       if(saveDialog && saveDialog.documentId!==doc.id) closeSaveDialog(false);
+      if(parameterDialog && parameterDialog.documentId!==doc.id) closeParameterDialog(false);
       selectedEdge = null;
       panelCanvasId = doc.id;
       activePanel = current.submission ? "preview" : null;
@@ -1177,7 +1248,8 @@
     else if(target.dataset.value!=null) {
       const {parameter:field,values}=parameterField(node,target.dataset.parameter);
       const index=Number(target.dataset.value);
-      values[index]=["colors","tones","moods"].includes(field)?target.value.split(/[,，\n]/).map(v=>v.trim()).filter(Boolean):target.value;
+      values[index]=target.hasAttribute('data-custom-choice')&&field!=="whitespace"?customSelection(values[index],target.value,presetChoices(field))
+        :["colors","tones","moods"].includes(field)?target.value.split(/[,，\n]/).map(v=>v.trim()).filter(Boolean):target.value;
     }
     current.edit(false,{group:`${target.dataset.node}:${target.dataset.parameter||target.dataset.property}:${target.dataset.value??""}`});
   }
@@ -1381,6 +1453,8 @@
         return;
       }
       const fieldNode=parameterField(node,button.dataset.parameter);
+      if(action==="choose-parameters") {openParameterDialog(node,fieldNode.parameter,index);return;}
+      if(action==="choose-single") {fieldNode.values[index]=button.dataset.option;current.edit(true);return;}
       if(action==="refs") {
         const store=current,doc=store.doc,values=fieldNode.values,previous=values[index],parameter=fieldNode.parameter;
         options.pickReferences?.({currentRefs:previous,onConfirm:items=>{
@@ -1550,6 +1624,7 @@
     else if(changedRoot) {render();bind();}
   }
   function dismissInteractions() {
+    closeParameterDialog(false);
     closeSaveDialog(false);
     closeRecentCanvases();
     clearEdgeSelection();
@@ -1589,5 +1664,5 @@
       else showPanel("output");
     }
   },importDocument:document=>current?.importDocument(document),reset:()=>{dismissInteractions();nodeResizeObserver?.disconnect();current?.close();current=null;root=null;panelCanvasId=null;}};
-  if(global.__HANDRAW_TESTING__) global.HandrawParameterCanvas.testing={CanvasStore,blank,selectedQuote,arrangeNodes,pickResourceCandidate,simpleFlow,combinationSummary,addGuidedParameter,connectionError,addCanvasNode,outputItems,groupExistingParameters,matchingPreview,matchingSources,recentCanvases,removeCandidate,removeParameterField,repairEmptyCandidates};
+  if(global.__HANDRAW_TESTING__) global.HandrawParameterCanvas.testing={CanvasStore,blank,selectedQuote,arrangeNodes,pickResourceCandidate,simpleFlow,combinationSummary,addGuidedParameter,connectionError,addCanvasNode,outputItems,groupExistingParameters,matchingPreview,matchingSources,recentCanvases,removeCandidate,removeParameterField,repairEmptyCandidates,choiceOptions,customSelection};
 })(window);

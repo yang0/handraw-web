@@ -2,7 +2,7 @@
 const test=require("node:test"),assert=require("node:assert/strict"),vm=require("node:vm"),fs=require("node:fs");
 const context={window:{__HANDRAW_TESTING__:true},setTimeout,clearTimeout,console};
 vm.createContext(context);vm.runInContext(fs.readFileSync("demo/assets/parameter-canvas.js","utf8"),context);
-const {CanvasStore,selectedQuote,arrangeNodes,pickResourceCandidate,simpleFlow,combinationSummary,addGuidedParameter,connectionError,addCanvasNode,outputItems,groupExistingParameters,matchingPreview,matchingSources,recentCanvases,removeCandidate,removeParameterField,repairEmptyCandidates}=context.window.HandrawParameterCanvas.testing;
+const {CanvasStore,selectedQuote,arrangeNodes,pickResourceCandidate,simpleFlow,combinationSummary,addGuidedParameter,connectionError,addCanvasNode,outputItems,groupExistingParameters,matchingPreview,matchingSources,recentCanvases,removeCandidate,removeParameterField,repairEmptyCandidates,choiceOptions,customSelection}=context.window.HandrawParameterCanvas.testing;
 const storage=new Map();
 function store(t,api,scope="user:canvas") {
   const instance=new CanvasStore({api,scope,loggedIn:()=>true,storage:{getItem:key=>storage.get(key),setItem:(key,value)=>storage.set(key,value)}});
@@ -498,4 +498,45 @@ test("warm-cache and cloud documents with an empty color list can save and previ
   await cloud.open("broken");assert.equal(cloud.dirty,true);assert.equal(combinationSummary(cloud.doc.graph).count,1);
   assert.equal(await cloud.save(),true);assert.equal(sent.id,"broken");assert.equal(sent.baseWriteSeq,9);assert.equal(sent.graph.nodes[0].fields.prompt[0],"Recover body");
   assert.equal(Object.hasOwn(sent.graph.nodes[0].fields,"colors"),false);
+});
+
+test("preset choices normalize catalog items and custom input keeps selected presets",()=>{
+  const choices=choiceOptions("colors",[{id:"C-01",name_zh:"克莱因蓝",image:"/blue.webp"},{id:"C-15",name:"朱砂红"}]);
+  assert.equal(choices[0].label,"克莱因蓝");assert.equal(choices[0].image,"/blue.webp");
+  assert.deepEqual(Array.from(customSelection(["C-01","old custom"],"暖灰，米白、暖灰",choices)),["C-01","暖灰","米白"]);
+  assert.deepEqual(Array.from(customSelection(["C-01","old custom"],"",choices)),["C-01"]);
+  assert.deepEqual(Array.from(customSelection(["unknown legacy"],"unknown legacy",[])),["unknown legacy"]);
+  assert.equal(choiceOptions("moods",["治愈","治愈","松弛"]).length,2);
+});
+
+test("several chosen presets form one candidate while different candidates and modes multiply",t=>{
+  storage.clear();const s=store(t,async()=>({writeSeq:1})),node=s.doc.graph.nodes[0];
+  node.fields.prompt=["One subject"];node.fields.colors=[["C-01","C-15","custom color"]];node.fieldOrder.push("colors");
+  assert.equal(combinationSummary(s.doc.graph).count,1);
+  node.fields.colors.push(["C-02"]);assert.equal(combinationSummary(s.doc.graph).count,2);
+  node.fields.mode=["image-only","graphic-text","poster"];node.fieldOrder.push("mode");assert.equal(combinationSummary(s.doc.graph).count,6);
+  const source=matchingSources(s.doc.graph,node),rows=matchingPreview(source.sources,"cartesian",1,200);
+  assert.equal(rows.count,6);assert.deepEqual(Array.from(rows.samples[0].colors),["C-01","C-15","custom color"]);
+});
+
+test("advanced parameters render selection plus custom input, with shadow tone labels and all three modes",t=>{
+  const canvas=context.window.HandrawParameterCanvas,doc=canvas.testing.blank(),node=doc.graph.nodes[0];
+  Object.assign(node.fields,{colors:[["C-01","自定义暖灰"]],tones:[["T-01","柔和逆光"]],moods:[["治愈","远行感"]],whitespace:["high"],mode:["poster"]});
+  node.fieldOrder=Object.keys(node.fields);
+  context.window.localStorage={getItem:()=>JSON.stringify({doc}),setItem(){}};
+  const root={innerHTML:"",querySelector:()=>null,querySelectorAll:()=>[]};
+  canvas.mount(root,{scope:"preset-custom-render",loggedIn:()=>false,resources:()=>[],parameterChoices:field=>field==="colors"?[{id:"C-01",name_zh:"克莱因蓝",image:"/blue.webp"}]:field==="tones"?[{id:"T-01",name_zh:"高调",image:"/tone.webp"}]:field==="moods"?["治愈"]:[{value:"high",label:"大量留白"}]});
+  t.after(()=>{canvas.reset();delete context.window.localStorage;});
+  // Select a tab through the actual delegated handler without a fake rendering implementation.
+  for(const field of ["colors","tones","moods","whitespace","mode"]) {
+    const button={dataset:{action:"edit-field",node:node.id,parameter:field}};
+    root.onclick({target:{closest:selector=>selector==="button[data-action]"?button:null}});
+    if(field==="mode") {for(const mode of ["纯图","图文","海报"]) assert.ok(root.innerHTML.includes(`>${mode}</button>`));}
+    else {
+      assert.ok(root.innerHTML.includes('data-custom-choice'));
+      if(field!=="whitespace") assert.ok(root.innerHTML.includes('data-action="choose-parameters"'));
+      if(field==="colors") {assert.ok(root.innerHTML.includes('src="/blue.webp"'));assert.ok(root.innerHTML.includes('value="自定义暖灰"'));}
+      if(field==="tones") {assert.ok(root.innerHTML.includes('选择影调'));assert.ok(!root.innerHTML.includes('选择色调'));assert.ok(root.innerHTML.includes('value="柔和逆光"'));}
+    }
+  }
 });

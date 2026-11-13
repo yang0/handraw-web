@@ -442,20 +442,20 @@ def main():
                     expect(page.locator(".batch-series-thumb-status")).to_have_count(0)
                     # Fixed layout reveals a real picker matching the single-image cards.
                     page.locator("#batch-strategy-fixed").click()
-                    expect(page.locator(".batch-series-fixed-picker [data-pick-kind='layout']")).to_be_visible()
+                    expect(page.locator(".batch-pickers-row [data-pick-kind='layout']")).to_be_visible()
                     assert page.locator("#batch-strategy-fixed").get_attribute("class").find("btn-primary is-active")>=0
-                    assert page.locator(".batch-series-fixed-picker").evaluate("""el => {
+                    assert page.locator('.batch-pickers-row [data-pick-kind="layout"]').evaluate("""el => {
                       const color=document.querySelector('.batch-pickers-row [data-pick-kind="color"]').getBoundingClientRect();
                       const picker=el.getBoundingClientRect();
-                      return picker.top>=color.bottom-2;
+                      return Math.abs(picker.top-color.top)<2 || picker.top>=color.bottom-2;
                     }""")
                     consistent_width=page.evaluate("""() => {
                       const main=document.querySelector('.batch-pickers-row [data-pick-kind="style1"]').getBoundingClientRect();
-                      const layout=document.querySelector('.batch-series-fixed-picker [data-pick-kind="layout"]').getBoundingClientRect();
+                      const layout=document.querySelector('.batch-pickers-row [data-pick-kind="layout"]').getBoundingClientRect();
                       return {style:main.width,layout:layout.width,diff:Math.abs(main.width-layout.width)};
                     }""")
                     assert consistent_width["diff"]<2,consistent_width
-                    page.locator(".batch-series-fixed-picker [data-pick-kind='layout']").click()
+                    page.locator(".batch-pickers-row [data-pick-kind='layout']").click()
                     assert page.evaluate("fixture.counts().pickers")==1
                     # Count drives actual prepared slots, not just an input annotation.
                     expect(page.locator("#batch-count-input")).to_have_attribute("min","1")

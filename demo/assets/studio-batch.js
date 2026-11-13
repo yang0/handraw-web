@@ -9,7 +9,7 @@
  * - Row 2: Fixed parameter picker cards: 画风 / 角色画风, 场景画风 (when fusion), 主题色.
  * - 套图规划 (Set Planning):
  *   - 规划行 A: 母题 (seed) + 张数 (1-20, default 6) + 图型策略【固定图型 / AI 推荐图型】 + 【AI 规划这套图】按钮.
- *   - 规划行 B (固定图型): 图型【选择图型】按钮 + 已选图型卡 (same row).
+ *   - 固定图型选择卡与画风、主题色共用自适应参数行。
  *   - 规划行 B (AI 推荐图型): 图型要求 (文本框，例如「前 3 张分镜、后面图鉴，不要封面图」).
  *   - 编辑区 (固定图型): 单个文本框，每行一条主题，用户直接改；不出现逐张行.
  *   - 编辑区 (AI 推荐图型): 逐张行表格：#1 [主题输入框] [图型下拉] [删除]，以及【＋ 添加一张】按钮.
@@ -591,12 +591,8 @@
                 ${this.renderPickerSlot("style1", isFusion ? "角色画风" : "画风", style1Obj, true)}
                 ${isFusion ? this.renderPickerSlot("style2", "场景画风", style2Obj, true) : ""}
                 ${this.renderPickerSlot("color", "主题色", colorObj, true)}
+                ${batchLayoutMode === "fixed" ? this.renderPickerSlot("layout", "图型", layoutObj, true) : ""}
               </div>
-              ${batchLayoutMode === "fixed" ? `
-                <div class="make-image-pickers-row batch-series-fixed-picker">
-                  ${this.renderPickerSlot("layout", "图型", layoutObj, true)}
-                </div>
-              ` : ""}
 
 
               ${isFusion ? `

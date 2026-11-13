@@ -1107,13 +1107,15 @@ console.log("Starting Studio Batch Test Suite (Phase 3b-4 Redesign)...\n");
     }
     if (mode === "fixed") {
       assert.ok(stratFixedTag[0].includes("btn-primary is-active"),"Fixed is highlighted if selected");
-      assert.ok(html.includes('class="make-image-pickers-row batch-series-fixed-picker"'),
-        "Fixed strategy reveals a single-image style layout picker card");
+      const parameterRow=html.split('batch-pickers-row')[1].split('make-image-ratio-row')[0];
+      assert.ok(parameterRow.includes('data-pick-kind="color"')&&parameterRow.includes('data-pick-kind="layout"'),
+        "Fixed layout follows color in the same wrapping parameter container");
+      assert.ok(!html.includes('batch-series-fixed-picker'),"Fixed layout has no forced separate row");
       assert.ok(html.includes('data-pick-kind="layout"'),"Fixed strategy has a real layout picker");
     } else {
       assert.ok(stratAiTag[0].includes("btn-primary is-active"),"AI strategy is highlighted if selected");
-      assert.ok(!html.includes('class="make-image-pickers-row batch-series-fixed-picker"'),
-        "AI strategy hides default layout picker");
+      const parameterRow=html.split('batch-pickers-row')[1].split('make-image-ratio-row')[0];
+      assert.ok(!parameterRow.includes('data-pick-kind="layout"'),"AI strategy hides default layout picker");
     }
 
     // 4. AI planning is secondary, generation is visually primary.

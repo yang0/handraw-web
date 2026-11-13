@@ -103,6 +103,98 @@ class CanvasDispatcherTests(unittest.TestCase):
             [(r["position"], r["ordinal"]) for r in rows], [(0, 0), (1, 1)]
         )
 
+    def test_three_modes_reach_the_shared_gateway_with_preserved_facts_and_frozen_resources(
+        self,
+    ):
+        from backend.canvas_prompt import GRAPHIC_TEXT_SUFFIX, PURE_IMAGE_RULE
+
+        resource = {
+            "kind": "style",
+            "canUse": True,
+            "access": {"inject": "definition"},
+            "_raw_definition": "所选画风的线条和纸感",
+            "unlock_cost": 0,
+        }
+        subject = "预算350万，6人到20人。"
+        with (
+            patch("backend.resource_registry.resolve", return_value=resource),
+            patch(
+                "backend.services._compose_skill_prompt",
+                side_effect=AssertionError(
+                    "Canvas input must not be rewritten by a text model"
+                ),
+            ),
+        ):
+            result, _ = self.submit(
+                graph(
+                    ("prompt", [subject]),
+                    ("style1", ["TEST-001"]),
+                    ("colors", [["C-01", "自定义暖灰"]]),
+                    ("tones", [["T-01"]]),
+                    ("mode", ["image-only", "graphic-text", "poster"]),
+                )
+            )
+            for _ in range(3):
+                self.assertTrue(self.dispatcher.dispatch_once())
+        rows = (
+            self.db.get_conn()
+            .execute(
+                "SELECT mode,prompt,input_json,prompt_ready FROM studio_generations ORDER BY created_at,id"
+            )
+            .fetchall()
+        )
+        self.assertEqual(
+            {row["mode"] for row in rows}, {"image-only", "graphic-text", "poster"}
+        )
+        self.assertEqual(len(self.sent), 3)
+        for row in rows:
+            mode = row["input_json"]["mode"]
+            self.assertEqual(row["mode"], mode)
+            self.assertEqual(row["prompt_ready"], 1)
+            self.assertIn("主题：" + subject, row["prompt"])
+            for value in (
+                "所选画风的线条和纸感",
+                "克莱因蓝",
+                "自定义暖灰",
+                "影调",
+                "高调",
+            ):
+                self.assertIn(value, row["prompt"])
+            self.assertTrue(
+                row["prompt"].endswith(
+                    PURE_IMAGE_RULE if mode == "image-only" else GRAPHIC_TEXT_SUFFIX
+                )
+            )
+            self.assertTrue(any(sent[0][1] == row["prompt"] for sent in self.sent))
+        self.assertEqual(
+            get_canvas_run(self.db, self.user, result["runId"])["run"]["status"],
+            "success",
+        )
+
+    def test_free_official_resources_are_present_without_text_model_composition(self):
+        with patch(
+            "backend.services._compose_skill_prompt",
+            side_effect=AssertionError("No text rewriting"),
+        ):
+            result, _ = self.submit(
+                graph(
+                    ("prompt", ["Public style subject"]),
+                    ("style1", ["FA-001"]),
+                    ("layout", ["SC-001"]),
+                    ("mode", ["poster"]),
+                )
+            )
+            self.assertTrue(self.dispatcher.dispatch_once())
+        prompt = self.sent[0][0][1]
+        self.assertIn("Gemma Correll", prompt)
+        self.assertIn("上文下图", prompt)
+        self.assertIn("Public style subject", prompt)
+        self.assertNotIn("#FA-001", prompt)
+        self.assertEqual(
+            get_canvas_run(self.db, self.user, result["runId"])["run"]["status"],
+            "success",
+        )
+
     def test_quota_change_cannot_exceed_confirmed_budget_and_retry_is_idempotent(self):
         result, _ = self.submit()
         self.db.get_conn().execute(

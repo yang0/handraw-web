@@ -6192,7 +6192,8 @@ def prepare_cloud_generation(
             frozen=(body.get("_canvasResourceInputs") or {}).get(code)
             if frozen:
                 res={**res,"_raw_definition":frozen["_raw_definition"],
-                     "secret_blackbox_prompt":frozen["secret_blackbox_prompt"]}
+                     "secret_blackbox_prompt":frozen["secret_blackbox_prompt"],
+                     "name":frozen.get("name") or res.get("name") or code}
                 is_paid_resource = is_paid_resource or frozen["private"]
             inject = frozen["inject"] if frozen else (res.get("access") or {}).get("inject")
             if inject == "blackbox":
@@ -6207,14 +6208,29 @@ def prepare_cloud_generation(
                     system_append_list.append({"type": "asset_instructions", "code": code})
                     injected_definitions.append(raw_def)
 
+            elif body.get("canvasId"):
+                # Free public and the author's private resources normally rely
+                # on the form's prompt. Canvas prompts use the frozen definition.
+                from .skill_prompt import strip_bilingual_definition
+                raw_def=strip_bilingual_definition(res.get("_raw_definition") or "")
+                name=str(res.get("name") or code)
+                if raw_def:
+                    injected_notes.append(raw_def.replace("#"+code,name).replace(code,name))
+                else:
+                    injected_notes.append(f"{'图型' if code==layout else '画风'}：{name}")
+
         canvas_user_prompt=raw_prompt
+        canvas_gateway_prompt=None
+        if body.get("canvasId"):
+            from .canvas_prompt import build_canvas_prompt
+            canvas_gateway_prompt=build_canvas_prompt(raw_prompt,body,injected_notes)
         if document_source:
             parameters=[("画幅比例",r_ratio),("创作模式",r_mode),("配色","、".join(r_colors)),
-                        ("色调","、".join(r_tones)),("氛围","、".join(r_moods)),("留白",r_whitespace)]
+                        ("影调","、".join(r_tones)),("氛围","、".join(r_moods)),("留白",r_whitespace)]
             canvas_user_prompt += "\n"+"\n".join(f"【{label}】：{value}" for label,value in parameters if value)
         # Length check before charging (X6)
         if recipe_id or document_source:
-            recipe_full_prompt = build_recipe_gateway_prompt(canvas_user_prompt, injected_notes)
+            recipe_full_prompt = canvas_gateway_prompt or build_recipe_gateway_prompt(canvas_user_prompt, injected_notes)
             if len(recipe_full_prompt) > 4000:
                 if not raw_prompt.strip():
                     raise ServiceError("所选资源系统说明超过 4000 字上限，请精简所选资源", status=400, code="prompt_too_long")
@@ -6290,7 +6306,7 @@ def prepare_cloud_generation(
             prompt_masked_init=1
 
         if recipe_id or document_source:
-            initial_prompt = build_recipe_gateway_prompt(canvas_user_prompt, injected_notes)
+            initial_prompt = canvas_gateway_prompt or build_recipe_gateway_prompt(canvas_user_prompt, injected_notes)
         else:
             cleaned = raw_prompt
             if injected_notes:
@@ -6299,7 +6315,7 @@ def prepare_cloud_generation(
                 f"立即生成图片：\n{cleaned}\n\n请直接调用画图工具立即生成图片，不要输出任何询问文字、选项或确认反问。"
             )
 
-        needs_compose = (not from_skill) and bool(style1 or style2 or layout)
+        needs_compose = (not from_skill) and not body.get("canvasId") and bool(style1 or style2 or layout)
         prompt_ready = 0 if needs_compose else 1
         creation_source = str(body.get("creationSource") or "").strip().lower()
         if creation_source not in ("quick", "batch", "article", "canvas"):
@@ -6323,7 +6339,7 @@ def prepare_cloud_generation(
                 gen_id,
                 uid,
                 uname,
-                str(body.get("ratio") or "3:4"),
+                str(body.get("mode") or "graphic-text") if body.get("canvasId") else str(body.get("ratio") or "3:4"),
                 f"{style1} {style2} {layout}".strip(),
                 initial_prompt if recipe_id else initial_prompt[:4000],
                 initial_visible_prompt if (initial_visible_prompt is None or recipe_id) else initial_visible_prompt[:4000],

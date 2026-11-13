@@ -968,8 +968,9 @@
   background:var(--vermilion);border-color:var(--vermilion);color:#fff
 }
 .batch-series-workspace .batch-series-fixed-picker,
-.batch-series-workspace .batch-pickers-row{
-  display:grid;grid-template-columns:repeat(2,minmax(0,1fr));
+.batch-series-workspace .batch-pickers-row,
+.batch-series-workspace .batch-pickers-row.has-style2{
+  display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,150px),1fr));
   align-items:stretch;gap:10px;width:100%
 }
 .batch-series-workspace .batch-series-fixed-picker>.make-image-picker-card{

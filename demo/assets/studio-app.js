@@ -12745,6 +12745,8 @@
         scope:activeCacheScope,api:S.apiJson,
         loggedIn:()=>Boolean(App.state?.loggedIn && App.state?.serverBacked),
         resources:kind=>kind==="style"?Catalog.styles:Catalog.layouts,
+        parameterChoices:field=>field==="colors"?Catalog.colors:field==="tones"?Catalog.tones:
+          field==="moods"?[...new Set([...(Catalog.moods||[]),...E.DEFAULT_MOOD_POOL])]:field==="whitespace"?E.WHITESPACE_OPTIONS:[],
         pickResource:settings=>openSkillFieldPickerModal(null,settings.field,settings),
         openImage:(url,title)=>openImageLightbox(url,title),
         pickReferences:settings=>openAssetPickerModal(settings)
