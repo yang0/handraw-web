@@ -485,6 +485,7 @@
   }
   let current=null,root=null,options=null;
   let selectedPort = null;
+  let selectedEdge = null;
   let nodeMenu = null;
   let activePanel = null;
   let outputPanelId = null;
@@ -581,16 +582,12 @@
     ].join("");
     return `<section class="pc-node ${isGuided?"pc-parameter":""} ${node.type==="parameters"?"pc-parameter-group":""}${touchNodes.has(node.id)?" is-touch-selected":""}" data-card="${esc(node.id)}" ${isGuided?"":`style="left:${Number(node.x??32)}px;top:${Number(node.y??32)}px"`}>
       ${ports}
-      <header ${isGuided?"":`data-drag="${esc(node.id)}"`}><div><strong>${esc(name)}${isGuided?"":` ${index+1}`}</strong>${isGuided&&node.values?`<span class="pc-node-count">${node.values.length} 个候选</span>`:""}</div><button type="button" data-action="remove-node" data-node="${esc(node.id)}" aria-label="移除${esc(name)}">×</button></header>
+      <header ${isGuided?"":`data-drag="${esc(node.id)}"`}><div><strong>${esc(name)}</strong>${isGuided&&node.values?`<span class="pc-node-count">${node.values.length} 个候选</span>`:""}</div><button type="button" data-action="remove-node" data-node="${esc(node.id)}" aria-label="移除${esc(name)}">×</button></header>
       <div class="pc-node-body">${node.type==="parameters"?parameterGroupHtml(node,isGuided):node.type==="parameter"?candidatesHtml(node):
         `<p>${node.type === "output" ? "在这里设置每种结果画几张。" : "将连进来的内容搭配后出图。"}</p>
         ${node.type === "combine" || incoming.length > 1 ? `<div class="pc-matching-preview" data-matching-node="${esc(node.id)}"></div>` : ""}
         ${node.type === "output" ? `<label>每组生成张数<input type="number" min="1" max="200" data-node="${esc(node.id)}" data-property="repeat" value="${node.repeat??1}"></label>` : ""}
-        <div class="pc-links">${incoming.map(edge => {
-          const source = graph.nodes.find(item => item.id === edge.from);
-          const label = source ? `${nodeName(source)} ${graph.nodes.indexOf(source) + 1}` : "参数";
-          return `<span>${esc(label)}<button type="button" data-action="disconnect" data-node="${esc(node.id)}" data-from="${esc(edge.from)}" aria-label="断开${esc(label)}">×</button></span>`;
-        }).join("") || '<small>从其他节点的右侧圆点连到这里的左侧圆点</small>'}</div>`}</div>
+        ${!incoming.length ? '<p>从其他节点的右侧圆点连到这里的左侧圆点</p>' : ""}`}</div>
       ${node.type === "output" ? '<div class="pc-output-results" data-output-results></div>' : ""}</section>`;
   }
 
@@ -613,15 +610,55 @@
   function drawEdges() {
     const svg = root.querySelector(".pc-edges");
     if (!svg) return;
+    const focused = svg.contains(document.activeElement) ? document.activeElement.closest("[data-edge-from]") : null;
+    const focusedEdge = focused && {from:focused.dataset.edgeFrom,to:focused.dataset.edgeTo};
     const points = new Map([...root.querySelectorAll("[data-port]")].map(port => [
       `${port.dataset.port}:${port.dataset.node}`, portPoint(port, svg.parentElement)
     ]));
     const preview = svg.querySelector(".pc-wire-preview")?.getAttribute("d") || "";
+    if (selectedEdge && !current.doc.graph.edges.some(edge => edge.from === selectedEdge.from && edge.to === selectedEdge.to)) selectedEdge = null;
     svg.innerHTML = current.doc.graph.edges.map(edge => {
       const from = points.get(`out:${edge.from}`);
       const to = points.get(`in:${edge.to}`);
-      return from && to ? `<path d="${curve(from, to)}"/>` : "";
+      const selected = selectedEdge?.from === edge.from && selectedEdge.to === edge.to;
+      const source = current.doc.graph.nodes.find(node => node.id === edge.from);
+      const target = current.doc.graph.nodes.find(node => node.id === edge.to);
+      return from && to ? `<g class="pc-wire${selected ? " is-selected" : ""}" data-edge-from="${esc(edge.from)}" data-edge-to="${esc(edge.to)}" tabindex="0" role="button" aria-pressed="${selected}" aria-label="${esc(nodeName(source))}到${esc(nodeName(target))}的连线，点击选中"><path class="pc-wire-line" d="${curve(from, to)}"/><path class="pc-wire-hit" d="${curve(from, to)}"/></g>` : "";
     }).join("") + `<path class="pc-wire-preview" d="${preview}"/>`;
+    if (focusedEdge) [...svg.querySelectorAll("[data-edge-from]")]
+      .find(edge => edge.dataset.edgeFrom === focusedEdge.from && edge.dataset.edgeTo === focusedEdge.to)?.focus({preventScroll:true});
+    const actions = root.querySelector(".pc-edge-actions");
+    if (actions) actions.hidden = !selectedEdge;
+  }
+
+  function clearEdgeSelection() {
+    if (!selectedEdge) return;
+    selectedEdge = null;
+    drawEdges();
+    wireHint();
+  }
+
+  function selectEdge(element) {
+    clearWire();
+    closeNodeMenu();
+    selectedEdge = {from:element.dataset.edgeFrom,to:element.dataset.edgeTo};
+    drawEdges();
+    root.querySelector(".pc-scroll")?.focus({preventScroll:true});
+    wireHint("连线已选中 · 点击删除连线，或按 Delete / Backspace · Esc 取消");
+  }
+
+  function deleteSelectedEdge() {
+    if (!selectedEdge) return;
+    const {from,to} = selectedEdge, graph = current.doc.graph;
+    const edges = graph.edges.filter(edge => edge.from !== from || edge.to !== to);
+    if (edges.length === graph.edges.length) {clearEdgeSelection();return;}
+    const removal = clone(graph);
+    selectedEdge = null;
+    graph.edges = edges;
+    current.edit(true);
+    current.removal = removal;
+    render();
+    root.querySelector(".pc-scroll")?.focus({preventScroll:true});
   }
 
   function closeNodeMenu() {
@@ -704,7 +741,7 @@
 
   function wireHint(message = "") {
     const hint = root?.querySelector("[data-wire-hint]");
-    if (hint) hint.textContent = message || "拖动空白处移动画布 · 悬停节点后拖线 · 右键或双击添加";
+    if (hint) hint.textContent = message || (selectedEdge ? "连线已选中 · 点击删除连线，或按 Delete / Backspace · Esc 取消" : "拖动空白处移动画布 · 点击连线可删除 · 右键或双击添加");
   }
 
   function clearWire() {
@@ -728,6 +765,7 @@
   }
 
   function selectPort(port) {
+    clearEdgeSelection();
     clearWire();
     selectedPort = portRef(port);
     root.classList.add("is-wiring");
@@ -908,6 +946,7 @@
       ? [oldCanvas.scrollLeft-oldWorld.offsetLeft,oldCanvas.scrollTop-oldWorld.offsetTop] : null;
     const changedDocument = panelCanvasId !== doc.id;
     if (changedDocument) {
+      selectedEdge = null;
       panelCanvasId = doc.id;
       activePanel = current.submission ? "preview" : null;
       outputPanelId = null;
@@ -942,7 +981,8 @@
       ${isGuided?'<nav class="pc-step-nav" aria-label="跳转画布步骤"><button type="button" data-action="step" data-step="parameters">1 准备参数</button><button type="button" data-action="step" data-step="matching">2 搭配方式</button><button type="button" data-action="step" data-step="checkout">3 预览出图</button></nav>':""}
       ${current.removal?'<div class="pc-undo" role="status">已移除，尚可撤销 <button type="button" data-action="undo-remove">撤销移除</button></div>':""}
       <div class="pc-workspace">
-        ${isGuided ? guidedHtml(flow) : `<div class="pc-scroll" tabindex="0" aria-label="参数节点画布" aria-describedby="pc-wire-hint"><div class="pc-board" style="--pc-left:${left}px;--pc-top:${top}px"><div class="pc-world" style="--pc-width:${width}px;--pc-height:${height}px"><svg class="pc-edges" aria-hidden="true"></svg>${nodes.map((node,index)=>nodeHtml(node,index)).join("")}</div></div></div>
+        ${isGuided ? guidedHtml(flow) : `<div class="pc-scroll" tabindex="0" aria-label="参数节点画布" aria-describedby="pc-wire-hint"><div class="pc-board" style="--pc-left:${left}px;--pc-top:${top}px"><div class="pc-world" style="--pc-width:${width}px;--pc-height:${height}px"><svg class="pc-edges" aria-label="节点连线"></svg>${nodes.map((node,index)=>nodeHtml(node,index)).join("")}</div></div></div>
+          <div class="pc-edge-actions" role="group" aria-label="已选中连线" hidden><span>已选中连线</span><button type="button" data-action="delete-edge">删除连线</button><button type="button" data-action="cancel-edge">取消</button></div>
           <p id="pc-wire-hint" data-wire-hint aria-live="polite"></p>`}
         <aside id="pc-drawer" class="pc-drawer" hidden><div class="pc-drawer-header"><h2></h2><button type="button" data-action="close-drawer" aria-label="收起面板">×</button></div><div class="pc-drawer-body"></div></aside>
       </div>`;
@@ -1064,8 +1104,12 @@
       if(t.matches("select[data-node]")) valueChanged(t);
     };
     root.onclick=event=>{
+      const edge=event.target.closest("[data-edge-from]");
+      if(edge) {selectEdge(edge);return;}
       const button=event.target.closest("button[data-action]");if(!button) return;
       const action=button.dataset.action,node=current.doc.graph.nodes.find(n=>n.id===button.dataset.node),index=Number(button.dataset.value);
+      if(action==="delete-edge") {deleteSelectedEdge();return;}
+      if(action==="cancel-edge") {clearEdgeSelection();root.querySelector(".pc-scroll")?.focus({preventScroll:true});return;}
       if(action==="toggle-history") {showPanel(activePanel==="history"?null:"history",null,false);return;}
       if(action==="close-drawer") {
         const trigger = activePanel==="history" ? root.querySelector('[data-action="toggle-history"]')
@@ -1183,7 +1227,7 @@
         const resource=(options.resources?.(field==="layout"?"layout":"style")||[]).find(item=>(item.id||item.code)===code);
         if(resource?.image) options.openImage?.(resource.image,`${code} ${resource.name_zh||resource.name||""}`);return;
       }
-      const removal=["remove-node","remove-value","remove-field","disconnect","group-parameters"].includes(action)?clone(current.doc.graph):null;
+      const removal=["remove-node","remove-value","remove-field","group-parameters"].includes(action)?clone(current.doc.graph):null;
       if(action==="remove-node") {current.doc.graph.nodes=current.doc.graph.nodes.filter(n=>n!==node);current.doc.graph.edges=current.doc.graph.edges.filter(e=>e.from!==node.id&&e.to!==node.id);}
       else if(action==="remove-field") {
         delete node.fields[fieldNode.parameter];
@@ -1194,7 +1238,6 @@
         if(fieldNode.values.length>=200) {wireHint("每个参数最多添加 200 个候选");return;}
         fieldNode.values.push(initialCandidate(fieldNode.parameter));
       }
-      else if(action==="disconnect") current.doc.graph.edges=current.doc.graph.edges.filter(e=>!(e.from===button.dataset.from&&e.to===node.id));
       else if(action==="group-parameters") {
         const graph=current.doc.graph;
         if(!groupExistingParameters(graph,simpleFlow(graph))) return;
@@ -1208,13 +1251,21 @@
       if(action==="add-value") focusParameter(node,true);
     };
     root.oncontextmenu=root.ondblclick=event=>{
-      if(!event.target.closest(".pc-board") || event.target.closest(".pc-node")) return;
+      if(!event.target.closest(".pc-board") || event.target.closest(".pc-node,[data-edge-from]")) return;
       event.preventDefault();
       openNodeMenu(event.clientX,event.clientY);
     };
     root.onkeydown=event=>{
+      const editing=event.target.closest("input,textarea,select,[contenteditable]");
+      if(!editing && (event.key==="Enter" || event.key===" ") && event.target.closest("[data-edge-from]")) {
+        event.preventDefault();selectEdge(event.target.closest("[data-edge-from]"));return;
+      }
+      if(!editing && selectedEdge && (event.key==="Delete" || event.key==="Backspace")) {
+        event.preventDefault();deleteSelectedEdge();return;
+      }
       if(event.key==="Escape") {
         if(selectedPort||cancelPointer) {cancelPointer?.();clearWire();}
+        else if(selectedEdge) clearEdgeSelection();
         else if(activePanel) root.querySelector('[data-action="close-drawer"]')?.click();
       }
     };
@@ -1226,6 +1277,8 @@
       suppressPortClick=false;
       const port=event.target.closest("[data-port]");
       if(port) {beginWire(event,port);return;}
+      if(event.target.closest("[data-edge-from],.pc-edge-actions")) return;
+      clearEdgeSelection();
       const cardTarget=event.target.closest("[data-card]");
       if (event.pointerType==="touch" && viewport) {
         if (cardTarget) {
@@ -1309,6 +1362,7 @@
     else if(changedRoot) {render();bind();}
   }
   function dismissInteractions() {
+    clearEdgeSelection();
     closeNodeMenu();
     cancelPointer?.();
     clearWire();
