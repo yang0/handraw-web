@@ -165,9 +165,11 @@ def reward(tx, uid, kind, target, actor=None):
     from .services import apply_wallet_delta, local_today_str
 
     units, limit = REWARDS[kind]
-    tx.execute(
-        "SELECT balance FROM wallets WHERE user_id=? FOR UPDATE", (uid,)
+    wallet = tx.execute(
+        "SELECT balance,locked FROM wallets WHERE user_id=? FOR UPDATE", (uid,)
     ).fetchone()
+    if not wallet or wallet["locked"]:
+        return 0
     if tx.execute(
         "SELECT 1 FROM contribution_rewards WHERE kind=? AND target_id=?",
         (kind, str(target)),
@@ -181,10 +183,30 @@ def reward(tx, uid, kind, target, actor=None):
     ).fetchone()[0]
     if count >= limit:
         return 0
-    tx.execute(
-        "INSERT INTO contribution_rewards(user_id,kind,target_id,month,units,actor_id) VALUES(?,?,?,?,?,?)",
+    fingerprint = None
+    if kind in ("quality_work", "quality_topic", "asset"):
+        fingerprint = tx.execute(
+            "SELECT contribution_fingerprint(?,?)", (kind, str(target))
+        ).fetchone()[0]
+        if not fingerprint:
+            return 0
+        tx.execute(
+            "SELECT pg_advisory_xact_lock(190,hashtext(?))", (kind + ":" + fingerprint,)
+        )
+        if tx.execute(
+            "SELECT 1 FROM contribution_reward_content WHERE kind=? AND fingerprint=?",
+            (kind, fingerprint),
+        ).fetchone():
+            return 0
+    record = tx.execute(
+        "INSERT INTO contribution_rewards(user_id,kind,target_id,month,units,actor_id) VALUES(?,?,?,?,?,?) RETURNING id",
         (uid, kind, str(target), month, units, actor),
-    )
+    ).fetchone()
+    if fingerprint:
+        tx.execute(
+            "INSERT INTO contribution_reward_content(kind,fingerprint,reward_id) VALUES(?,?,?)",
+            (kind, fingerprint, record[0]),
+        )
     apply_wallet_delta(
         tx,
         uid,

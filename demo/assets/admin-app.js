@@ -1966,7 +1966,7 @@
         </div>` : ""}
 
         <div class="adm-field">
-          <label><input type="checkbox" id="mu-wlock" ${u.wallet.locked ? "checked" : ""} ${readOnlyStaffForNonAdmin ? "disabled" : ""} /> 锁定该用户积分钱包支出（禁止消费/打赏，仅允许入账）</label>
+          <label><input type="checkbox" id="mu-wlock" ${u.wallet.locked ? "checked" : ""} ${readOnlyStaffForNonAdmin ? "disabled" : ""} /> 锁定社区积分（禁止消费/打赏，暂停贡献奖励与分成；充值及退款正常入账，不影响生图余额与免费额度）</label>
         </div>
 
         <div style="font-size:12px;color:var(--adm-ink-soft);background:var(--adm-surface-alt);padding:9px 12px;border-radius:8px;margin-bottom:12px;">

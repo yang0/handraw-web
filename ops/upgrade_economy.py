@@ -23,6 +23,9 @@ def upgrade(dsn, *, apply=False):
         installed = bool(
             conn.execute("SELECT 1 FROM schema_migrations WHERE version=119").fetchone()
         )
+        guards_installed = bool(
+            conn.execute("SELECT 1 FROM schema_migrations WHERE version=120").fetchone()
+        )
         users, points = conn.execute(
             "SELECT count(*),COALESCE(sum(balance),0) FROM wallets"
         ).fetchone()
@@ -30,6 +33,8 @@ def upgrade(dsn, *, apply=False):
             "ok": not real_orders or installed,
             "applied": False,
             "installed": installed,
+            "contributionGuardsInstalled": guards_installed,
+            "requiredVersion": 120,
             "realPaymentOrders": real_orders,
             "pointWallets": users,
             "retainedPoints": points,
@@ -40,14 +45,18 @@ def upgrade(dsn, *, apply=False):
                 "Real payment history exists; reconcile purchases before cutover"
             )
         if apply:
-            conn.execute(
-                (
-                    Path(__file__).resolve().parents[1]
-                    / "backend/postgres_119_economy.sql"
-                ).read_text(encoding="utf-8")
-            )
+            for filename in (
+                "postgres_119_economy.sql",
+                "postgres_120_contribution_guards.sql",
+            ):
+                conn.execute(
+                    (
+                        Path(__file__).resolve().parents[1] / "backend" / filename
+                    ).read_text(encoding="utf-8")
+                )
             report["applied"] = True
             report["installed"] = True
+            report["contributionGuardsInstalled"] = True
         return report
 
 

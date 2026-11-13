@@ -896,6 +896,15 @@ class PointsAndPaymentsTests(unittest.TestCase):
         tx.execute(
             "UPDATE creator_point_earnings SET available_at=now()-interval '1 second'"
         )
+        tx.execute("UPDATE wallets SET locked=1 WHERE user_id=?", (author["id"],))
+        settle_due(self.db, author["id"])
+        self.assertEqual(
+            tx.execute(
+                "SELECT status FROM creator_point_earnings WHERE id=?", (earning["id"],)
+            ).fetchone()[0],
+            "pending",
+        )
+        tx.execute("UPDATE wallets SET locked=0 WHERE user_id=?", (author["id"],))
         settle_due(self.db, author["id"])
         self.assertEqual(
             tx.execute(
