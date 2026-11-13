@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 import re
 
-from .studio_canvases import _error, quote_count
+from .studio_canvases import _error
 
 
 def _owned_run(tx, user, rid, *, lock=False):
@@ -19,21 +19,9 @@ def _owned_run(tx, user, rid, *, lock=False):
     return row
 
 
-def _quote(tx, user, count):
-    from .services import get_site_settings, get_wallet_quota_state
-
-    settings = get_site_settings(tx)
-    wallet = get_wallet_quota_state(tx, user["id"], settings)
-    return quote_count(
-        {
-            "unitPrice": max(
-                0, int(settings.get("economy", {}).get("studio_credit_per_image", 2))
-            ),
-            "freeRemaining": wallet["freeQuotaRemaining"],
-            "balance": wallet["balance"],
-        },
-        count,
-    )
+def _quote(tx,user,items):
+    from .economy import pricing
+    return pricing(tx,user["id"],items) if items else {"count":0,"totalCents":0,"freeCount":0,"items":[],"affordable":True}
 
 
 def list_canvas_runs(db, user, cid, *, cursor="", limit=20):
@@ -86,11 +74,10 @@ def get_canvas_run(db, user, rid):
     by_item = {r["item_id"]: r["images"] for r in media}
     spent = int(
         tx.execute(
-            "SELECT COALESCE(SUM(credits_spent),0) FROM studio_generations WHERE run_id=? AND status<>'refunded'",
+            "SELECT COALESCE(SUM(amount_cents),0) FROM studio_generations WHERE run_id=? AND status='success'",
             (rid,),
         ).fetchone()[0]
     )
-    failed = sum(r["status"] in ("failed", "cancelled") for r in rows)
     # Task ordinals are compacted after selecting combinations. The frozen
     # items keep that order and retain the original output node IDs.
     plan_items = run["plan_json"].get("items", [])
@@ -108,9 +95,9 @@ def get_canvas_run(db, user, rid):
             "batchId": run["external_run_id"],
             "status": run["status"],
             "count": run["expected_count"],
-            "maxCredits": run["plan_json"].get("maxCredits", 0),
-            "spentCredits": spent,
-            "retryQuote": _quote(tx, user, failed),
+            "maxAmountCents": run["plan_json"].get("maxAmountCents", 0),
+            "spentAmountCents": spent,
+            "retryQuote": _quote(tx,user,[r["spec_json"] for r in rows if r["status"] in ("failed","cancelled")]),
             "items": [
                 {
                     "id": r["id"],
@@ -141,8 +128,8 @@ def retry_canvas_run(db, user, rid, body):
             (rid, key),
         ).fetchone()
         payload = {
-            "maxCredits": body.get("maxCredits"),
-            "unitPrice": body.get("unitPrice"),
+            "quoteId": body.get("quoteId"),
+            "maxAmountCents": body.get("maxAmountCents"),
         }
         if previous:
             if previous["payload_json"] != payload:
@@ -153,30 +140,21 @@ def retry_canvas_run(db, user, rid, body):
                 )
             return {"ok": True, "runId": rid, "idempotent": True}
         rows = tx.execute(
-            "SELECT id FROM generation_items WHERE run_id=? AND status IN ('failed','cancelled') FOR UPDATE",
+            "SELECT id,spec_json FROM generation_items WHERE run_id=? AND status IN ('failed','cancelled') ORDER BY ordinal FOR UPDATE",
             (rid,),
         ).fetchall()
         if not rows:
             return {"ok": True, "runId": rid, "idempotent": True}
-        quote = _quote(tx, user, len(rows))
-        spent = int(
-            tx.execute(
-                "SELECT COALESCE(SUM(credits_spent),0) FROM studio_generations WHERE run_id=? AND status<>'refunded'",
-                (rid,),
-            ).fetchone()[0]
-        )
-        limit = body.get("maxCredits")
-        if (
-            type(limit) is not int
-            or limit < spent + quote["total"]
-            or not quote["affordable"]
-            or body.get("unitPrice") != quote["unitPrice"]
-        ):
-            raise _error(
-                "重试费用已变化，请重新确认", status=409, code="canvas_budget_required"
-            )
-        plan = dict(run["plan_json"])
-        plan.update(maxCredits=limit, unitPrice=quote["unitPrice"])
+        from .economy import reserve_quote
+        lines=reserve_quote(tx,user["id"],str(body.get("quoteId") or ""),key)
+        if len(lines)!=len(rows) or type(body.get("maxAmountCents")) is not int or sum(x["amountCents"] for x in lines)>body["maxAmountCents"]:
+            raise _error("重试费用需要重新确认",status=409,code="canvas_budget_required")
+        for index,(row,line) in enumerate(zip(rows,lines)):
+            if line["spec"]["id"]!=row["spec_json"].get("specId","standard-1k") or line["spec"]["ratio"]!=row["spec_json"].get("ratio","3:4"):
+                raise _error("重试规格与报价不符",status=409,code="quote_spec_mismatch")
+            tx.execute("UPDATE generation_charges SET item_id=? WHERE quote_id=? AND position=?",(row["id"],body["quoteId"],index))
+        plan=dict(run["plan_json"])
+        plan["maxAmountCents"]=plan.get("maxAmountCents",0)+body["maxAmountCents"]
         tx.execute(
             "INSERT INTO canvas_run_requests(run_id,request_id,payload_json) VALUES(?,?,?::jsonb)",
             (rid, key, json.dumps(payload)),

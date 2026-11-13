@@ -35,18 +35,9 @@ from pathlib import Path
 from unittest.mock import patch
 
 from backend.server import SESSION_COOKIE_NAME, HandrawRequestHandler
-from backend.services import (
-    ServiceError,
-    _cloud_generation_result,
-    _serialize_work,
-    build_boot_payload,
-    get_generation_visible_prompt,
-    get_studio_workspace,
-    get_work_client_prompt,
-    prepare_cloud_generation,
-    register_user,
-    run_blackbox_backfill,
-)
+from backend.services import ServiceError, _cloud_generation_result, _serialize_work, build_boot_payload, get_generation_visible_prompt, get_studio_workspace, get_work_client_prompt, register_user, run_blackbox_backfill
+from tests.economy_support import prepare_cloud_generation
+
 
 
 class Phase3sBlackboxTests(unittest.TestCase):
@@ -144,6 +135,10 @@ class Phase3sBlackboxTests(unittest.TestCase):
         }
         if cookie:
             headers["Cookie"] = cookie
+        if method=="POST" and path=="/api/studio/generate" and isinstance(body,dict):
+            from tests.economy_support import http_body
+            body=http_body(self.db,headers,body)
+            data=json.dumps(body).encode("utf-8")
         req = urllib.request.Request(self.base + path, data=data, headers=headers, method=method)
         try:
             with urllib.request.urlopen(req, timeout=10) as resp:

@@ -13,12 +13,9 @@ from tempfile import TemporaryDirectory
 
 from tests.postgres_support import open_isolated_postgres
 from backend import server
-from backend.services import (
-    complete_cloud_generation,
-    prepare_cloud_generation,
-    publish_user_work,
-    register_user,
-)
+from backend.services import complete_cloud_generation, publish_user_work, register_user
+from tests.economy_support import prepare_cloud_generation
+
 
 IMG = "/images/individual/FA/FA-013.webp"
 

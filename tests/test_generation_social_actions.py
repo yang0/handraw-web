@@ -15,17 +15,9 @@ from pathlib import Path
 from unittest.mock import patch
 
 from backend.server import HandrawRequestHandler
-from backend.services import (
-    register_user,
-    login_user,
-    build_boot_payload,
-    toggle_user_like,
-    toggle_user_collection,
-    get_user_collected_generations,
-    fork_generation_recipe,
-    prepare_cloud_generation,
-    ServiceError,
-)
+from backend.services import register_user, login_user, build_boot_payload, toggle_user_like, toggle_user_collection, get_user_collected_generations, fork_generation_recipe, ServiceError
+from tests.economy_support import prepare_cloud_generation
+
 
 
 class GenerationSocialActionsTests(unittest.TestCase):
@@ -86,6 +78,9 @@ class GenerationSocialActionsTests(unittest.TestCase):
         token: str = "",
     ) -> tuple[int, dict]:
         url = f"http://127.0.0.1:{self.server_port}{path}"
+        if method=="POST" and path=="/api/studio/generate" and isinstance(body,dict):
+            from tests.economy_support import http_body
+            body=http_body(self.db,{"Cookie":cookie or "","Authorization":f"Bearer {token}"} if token else {"Cookie":cookie or ""},body)
         data = json.dumps(body).encode("utf-8") if body is not None else None
         req = urllib.request.Request(url, data=data, method=method)
         if body is not None:

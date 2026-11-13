@@ -10,6 +10,8 @@ from concurrent.futures import ThreadPoolExecutor
 from tests.postgres_support import open_isolated_postgres
 from backend import curation as C, services as S, resource_discussions as D
 
+from tests.economy_support import prepare_cloud_generation
+
 
 class CurationTests(unittest.TestCase):
     def setUp(self):
@@ -44,7 +46,7 @@ class CurationTests(unittest.TestCase):
         self.db.close();self.env.stop();self.tmp.cleanup()
 
     def item(self,kind='style',**overrides):
-        base = {'kind':kind,'name':'纸上微光','title':'纸上微光作品','notes':'纸上微光作品创作说明心得记录','images':['/images/FA-001.webp'],'definition':'秘密定义：自然纸纹和墨线','prompt':'秘密提示：窗边一束花','unlockCost':5}
+        base = {'kind':kind,'name':'纸上微光','title':'纸上微光作品','notes':'纸上微光作品创作说明心得记录','images':['/images/FA-001.webp'],'definition':'秘密定义：自然纸纹和墨线','prompt':'秘密提示：窗边一束花','unlockCost':10}
         if kind in ('style', 'layout'):
             base['cover'] = getattr(self, 'cover_url', '/uploads/cover_square.jpg')
         return dict(base, **overrides)
@@ -90,7 +92,7 @@ class CurationTests(unittest.TestCase):
         self.assertEqual(self.db.get_conn().execute('SELECT COUNT(*) FROM catalog_assets').fetchone()[0],0)
         pending_code=res_style['submissions'][0]['targetId']
         # Phase 3b-13a: pending submission can be used for cloud generation by logged-in users
-        gen_res = S.prepare_cloud_generation(self.db,self.author,{'style1':pending_code,'prompt':'测试试用'})
+        gen_res = prepare_cloud_generation(self.db,self.author,{'style1':pending_code,'prompt':'测试试用'})
         self.assertIn('genId', gen_res)
         # In 13a, author can export skill content with definition, while outsider cannot (403)
         skill_content = S.build_skill_asset_content(self.db,self.author,pending_code)
@@ -122,10 +124,10 @@ class CurationTests(unittest.TestCase):
         C.vote(self.db,self.users['review_b'],{'assignmentId':b['assignmentId'],'decision':'changes','reason':'定义需清楚'})
         result=self.ballot('review_c')
         self.assertEqual(result['status'],'approved')
-        count=self.db.get_conn().execute('SELECT COUNT(*) FROM ledgers WHERE event_key LIKE \'pub_asset_%\'').fetchone()[0]
+        count=self.db.get_conn().execute('SELECT COUNT(*) FROM ledgers WHERE event_key LIKE \'contribution:asset:%\'').fetchone()[0]
         C.vote(self.db,self.users['review_a'],{'assignmentId':a['assignmentId'],'decision':'approve'})
         self.assertEqual(count,1)
-        self.assertEqual(self.db.get_conn().execute('SELECT COUNT(*) FROM ledgers WHERE event_key LIKE \'pub_asset_%\'').fetchone()[0],1)
+        self.assertEqual(self.db.get_conn().execute('SELECT COUNT(*) FROM ledgers WHERE event_key LIKE \'contribution:asset:%\'').fetchone()[0],1)
 
     def test_pause_resume_do_not_mint_access_and_release_slots(self):
         for action in ('pause','resume'):
@@ -145,6 +147,17 @@ class CurationTests(unittest.TestCase):
             admin_upsert_catalog_asset(self.db,self.admin,dict(self.item(),sourceType='community',code='USR-S-BYPASS'))
         self.assertIsNone(self.db.get_conn().execute("SELECT 1 FROM catalog_assets WHERE code='USR-S-BYPASS'").fetchone())
 
+    def test_withdrawn_resource_cannot_be_reposted_to_resell_existing_rights(self):
+        first=self.submit()
+        self.ballot('review_a');self.ballot('review_b')
+        code=first['code']
+        self.db.get_conn().execute("UPDATE catalog_assets SET status='deleted' WHERE code=?",(code,))
+        with self.assertRaises(S.ServiceError) as caught:
+            self.submit(definition='秘密定义： 自然纸纹和墨线',requestId='new-sale')
+        self.assertEqual(caught.exception.code,'resource_repost')
+        self.assertIn(code,str(caught.exception))
+        self.assertEqual(self.db.get_conn().execute("SELECT count(*) FROM catalog_assets WHERE code=?",(code,)).fetchone()[0],1)
+
     def test_revision_preserves_public_version_qualification_and_reward(self):
         res=self.submit();sid=res['submissions'][0]['id'];code=res['code']
         oldtask=C.review_queue(self.db,self.users['review_c'])['assignment']
@@ -159,7 +172,7 @@ class CurationTests(unittest.TestCase):
         latest=dict(self.db.get_conn().execute('SELECT * FROM catalog_assets WHERE code=?',(code,)).fetchone())
         self.assertEqual(latest['name'],'新版微光')
         self.assertEqual(latest['published_at_ms'],row['published_at_ms'])
-        self.assertEqual(self.db.get_conn().execute('SELECT COUNT(*) FROM ledgers WHERE event_key=?',(f'pub_asset_{code}',)).fetchone()[0],1)
+        self.assertEqual(self.db.get_conn().execute('SELECT COUNT(*) FROM ledgers WHERE event_key=?',(f'contribution:asset:{code}',)).fetchone()[0],1)
 
     def test_return_resubmit_appeal_and_admin_self_boundary(self):
         res=self.submit();sid=res['submissions'][0]['id']

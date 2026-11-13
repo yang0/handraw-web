@@ -169,10 +169,13 @@ class LoggingConfigurationTests(unittest.TestCase):
         worker._stop = Mock()
         worker._stop.is_set.side_effect = [False, False, True]
         worker.reconcile_once = Mock(side_effect=[RuntimeError('temporary DB failure'), 0])
+        worker.reconcile_economy_once = Mock(side_effect=[RuntimeError('temporary economy failure'), None])
         with self.assertLogs('backend.server', level='ERROR') as logs:
             worker._run()
         self.assertEqual(worker.reconcile_once.call_count, 2)
-        self.assertIn('worker=generation-reconciler iteration failed', logs.output[0])
+        self.assertEqual(worker.reconcile_economy_once.call_count,2)
+        self.assertTrue(any('worker=generation-reconciler iteration failed' in message for message in logs.output))
+        self.assertTrue(any('worker=economy-maintenance iteration failed' in message for message in logs.output))
 
     def test_connection_failures_outside_dispatch_reach_log_fallback(self):
         server = HandrawHTTPServer(('127.0.0.1', 0), ProbeHandler)

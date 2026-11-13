@@ -169,7 +169,9 @@ def _normalise_item(kind: str, item: dict[str, Any], *, strict_cover: bool = Fal
             raise ServiceError(f"{label}名称不能为空", status=400, code="missing_name")
         if not definition:
             raise ServiceError(f"{label}定义不能为空", status=400, code="missing_definition")
-        cost = max(0, min(50, _int(item.get("unlockCost") or item.get("price") or 0)))
+        cost = _int(item.get("unlockCost") or item.get("price") or 0)
+        if not 0<=cost<=500:
+            raise ServiceError("资源积分价格范围为0至500分",code="invalid_point_price")
 
         raw_cov = str(item.get("cover") or item.get("image") or "").strip()
         cover_cand = _clean_images(item.get("cover") or item.get("image"))[:1]
@@ -480,6 +482,10 @@ def submit(db: Database, user: dict[str, Any], body: dict[str, Any]) -> dict[str
             "作品已改为即时发布，请通过作品发布接口单独提交", status=400, code="work_publish_moved"
         )
 
+    from .points import validate_price
+    for item in items:
+        if item["kind"] in ("style","layout"):
+            validate_price(db.get_conn(),"asset",int(item.get("payload",item).get("unlockCost") or 0))
     it0 = items[0]
     from .runtime_policy import sanitize_html, sanitize_plain_text
     default_title = sanitize_plain_text(_s(it0.get("name") or it0.get("title"), 140) or "社区投稿征集", max_chars=140)
@@ -523,6 +529,16 @@ def submit(db: Database, user: dict[str, Any], body: dict[str, Any]) -> dict[str
                     "deduplicated": True,
                 }
 
+        # A published resource keeps its identity and previous buyers even when
+        # withdrawn. Revisions use the existing submission; relisting identical
+        # definitions under a new code must not sell the same entitlement again.
+        for item in items:
+            if item.get("kind") not in ("style","layout"):
+                continue
+            definition=re.sub(r"\s+","",str(item.get("definition") or ""))
+            previous=tx.execute("SELECT code FROM catalog_assets WHERE author_username=? AND kind=? AND regexp_replace(definition,'\\s+','','g')=? LIMIT 1",(username,item["kind"],definition)).fetchone()
+            if previous:
+                raise ServiceError(f"此资源已有记录 {previous[0]}，请修改原资源以保留已购权益",status=409,code="resource_repost")
         topic_id = f"topic_{now_ms}_{uuid.uuid4().hex[:4]}"
         images_preview: list[str] = []
         for it in items:
@@ -1101,7 +1117,7 @@ def _publish_approved(tx: Any, sub: dict[str, Any], revision: int) -> dict[str, 
             )
 
         reward_kind = "publish_asset"
-        reward = int(econ.get("asset_publish_credits", 15))
+        reward = 20
         event_key = f"pub_asset_{target_id}"
         reason = f"收录社区{'画风' if kind == 'style' else '图型'} {target_id}《{payload.get('name') or ''}》"
         published: dict[str, Any] = {"kind": kind, "code": target_id}
@@ -1276,8 +1292,7 @@ def _publish_approved(tx: Any, sub: dict[str, Any], revision: int) -> dict[str, 
     upgraded = ''
     if after_honor['tier'] > before_honor['tier']:
         balance, honor_credited = apply_wallet_delta(tx,owner_uid,int(econ.get('honor_upgrade_credits',10)), 'honor_upgrade',f"创作者荣誉晋升至{after_honor['badge']}",event_key=f"honor_up_{owner_uid}_{after_honor['tier']}")
-        if honor_credited:
-            upgraded = after_honor['badge']
+        upgraded = after_honor['badge']
     # Preserve explicit public grants for the collected resource, independently of its forum entry.
     all_urls = list(payload.get('images', []))
     cov = cover_of(payload)
@@ -1940,8 +1955,7 @@ def _reward_direct_work(
             f"创作者荣誉晋升至{after_honor['badge']}",
             event_key=f"honor_up_{owner_uid}_{after_honor['tier']}",
         )
-        if honor_credited:
-            upgraded_badge = str(after_honor["badge"])
+        upgraded_badge = str(after_honor["badge"])
 
     for url in images or []:
         media = tx.execute(

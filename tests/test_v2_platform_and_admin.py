@@ -233,10 +233,10 @@ class HandrawV2PlatformAndAdminTests(unittest.TestCase):
         )
         self.assertEqual(code, 200, reg)
         # +20 welcome + +10 invitee = 30
-        self.assertEqual(reg["boot"]["credits"], 30)
+        self.assertEqual(reg["boot"]["credits"], 0)
 
         _, after_boot = admin.request("GET", "/api/boot")
-        self.assertEqual(after_boot["credits"], yang_before + 15)
+        self.assertEqual(after_boot["credits"], yang_before)
 
         # Freeze the new user from Admin Console -> active session must immediately be revoked
         _, users_res = admin.request("GET", "/api/admin/users?q=new_creator_99")
@@ -297,7 +297,7 @@ class HandrawV2PlatformAndAdminTests(unittest.TestCase):
         # 1) Daily Check-in (+5, idempotent same day)
         code1, ck1 = su.request("POST", "/api/wallet/checkin", {})
         self.assertEqual(code1, 200)
-        self.assertEqual(ck1["credits"], c0 + 5)
+        self.assertEqual(ck1["credits"], c0 + 1)
         code2, _ = su.request("POST", "/api/wallet/checkin", {})
         self.assertEqual(code2, 400)
 
@@ -305,7 +305,7 @@ class HandrawV2PlatformAndAdminTests(unittest.TestCase):
         code_rd, rd = su.request("POST", "/api/wallet/redeem", {"code": "HANDRAW2026"})
         self.assertEqual(code_rd, 200)
         self.assertEqual(rd["added"], 30)
-        self.assertEqual(rd["credits"], c0 + 35)
+        self.assertEqual(rd["credits"], c0 + 31)
         code_rd_dup, _ = su.request("POST", "/api/wallet/redeem", {"code": "HANDRAW2026"})
         self.assertEqual(code_rd_dup, 400)
 
@@ -315,7 +315,7 @@ class HandrawV2PlatformAndAdminTests(unittest.TestCase):
         _, yang_b0 = admin.request("GET", "/api/boot")
         code_tip, tip_res = su.request("POST", "/api/interactions/tip", {"targetType": "work", "targetId": yang_work["id"], "amount": 4})
         self.assertEqual(code_tip, 200)
-        self.assertEqual(tip_res["credits"], c0 + 31)
+        self.assertEqual(tip_res["credits"], c0 + 27)
         _, yang_b1 = admin.request("GET", "/api/boot")
         self.assertEqual(yang_b1["credits"], yang_b0["credits"] + 4)
 
@@ -389,7 +389,7 @@ class HandrawV2PlatformAndAdminTests(unittest.TestCase):
         self.assertIn("机密高阶手绘提示词内容_888", ul_res["unlockedContent"])
         self.assertEqual(ul_res["credits"], su_before_buy["credits"] - 10)
         _, yang_after_sale = admin.request("GET", "/api/boot")
-        self.assertEqual(yang_after_sale["credits"], yang_before_sale["credits"] + 8)
+        self.assertEqual(yang_after_sale["credits"], yang_before_sale["credits"])
 
         # Admin refunds unlock order -> buyer gets +10, author gets -8 clawback
         _, ul_list = admin.request("GET", "/api/admin/unlocks?status=settled")
@@ -432,8 +432,8 @@ class HandrawV2PlatformAndAdminTests(unittest.TestCase):
         # Exact amounts, not "whatever the server reported".  FA-013 is an
         # unclaimed style, so this first share earns base +5 + pioneer +10, and
         # crossing the share threshold also triggers the +10 honour upgrade.
-        self.assertEqual(res_w['reward'], 15, res_w)
-        c_after_work = c0 + 5 + 10 + 10
+        self.assertEqual(res_w['reward'], 0, res_w)
+        c_after_work = c0
         _,published_boot=fresh.request('GET','/api/boot')
         self.assertEqual(published_boot['credits'], c_after_work, "base + pioneer + honour upgrade must all apply")
         self.assertTrue(any(w['id']==res_w['workId'] for w in published_boot['works']))
@@ -457,7 +457,7 @@ class HandrawV2PlatformAndAdminTests(unittest.TestCase):
         self.assertEqual(res_a['status'],'pending')
         collected_asset=self.collect(res_a)
         self.assertTrue(collected_asset['upgradedBadge'])
-        self.assertEqual(collected_asset['credits'],after_work+15+10)
+        self.assertEqual(collected_asset['credits'],after_work+20)
 
     def test_06_forum_bounty_escrow_accept_and_admin_arbitration(self) -> None:
         su = self.client("su_editorial")
@@ -590,46 +590,23 @@ class HandrawV2PlatformAndAdminTests(unittest.TestCase):
         _, logs = admin.request("GET", "/api/admin/audit-logs?targetType=work")
         self.assertTrue(any(l["targetId"] == own_wid for l in logs["items"]))
 
-    def test_09_studio_quota_credit_fallback_and_gateway_auto_refund(self) -> None:
-        su = self.client("su_editorial")
-        _, b0 = su.request("GET", "/api/boot")
-        start_credits = b0["credits"]
-        self.assertEqual(b0["freeQuotaRemaining"], 3)
-
-        # 3 free daily generations
-        for expected_rem in (2, 1, 0):
-            code, res = su.request(
-                "POST",
-                "/api/studio/generate",
-                {"prompt": "测试节气插画", "style1": "FX-001", "ratio": "3:4", "simulateGateway": "ok"},
-            )
-            self.assertEqual(code, 200, res)
-            self.assertEqual(res["costType"], "free_quota")
-            self.assertEqual(res["freeQuotaRemaining"], expected_rem)
-            self.assertEqual(res["credits"], start_credits)
-
-        # 4th generation falls back to 2 credits
-        code4, res4 = su.request(
-            "POST",
-            "/api/studio/generate",
-            {"prompt": "第4张消耗积分测试", "style1": "FX-001", "ratio": "3:4", "simulateGateway": "ok"},
-        )
-        self.assertEqual(code4, 200, res4)
-        self.assertEqual(res4["costType"], "credits")
-        self.assertEqual(res4["creditsSpent"], 2)
-        self.assertEqual(res4["credits"], start_credits - 2)
-
-        # 5th generation simulates gateway failure -> 502 + automatic 2-credit refund!
-        code5, res5 = su.request(
-            "POST",
-            "/api/studio/generate",
-            {"prompt": "网关异常自动退费测试", "style1": "FX-001", "ratio": "3:4", "simulateGateway": "fail"},
-        )
-        self.assertEqual(code5, 502)
-        self.assertTrue(res5.get("refunded"))
-
-        _, b_final = su.request("GET", "/api/boot")
-        self.assertEqual(b_final["credits"], start_credits - 2)
+    def test_09_spec_quota_cash_reservation_and_failure_release(self):
+        from backend.economy import create_quote,cash_delta
+        from backend.services import complete_cloud_generation,refund_failed_cloud_generation
+        from tests.economy_support import configure,prepare_cloud_generation
+        configure(self.db)
+        user=dict(self.db.get_conn().execute("SELECT * FROM users WHERE username='su_editorial'").fetchone())
+        self.db.get_conn().execute("UPDATE generation_quota_policy SET base_units=1")
+        points=self.db.get_conn().execute("SELECT balance FROM wallets WHERE user_id=?",(user['id'],)).fetchone()[0]
+        with self.db.transaction() as tx:cash_delta(tx,user['id'],100,0,'fixture','cash-fixture')
+        first=prepare_cloud_generation(self.db,user,{'prompt':'免费1K','requestId':'first'})
+        complete_cloud_generation(self.db,first['genId'],'fixture',['/images/poster-demo-autumn-equinox.webp'])
+        second=prepare_cloud_generation(self.db,user,{'prompt':'人民币1K','requestId':'second'})
+        self.assertEqual(second['costType'],'cash')
+        self.assertEqual(second['amountCents'],20)
+        refund_failed_cloud_generation(self.db,second['genId'],'definite failure')
+        self.assertEqual(self.db.get_conn().execute("SELECT balance_cents,held_cents FROM cash_accounts WHERE user_id=?",(user['id'],)).fetchone()[0],100)
+        self.assertEqual(self.db.get_conn().execute("SELECT balance FROM wallets WHERE user_id=?",(user['id'],)).fetchone()[0],points)
 
     def test_10_discourse_user_migration_password_verification_and_upgrade(self) -> None:
         admin = self.client("yang0")
@@ -654,7 +631,7 @@ class HandrawV2PlatformAndAdminTests(unittest.TestCase):
         migrated_cli = self.client("legacy_painter", password=raw_pw)
         _, m_boot = migrated_cli.request("GET", "/api/boot")
         self.assertTrue(m_boot["loggedIn"])
-        self.assertEqual(m_boot["credits"], 60)
+        self.assertEqual(m_boot["credits"], 0)
 
         row = self.db.get_conn().execute(
             "SELECT password_algo, password_hash FROM users WHERE username = 'legacy_painter'"

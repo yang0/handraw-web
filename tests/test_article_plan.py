@@ -2,7 +2,7 @@
 
 Covers:
 1. Authentication: 401 when unauthenticated, 403 when using personal access token (hwt_).
-2. Rate limiting: 30 requests/day per user returns 429 with Chinese message.
+2. Free planning keeps burst protection without a daily paid quota.
 3. Empty body: when blocks has no body elements, returns only cover and illustrations: [].
 4. Template fallback: returns source: "template" with expected anchors (2, 4, 6 on Article F1).
 5. Model validation robustness (Acceptance B8):
@@ -136,20 +136,16 @@ class ArticlePlanRoutesTests(unittest.TestCase):
         self.assertEqual(ctx.exception.status, 403)
         self.assertEqual(ctx.exception.code, "token_disallowed")
 
-    def test_rate_limiting_30_per_day(self) -> None:
-        payload = {"title": "留白工作法", "blocks": F1_BLOCKS}
-
-        # First 30 calls must succeed (status 200)
-        for i in range(30):
-            status, body = self._post("/api/studio/article-plan", payload, cookie=self.cookie)
-            self.assertEqual(status, 200, f"Call {i+1} should succeed")
-            self.assertTrue(body.get("ok"))
-
-        # 31st call must be 429
-        status, body = self._post("/api/studio/article-plan", payload, cookie=self.cookie)
-        self.assertEqual(status, 429)
-        self.assertEqual(body.get("code"), "rate_limited")
-        self.assertIn("今日文章规划次数已达上限（30 次/天）", body.get("error", ""))
+    def test_free_planning_has_burst_protection_without_daily_quota(self):
+        payload={"title":"留白工作法","blocks":F1_BLOCKS}
+        with patch("backend.runtime_policy.check_auth_rate_limit",return_value=False):
+            status,body=self._post("/api/studio/article-plan",payload,cookie=self.cookie)
+        self.assertEqual(status,429)
+        self.assertEqual(body["code"],"rate_limited")
+        with patch("backend.runtime_policy.check_auth_rate_limit",return_value=True):
+            status,body=self._post("/api/studio/article-plan",payload,cookie=self.cookie)
+        self.assertEqual(status,200)
+        self.assertTrue(body["ok"])
 
     def test_empty_body_only_returns_cover(self) -> None:
         # Title only, blocks has only h1

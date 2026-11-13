@@ -105,7 +105,7 @@ class BrowserRenderTests(unittest.TestCase):
                     "kind": "style", "name": CURATION_ITEM, "title": CURATION_ITEM,
                     "cover": "/uploads/cover_square.jpg",
                     "images": [IMG],
-                    "definition": "定义：纸纹墨线", "prompt": "提示：窗边一束花", "unlockCost": 5,
+                    "definition": "定义：纸纹墨线", "prompt": "提示：窗边一束花", "unlockCost": 10,
                 }],
             },
         )

@@ -12,18 +12,18 @@ from unittest.mock import patch
 
 from backend.admin_services import admin_delete_user
 from tests.postgres_support import open_isolated_postgres
-from backend.services import register_user
+from backend.services import register_user, authenticate_request, apply_wallet_delta
 
 
 class AdminUserDeletionForeignKeyTests(unittest.TestCase):
-    def test_deletion_clears_recent_fk_dependents_without_disabling_constraints(self) -> None:
+    def test_closure_retains_accounting_identity_revokes_access_and_keeps_constraints(self) -> None:
         from psycopg.errors import ForeignKeyViolation
 
         temp = self.enterContext(tempfile.TemporaryDirectory())
         self.enterContext(patch.dict(os.environ, {"HANDRAW_DEMO_MODE": "0", "HANDRAW_PRIVATE_STORAGE": temp}))
         db = open_isolated_postgres(self)
         admin, _ = register_user(db, "delete_admin", "StrongPassword123!")
-        victim, _ = register_user(db, "delete_victim", "StrongPassword456!")
+        victim, token = register_user(db, "delete_victim", "StrongPassword456!")
         uid = int(victim["id"])
         now = "2026-11-07T00:00:00Z"
 
@@ -108,15 +108,21 @@ class AdminUserDeletionForeignKeyTests(unittest.TestCase):
         ).fetchone())
         self.assertEqual(db.get_conn().execute("SHOW session_replication_role").fetchone()[0], "origin")
 
+        with db.transaction() as tx:
+            apply_wallet_delta(tx,uid,20,"admin_adjust","Retained source fixture")
         deleted = admin_delete_user(db, admin_row, uid, "Test cleanup")
         self.assertTrue(deleted["ok"])
-        self.assertIsNone(db.get_conn().execute(
-            "SELECT id FROM users WHERE id=?", (uid,)
-        ).fetchone())
+        closed=db.get_conn().execute("SELECT status,closed_at FROM users WHERE id=?",(uid,)).fetchone()
+        self.assertEqual(closed["status"],"frozen")
+        self.assertTrue(closed["closed_at"])
+        self.assertEqual(db.get_conn().execute("SELECT balance FROM wallets WHERE user_id=?",(uid,)).fetchone()[0],20)
+        self.assertEqual(db.get_conn().execute("SELECT sum(delta) FROM ledgers WHERE user_id=?",(uid,)).fetchone()[0],20)
+        self.assertEqual(db.get_conn().execute("SELECT count(*) FROM sessions WHERE user_id=?",(uid,)).fetchone()[0],0)
+        self.assertIsNone(authenticate_request(db,{"Cookie":"handraw_sid="+token}))
         with self.assertRaises(ForeignKeyViolation), db.transaction() as tx:
             tx.execute(
                 "INSERT INTO security_devices(user_id,fingerprint,label,first_seen_at,last_seen_at) VALUES (?,?,?,?,?)",
-                (uid, "invalid-device", "Test browser", now, now),
+                (uid+999999, "invalid-device", "Test browser", now, now),
             )
         self.assertIsNotNone(db.get_conn().execute(
             "SELECT id FROM users WHERE id=?", (admin["id"],)

@@ -198,7 +198,7 @@ class RemoveWorkPricingAcceptanceTests(unittest.TestCase):
         buyer_bal_1 = int(self.db.get_conn().execute("SELECT balance FROM wallets WHERE user_id = ?", (self.buyer["id"],)).fetchone()["balance"])
         author_bal_1 = int(self.db.get_conn().execute("SELECT balance FROM wallets WHERE user_id = ?", (self.author["id"],)).fetchone()["balance"])
         self.assertEqual(buyer_bal_1, buyer_bal_0 - 20)
-        self.assertEqual(author_bal_1, author_bal_0 + 16)
+        self.assertEqual(author_bal_1, author_bal_0)
 
         # Forum topic paid reading unlock (cost: 10 -> buyer -10, author +8)
         with self.db.transaction() as tx:
@@ -217,7 +217,7 @@ class RemoveWorkPricingAcceptanceTests(unittest.TestCase):
         buyer_bal_2 = int(self.db.get_conn().execute("SELECT balance FROM wallets WHERE user_id = ?", (self.buyer["id"],)).fetchone()["balance"])
         author_bal_2 = int(self.db.get_conn().execute("SELECT balance FROM wallets WHERE user_id = ?", (self.author["id"],)).fetchone()["balance"])
         self.assertEqual(buyer_bal_2, buyer_bal_1 - 10)
-        self.assertEqual(author_bal_2, author_bal_1 + 8)
+        self.assertEqual(author_bal_2, author_bal_1)
 
     def test_07_existing_history_is_preserved(self):
         """7. Historical unlock records for works are not deleted and remain intact."""

@@ -186,46 +186,11 @@ def load_ai_config() -> dict:
 
 
 DEFAULT_PAYMENT_PACKAGES: list[dict[str, Any]] = [
-    {
-        "id": "pack_50",
-        "title": "50 积分尝鲜包",
-        "description": "可生成约 25 张云端高清图像，永久有效",
-        "credits": 50,
-        "price_cents": 500,
-        "price_display": "¥5",
-        "badge": "",
-        "product_id": "pack_50",
-    },
-    {
-        "id": "pack_100",
-        "title": "100 积分标准包",
-        "description": "常用创作补充包，可生成约 50 张图像",
-        "credits": 100,
-        "price_cents": 990,
-        "price_display": "¥9.9",
-        "badge": "推荐",
-        "product_id": "pack_100",
-    },
-    {
-        "id": "pack_200",
-        "title": "200 积分进阶包",
-        "description": "高性价比进阶包，可生成约 100 张图像",
-        "credits": 200,
-        "price_cents": 1900,
-        "price_display": "¥19",
-        "badge": "",
-        "product_id": "pack_200",
-    },
-    {
-        "id": "pack_500",
-        "title": "500 积分加油包",
-        "description": "高频创作囤货包，优惠幅度最大",
-        "credits": 500,
-        "price_cents": 4500,
-        "price_display": "¥45",
-        "badge": "超值",
-        "product_id": "pack_500",
-    },
+    {"id":f"cash_{yuan}","purpose":"cash","title":f"生图余额 ¥{yuan}","description":"仅用于图片生成，不附赠积分","credits":0,"price_cents":yuan*100,"badge":"","product_id":f"cash_{yuan}"}
+    for yuan in (10,30,100)
+] + [
+    {"id":f"points_{yuan*10}","purpose":"points","title":f"{yuan*10} 社区积分","description":"用于内容和资源解锁，不可兑换现金或生图余额","credits":yuan*10,"price_cents":yuan*100,"badge":"","product_id":f"points_{yuan*10}"}
+    for yuan in (5,10,30)
 ]
 
 
@@ -322,7 +287,14 @@ def load_payment_config() -> dict[str, Any]:
             price_cents = int(item.get("price_cents") or 0)
         except (TypeError, ValueError):
             continue
-        if not pack_id or pack_id in seen_ids or credits <= 0 or price_cents <= 0:
+        purpose=str(item.get("purpose") or "points")
+        if purpose not in ("cash","points") or currency!="CNY":
+            continue
+        if purpose=="cash" and (credits!=0 or price_cents not in (1000,3000,10000)):
+            continue
+        if purpose=="points" and (credits not in (50,100,300) or price_cents!=credits*10):
+            continue
+        if not pack_id or pack_id in seen_ids or price_cents <= 0:
             continue
         seen_ids.add(pack_id)
         packages.append(
@@ -331,6 +303,7 @@ def load_payment_config() -> dict[str, Any]:
                 "title": str(item.get("title") or f"{credits} 积分加油包").strip(),
                 "description": str(item.get("description") or "").strip(),
                 "credits": credits,
+                "purpose": purpose,
                 "price_cents": price_cents,
                 "price_display": str(item.get("price_display") or _format_price_display(price_cents, currency)).strip(),
                 "badge": str(item.get("badge") or "").strip(),
@@ -410,6 +383,7 @@ def get_public_billing_summary(cfg: dict[str, Any] | None = None) -> dict[str, A
                 "title": p["title"],
                 "description": p["description"],
                 "credits": int(p["credits"]),
+                "purpose": p.get("purpose","points"),
                 "priceCents": int(p["price_cents"]),
                 "priceDisplay": p["price_display"],
                 "badge": p["badge"],

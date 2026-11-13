@@ -206,6 +206,14 @@ def apply_wallet_delta(
     allow_negative: bool = False,
 ) -> tuple[int, bool]:
     """Atomically apply credit delta and write append-only ledger. Returns (new_balance, applied)."""
+    # These old engagement actions must never mint spendable points.
+    if kind in {"welcome", "invite_invitee", "invite_inviter", "publish_work", "honor_upgrade", "first_collect", "first_cheer", "discourse_migration"}:
+        row = tx.execute("SELECT balance FROM wallets WHERE user_id=?", (user_id,)).fetchone()
+        return (int(row[0]) if row else 0), False
+    if kind == "publish_asset":
+        from .points import reward
+        granted = reward(tx, user_id, "asset", ref_id, actor_id)
+        return int(tx.execute("SELECT balance FROM wallets WHERE user_id=?", (user_id,)).fetchone()[0]), bool(granted)
     now = utc_now_iso()
     # PostgreSQL transactions must lock the wallet row before reading its
     # balance. The database lock protects separate worker processes.
@@ -237,32 +245,25 @@ def apply_wallet_delta(
         raise ServiceError(f"积分不足（需 {abs(delta)} 积分，当前可用 {cur_balance} 积分）", status=400, code="insufficient_credits")
 
     tx.execute("UPDATE wallets SET balance = ?, updated_at = ? WHERE user_id = ?", (new_balance, now, user_id))
-    tx.execute(
+    ledger = tx.execute(
         """
         INSERT INTO ledgers (user_id, delta, balance_after, kind, event_key, reason, ref_type, ref_id, actor_id, created_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING id
         """,
         (user_id, int(delta), new_balance, kind, event_key, reason, ref_type, str(ref_id), actor_id, now),
-    )
+    ).fetchone()
+    from .points import track_delta
+    track_delta(tx, user_id, ledger[0], int(delta), kind, ref_type, str(ref_id))
     return new_balance, True
 
 
 def get_wallet_quota_state(conn: PgConnection, user_id: int, settings: dict[str, Any]) -> dict[str, Any]:
-    today = local_today_str()
-    econ = settings.get("economy", {})
-    max_q = max(0, int(econ.get("daily_free_quota", 3)))
-    w = conn.execute("SELECT * FROM wallets WHERE user_id = ?", (user_id,)).fetchone()
-    if not w:
-        return {"balance": 0, "freeQuotaMax": max_q, "freeQuotaRemaining": max_q, "dailyCheckedIn": False, "locked": False}
-    used = int(w["free_quota_used"]) if w["free_quota_date"] == today else 0
-    checked_in = bool(w["checkin_date"] == today)
-    return {
-        "balance": int(w["balance"]),
-        "freeQuotaMax": max_q,
-        "freeQuotaRemaining": max(0, max_q - used),
-        "dailyCheckedIn": checked_in,
-        "locked": bool(w["locked"]),
-    }
+    from .economy import quota, cash
+    q = quota(conn,user_id,"1k")
+    w = conn.execute("SELECT balance,checkin_date,locked FROM wallets WHERE user_id=?",(user_id,)).fetchone()
+    return {"balance":int(w["balance"]) if w else 0,"freeQuotaMax":q["total"],
+            "freeQuotaRemaining":q["remaining"],"dailyCheckedIn":bool(w and w["checkin_date"]==local_today_str()),
+            "locked":bool(w and w["locked"]),"cash":cash(conn,user_id),"quotaResolution":"1k"}
 
 
 def _count_user_published_items(conn: PgConnection, username: str) -> int:
@@ -2305,12 +2306,15 @@ def build_boot_payload(db: Database, current_user: dict[str, Any] | None) -> dic
     if current_user:
         visible_avatar_users.add(str(current_user["username"]))
 
+    from .economy import account_summary
     payload = {
         "version": 4,
+        "pointPriceOptions": {r["kind"]:r["options_json"] for r in conn.execute("SELECT * FROM point_price_options").fetchall()},
         "serverBacked": True,
         "demoMode": is_demo_mode(),
         "loggedIn": bool(current_user),
         "user": user_payload,
+        "economy": account_summary(conn,current_user["id"]) if current_user else None,
         "credits": wallet_info["balance"],
         "freeQuotaRemaining": wallet_info["freeQuotaRemaining"],
         "freeQuotaMax": wallet_info["freeQuotaMax"],
@@ -2380,18 +2384,14 @@ def perform_daily_checkin(db: Database, user: dict[str, Any]) -> dict[str, Any]:
     now = utc_now_iso()
     with db.transaction() as tx:
         settings = get_site_settings(tx)
-        bonus = int(settings.get("economy", {}).get("daily_checkin_credits", 5))
-        w = tx.execute("SELECT checkin_date FROM wallets WHERE user_id = ?", (uid,)).fetchone()
-        if w and w["checkin_date"] == today:
-            raise ServiceError("今日已完成打卡签到，明天再来吧！")
-        tx.execute(
-            "UPDATE wallets SET checkin_date = ?, free_quota_date = ?, free_quota_used = 0, updated_at = ? WHERE user_id = ?",
-            (today, today, now, uid),
-        )
-        new_bal, _ = apply_wallet_delta(
-            tx, uid, bonus, "checkin", f"每日社区创作打卡奖励 ({today})", event_key=f"checkin_{uid}_{today}"
-        )
-        q_state = get_wallet_quota_state(tx, uid, settings)
+        w = tx.execute("SELECT checkin_date FROM wallets WHERE user_id=? FOR UPDATE",(uid,)).fetchone()
+        if w and w["checkin_date"]==today:
+            raise ServiceError("今日已签到")
+        from .points import reward
+        bonus=reward(tx,uid,"checkin",str(uid)+":"+today)
+        tx.execute("UPDATE wallets SET checkin_date=?,updated_at=? WHERE user_id=?",(today,now,uid))
+        new_bal=int(tx.execute("SELECT balance FROM wallets WHERE user_id=?",(uid,)).fetchone()[0])
+        q_state=get_wallet_quota_state(tx,uid,settings)
     return {"ok": True, "bonus": bonus, "credits": new_bal, **q_state}
 
 
@@ -2432,19 +2432,7 @@ def redeem_code_for_user(db: Database, user: dict[str, Any], raw_code: str) -> d
 
 
 def topup_credits_for_user(db: Database, user: dict[str, Any], amount: int) -> dict[str, Any]:
-    amt = int(amount or 0)
-    if amt not in (50, 100, 200, 500):
-        raise ServiceError("无效的充值档位")
-    uid = int(user["id"])
-    with db.transaction() as tx:
-        new_bal, _ = apply_wallet_delta(
-            tx,
-            uid,
-            amt,
-            "recharge",
-            f"在线充值积分加油包 (+{amt} 积分)",
-        )
-    return {"ok": True, "added": amt, "credits": new_bal}
+    raise ServiceError("请通过购买订单完成支付，不能直接发放充值积分",status=410,code="checkout_required")
 
 
 def _extract_images_from_items_json(items_json_str: Any) -> list[str]:
@@ -3600,8 +3588,16 @@ def unlock_paid_item(db: Database, user: dict[str, Any], target_type: str, targe
         if not raw_type and tx.execute("SELECT 1 FROM works WHERE id = ?", (tid,)).fetchone():
             raise ServiceError("作品无需付费解锁", status=400, code="work_not_unlockable")
 
-        settings = get_site_settings(tx)
-        share_ratio = float(settings.get("economy", {}).get("author_share_ratio", 0.80))
+        resource_topic = tx.execute(
+            "SELECT m.kind,m.target_id,t.status FROM curation_resource_topics m JOIN forum_topics t ON t.id=m.topic_id WHERE m.topic_id=?",
+            (tid,),
+        ).fetchone()
+        if resource_topic:
+            if resource_topic["kind"] == "work":
+                raise ServiceError("作品无需付费解锁", status=400, code="work_not_unlockable")
+            if resource_topic["status"] != "published":
+                raise ServiceError("内容已下架，不能解锁", status=409)
+            tid = resource_topic["target_id"]
 
         # Auto-detect target_type if generic
         resolved_type = target_type
@@ -3617,6 +3613,8 @@ def unlock_paid_item(db: Database, user: dict[str, Any], target_type: str, targe
 
         if t_row:
             resolved_type = "topic"
+            if t_row["status"]!="published":
+                raise ServiceError("内容已下架，不能解锁",status=409)
             cost = int(t_row["price"] or 0)
             title = t_row["title"]
             author_uname = t_row["author_username"]
@@ -3625,6 +3623,8 @@ def unlock_paid_item(db: Database, user: dict[str, Any], target_type: str, targe
         elif a_row:
             resolved_type = "asset"
             tid = a_row["code"]
+            if a_row["status"]!="published":
+                raise ServiceError("资源已下架，不能解锁",status=409)
             cost = int(a_row["unlock_cost"] or 0)
             title = f"{a_row['code']} {a_row['name']}"
             author_uname = a_row["author_username"] if a_row["source_type"] == "community" else ""
@@ -3633,8 +3633,11 @@ def unlock_paid_item(db: Database, user: dict[str, Any], target_type: str, targe
         else:
             raise ServiceError("未找到待解锁内容", status=404)
 
+        import hashlib
+        lock_key=int.from_bytes(hashlib.sha256(f"unlock:{uid}:{resolved_type}:{tid}".encode()).digest()[:8],"big",signed=True)
+        tx.execute("SELECT pg_advisory_xact_lock(?)",(lock_key,))
         existing = tx.execute(
-            "SELECT status FROM unlocks WHERE user_id = ? AND target_type = ? AND target_id = ?",
+            "SELECT status,purchase_seq FROM unlocks WHERE user_id = ? AND target_type = ? AND target_id = ?",
             (uid, resolved_type, tid),
         ).fetchone()
         if existing and existing["status"] == "settled":
@@ -3645,37 +3648,30 @@ def unlock_paid_item(db: Database, user: dict[str, Any], target_type: str, targe
             return res
 
         if cost <= 0 or author_uname == user["username"]:
+            if cost <= 0 and resolved_type == "asset":
+                tx.execute(
+                    "INSERT INTO unlocks(user_id,author_username,target_type,target_id,cost,author_share,status,created_at) VALUES(?,?,'asset',?,0,0,'settled',?) ON CONFLICT(user_id,target_type,target_id) DO NOTHING",
+                    (uid,author_uname,tid,now),
+                )
             bal = int(tx.execute("SELECT balance FROM wallets WHERE user_id = ?", (uid,)).fetchone()["balance"])
             res = {"ok": True, "alreadyUnlocked": True, "credits": bal, "unlockedContent": unlocked_content, "targetType": resolved_type, "targetId": tid}
             if was_masked:
                 res["promptMasked"] = True
             return res
 
-        author_share = max(1, round(cost * share_ratio)) if author_uname else 0
+        cycle=int(existing["purchase_seq"])+1 if existing else 1
+        author_share = cost * 80 // 100 if author_uname else 0
         new_bal, _ = apply_wallet_delta(
             tx,
             uid,
             -cost,
             "unlock_spend",
-            f"解锁{f' @{author_name} 的' if author_name else ''}「{title}」" + ("（80% 积分实时分账原作者）" if author_uname else ""),
-            event_key=f"unlock_{uid}_{resolved_type}_{tid}",
+            f"解锁{f' @{author_name} 的' if author_name else ''}「{title}」" + ("（80%作者积分分成，7天后结算）" if author_uname else ""),
+            event_key=f"unlock_{uid}_{resolved_type}_{tid}_{cycle}",
             ref_type=resolved_type,
             ref_id=tid,
         )
 
-        if author_uname and author_share > 0:
-            arow = tx.execute("SELECT id FROM users WHERE username = ?", (author_uname,)).fetchone()
-            if arow and int(arow["id"]) != uid:
-                apply_wallet_delta(
-                    tx,
-                    int(arow["id"]),
-                    author_share,
-                    "unlock_royalty",
-                    f"作品/资产「{title}」被 @{user['display_name']} 解锁分成 (80%)",
-                    event_key=f"royalty_{arow['id']}_{uid}_{resolved_type}_{tid}",
-                    ref_type=resolved_type,
-                    ref_id=tid,
-                )
 
         if existing:
             tx.execute(
@@ -3690,6 +3686,14 @@ def unlock_paid_item(db: Database, user: dict[str, Any], target_type: str, targe
                 """,
                 (uid, author_uname, resolved_type, tid, cost, author_share, now),
             )
+
+        tx.execute("UPDATE unlocks SET purchase_seq=? WHERE user_id=? AND target_type=? AND target_id=?",(cycle,uid,resolved_type,tid))
+        if author_uname and author_share>0:
+            author=tx.execute("SELECT id FROM users WHERE username=?",(author_uname,)).fetchone()
+            unlock=tx.execute("SELECT id FROM unlocks WHERE user_id=? AND target_type=? AND target_id=?",(uid,resolved_type,tid)).fetchone()
+            tx.execute("UPDATE unlocks SET purchase_seq=? WHERE id=?",(cycle,unlock[0]))
+            if author and author[0]!=uid:
+                tx.execute("INSERT INTO creator_point_earnings(unlock_id,purchase_seq,author_id,units) VALUES(?,?,?,?) ON CONFLICT(unlock_id,purchase_seq) DO NOTHING",(unlock[0],cycle,author[0],author_share))
 
     res = {
         "ok": True,
@@ -3798,6 +3802,8 @@ def publish_forum_topic_post(db: Database, user: dict[str, Any], body: dict[str,
     else:
         price = 0
 
+    from .points import validate_price
+    validate_price(db.get_conn(),"topic",price)
     if price > 0:
         if "hw-paywall-divider" not in raw_body and "hw-paywall-divider" not in clean_body:
             raise ServiceError("付费帖子缺少付费分界线", status=400)
@@ -4937,7 +4943,8 @@ def _canonical_studio_history(
         for slot in conn.execute(
             """SELECT i.run_id,i.id,i.position,i.status,i.error_code,
                       COALESCE(result.storage_key,primary_media.storage_key) AS image_url,
-                      am.ordinal AS output_ordinal
+                      am.ordinal AS output_ordinal,
+                      billing.settled_cents,billing.held_cents,billing.free_used,billing.free_held,billing.charge_count
                FROM generation_items i
                LEFT JOIN LATERAL (
                  SELECT g.id FROM studio_generations g WHERE g.item_id=i.id AND g.status='success'
@@ -4946,6 +4953,15 @@ def _canonical_studio_history(
                LEFT JOIN generation_attempt_media am ON am.attempt_id=attempt.id
                LEFT JOIN media_assets result ON result.id=am.media_id
                LEFT JOIN media_assets primary_media ON primary_media.id=i.media_id
+               LEFT JOIN LATERAL (
+                 SELECT COALESCE(sum(c.amount_cents) FILTER(WHERE c.status='settled'),0) settled_cents,
+                        COALESCE(sum(c.amount_cents) FILTER(WHERE c.status='reserved'),0) held_cents,
+                        count(*) FILTER(WHERE c.status='settled' AND c.quota_source IS NOT NULL) free_used,
+                        count(*) FILTER(WHERE c.status='reserved' AND c.quota_source IS NOT NULL) free_held,
+                        count(*) charge_count
+                 FROM generation_charges c LEFT JOIN studio_generations g ON g.id=c.generation_id
+                 WHERE c.item_id=i.id OR g.item_id=i.id
+               ) billing ON true
                WHERE i.run_id=ANY(?) AND i.retired_at IS NULL ORDER BY i.run_id,i.position,am.ordinal""", (run_ids,),
         ).fetchall():
             slots_by_run.setdefault(slot["run_id"], []).append(slot)
@@ -5011,6 +5027,14 @@ def _canonical_studio_history(
             }
         entry["runId"] = str(run["id"])
         entry["canvasId"] = run["canvas_id"] or ""
+        billing_slots = {slot["id"]: slot for slot in slots}.values()
+        entry["billing"] = {
+            "amountCents": sum(int(slot["settled_cents"] or 0) for slot in billing_slots),
+            "heldCents": sum(int(slot["held_cents"] or 0) for slot in billing_slots),
+            "freeUsed": sum(int(slot["free_used"] or 0) for slot in billing_slots),
+            "freeHeld": sum(int(slot["free_held"] or 0) for slot in billing_slots),
+            "chargeCount": sum(int(slot["charge_count"] or 0) for slot in billing_slots),
+        }
         entry["status"] = str(run["status"])
         entry["createdAt"] = format_short_time(run["created_at"])
         entry["createdAtISO"] = str(run["created_at"])
@@ -5741,10 +5765,7 @@ def _cloud_generation_result(
 ) -> dict[str, Any]:
     """Return the stable public shape used by first submit and retry paths."""
     uid = int(row["user_id"])
-    today = local_today_str()
     wallet = conn.execute("SELECT * FROM wallets WHERE user_id = ?", (uid,)).fetchone()
-    max_free = max(0, int(settings.get("economy", {}).get("daily_free_quota", 3)))
-    used = int(wallet["free_quota_used"]) if (wallet and wallet["free_quota_date"] == today) else 0
     vis_prompt, was_masked = get_generation_visible_prompt(row)
     row_keys = row.keys() if hasattr(row, "keys") else row
     is_paid = ("cost_type" in row_keys and row["cost_type"] == "credits") or ("credits_spent" in row_keys and int(row["credits_spent"] or 0) > 0)
@@ -5783,7 +5804,9 @@ def _cloud_generation_result(
         "costType": row["cost_type"],
         "creditsSpent": int(row["credits_spent"] or 0),
         "credits": int(wallet["balance"]) if wallet else 0,
-        "freeQuotaRemaining": max(0, max_free - used),
+        "freeQuotaRemaining": get_wallet_quota_state(conn,uid,settings)["freeQuotaRemaining"],
+        "amountCents": int(row.get("amount_cents") or 0),
+        "billingSpec": row.get("billing_snapshot"),
         "reservationDate": row["reservation_date"] or "",
         "model": resolve_gateway_model(settings),
     }
@@ -6078,8 +6101,6 @@ def prepare_cloud_generation(
         settings = get_site_settings(tx)
         econ = settings.get("economy", {})
         gateway = settings.get("gateway", {})
-        max_free = max(0, int(econ.get("daily_free_quota", 3)))
-        per_img_cost = max(0, int(econ.get("studio_credit_per_image", 2)))
 
         # Idempotency is checked before permissions/charging. Once a request
         # has been accepted, a retry must replay its reservation even if the
@@ -6195,6 +6216,8 @@ def prepare_cloud_generation(
                      "secret_blackbox_prompt":frozen["secret_blackbox_prompt"],
                      "name":frozen.get("name") or res.get("name") or code}
                 is_paid_resource = is_paid_resource or frozen["private"]
+            if int(res.get("unlock_cost") or 0)<=0 and res.get("status")=="published":
+                tx.execute("INSERT INTO unlocks(user_id,author_username,target_type,target_id,cost,author_share,status,created_at) VALUES(?,?,'asset',?,0,0,'settled',?) ON CONFLICT(user_id,target_type,target_id) DO NOTHING",(uid,str(res.get("author_username") or ""),code,now_iso))
             inject = frozen["inject"] if frozen else (res.get("access") or {}).get("inject")
             if inject == "blackbox":
                 secret = (res.get("secret_blackbox_prompt") or "").strip()
@@ -6236,45 +6259,11 @@ def prepare_cloud_generation(
                     raise ServiceError("所选资源系统说明超过 4000 字上限，请精简所选资源", status=400, code="prompt_too_long")
                 raise ServiceError("提示词加上系统说明后超过 4000 字上限，请精简提示词", status=400, code="prompt_too_long")
 
-        # 2. Lock the wallet through the entire free-quota decision. Without
-        # FOR UPDATE, two PostgreSQL workers can both spend the same daily
-        # quota slot and overwrite each other's counter.
-        wallet_query = "SELECT * FROM wallets WHERE user_id = ?"
-        wallet_query += " FOR UPDATE"
-        w = tx.execute(wallet_query, (uid,)).fetchone()
-        used = int(w["free_quota_used"]) if (w and w["free_quota_date"] == today) else 0
-        if body.get("canvasId"):
-            plan=tx.execute("SELECT plan_json FROM generation_runs WHERE id=?",(body["_canvasRunId"],)).fetchone()["plan_json"]
-            if plan.get("unitPrice")!=per_img_cost:
-                raise ServiceError("批次价格已变化，请重新预览确认",status=409,code="canvas_price_changed")
-            spent=int(tx.execute("SELECT COALESCE(SUM(credits_spent),0) FROM studio_generations WHERE run_id=? AND status<>'refunded'",
-                                 (body["_canvasRunId"],)).fetchone()[0])
-            if spent+(0 if used<max_free else per_img_cost)>plan["maxCredits"]:
-                raise ServiceError("本批次已达到确认的积分上限",status=409,code="canvas_budget_exhausted")
-        if used < max_free:
-            tx.execute(
-                "UPDATE wallets SET free_quota_date = ?, free_quota_used = ?, updated_at = ? WHERE user_id = ?",
-                (today, used + 1, now_iso, uid),
-            )
-            cost_type = "free_quota"
-            credits_spent = 0
-            cur_balance = int(w["balance"]) if w else 0
-            free_remaining = max(0, max_free - (used + 1))
-        else:
-            cost_type = "credits"
-            credits_spent = per_img_cost
-            cur_balance, _ = apply_wallet_delta(
-                tx,
-                uid,
-                -per_img_cost,
-                "studio_gen",
-                f"在线创作台云端直出生图消耗 ({style1 or layout or '自由创作'})",
-                event_key=f"gen_spend_{gen_id}",
-                ref_type="generation",
-                ref_id=gen_id,
-            )
-            free_remaining = 0
-            is_paid_resource = True
+        # Community points are informational here. The generation quote holds
+        # specification benefits and cash atomically under the actor lock.
+        cost_type="cash"
+        credits_spent=0
+        cur_balance=int(tx.execute("SELECT balance FROM wallets WHERE user_id=?",(uid,)).fetchone()[0])
 
         # Check if client-supplied prompt contains blackbox secrets or injected definitions (G9, H6, §1a-2)
         client_scan_failed = False
@@ -6429,9 +6418,10 @@ def prepare_cloud_generation(
                 """,
                 (gen_id, uid, today, now_iso),
             )
+        from .economy import attach_charge
+        attach_charge(tx,uid,gen_id,body)
         from .studio_execution import attach_attempt
         attach_attempt(tx, uid, canonical_run_id, gen_id, body)
-        inserted = tx.execute("SELECT * FROM studio_generations WHERE id = ?", (gen_id,)).fetchone()
 
     prompt_trimmed = False
     # Outside transaction: model call for freshly inserted rows
@@ -6543,7 +6533,7 @@ def prepare_cloud_generation(
     result = _cloud_generation_result(db.get_conn(), current_row, settings)
     result.update({
         "credits": cur_balance,
-        "freeQuotaRemaining": free_remaining,
+        "freeQuotaRemaining": result["freeQuotaRemaining"],
     })
     if recipe_id:
         result["recipeId"] = recipe_id
@@ -6566,6 +6556,8 @@ def refund_failed_cloud_generation(db: Database, gen_id: str, error_msg: str, *,
             "UPDATE studio_generations SET status = 'refunded', error_msg = ? WHERE id = ?",
             ((error_msg or "")[:300], gen_id),
         )
+        from .economy import finish_charge
+        finish_charge(tx,gen_id,success=False)
         if row["cost_type"] == "free_quota":
             reservation = tx.execute(
                 "SELECT reservation_date, units, status FROM studio_quota_reservations WHERE generation_id = ?",
@@ -6656,6 +6648,8 @@ def complete_cloud_generation(db: Database, gen_id: str, task_id: str, image_url
         if not generation or generation["status"] in ("refunded", "success"):
             return
         if image_urls is not None:
+            from .economy import finish_charge
+            finish_charge(tx,gen_id,success=True)
             tx.execute(
                 "UPDATE studio_generations SET status = 'success', task_id = ?, items_json = ? WHERE id = ? AND status NOT IN ('refunded', 'success')",
                 (task_id, json.dumps(image_urls, ensure_ascii=False), gen_id),

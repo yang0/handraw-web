@@ -19,15 +19,9 @@ from tests.postgres_support import open_isolated_postgres
 from backend import skill_prompt
 
 from backend.server import HandrawRequestHandler, load_localized_json
-from backend.services import (
-    complete_cloud_generation,
-    get_public_generation_history,
-    get_studio_workspace,
-    get_user_studio_task,
-    prepare_cloud_generation,
-    register_user,
-    serialize_public_generation_history,
-)
+from backend.services import complete_cloud_generation, get_public_generation_history, get_studio_workspace, get_user_studio_task, register_user, serialize_public_generation_history
+from tests.economy_support import prepare_cloud_generation
+
 
 FORBIDDEN_FIELDS = {
     "prompt",
@@ -126,6 +120,10 @@ class HistoryBoundaryTests(unittest.TestCase):
         if body is not None:
             data = json.dumps(body).encode("utf-8")
             req_headers["Content-Type"] = "application/json"
+        if method=="POST" and path=="/api/studio/generate" and isinstance(body,dict):
+            from tests.economy_support import http_body
+            body=http_body(self.db,req_headers,body)
+            data=json.dumps(body).encode("utf-8")
         req = urllib.request.Request(f"{self.base}{path}", data=data, headers=req_headers, method=method)
         try:
             with urllib.request.urlopen(req) as resp:

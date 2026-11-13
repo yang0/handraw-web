@@ -132,6 +132,7 @@ fetchHandler = async (url) => {
   return { ok: true, status: 200, json: async () => ({}) };
 };
 
+win.HandrawEconomy={confirm:async(items)=>({quoteId:'fixture-quote',totalCents:0,items:items.map(item=>({spec:{id:'standard-1k'},free:true}))})};
 vm.runInContext(studioSrc, context);
 
 const {

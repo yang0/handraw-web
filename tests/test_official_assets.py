@@ -37,6 +37,8 @@ from backend import resource_registry
 from backend import services as S
 from backend.server import SESSION_COOKIE_NAME, HandrawRequestHandler
 
+from tests.economy_support import prepare_cloud_generation
+
 
 class NoRedirectHandler(urllib.request.HTTPRedirectHandler):
     def redirect_request(self, req, fp, code, msg, headers, newurl):
@@ -470,7 +472,7 @@ class TestOfficialAssets(unittest.TestCase):
         # Visitor prepares cloud generation with style1='FE-069'
         with patch("backend.skill_prompt.skill_available", return_value=True), \
              patch("backend.skill_prompt.compose_prompt", return_value={"prompt": "特选宋锦几何纹样核心提示词"}):
-            prep = S.prepare_cloud_generation(self.db, self.visitor_user, {
+            prep = prepare_cloud_generation(self.db, self.visitor_user, {
                 "prompt": "一只奔跑的猫",
                 "style1": "FE-069",
                 "ratio": "1:1",

@@ -17,6 +17,7 @@
       return r.json().then(function (j) { if (!r.ok) throw new Error((j && j.error) || ("HTTP " + r.status)); return j; });
     });
   }
+  function pointPrices(){return App.state.pointPriceOptions?.asset||[0,10,30,50,100,200,500];}
   function currentUser() { return (App.state.user && App.state.user.username) || ""; }
   function isAdmin() { return !!(App.state.user && App.state.user.role === "admin"); }
   function guard(epoch, username) { return epoch === EPOCH && currentUser() === username; }
@@ -190,7 +191,7 @@
     var desc = it.description || it.notes || "";
     var def = it.definition || it.prompt || "";
     var rawCost = it.unlockCost != null ? it.unlockCost : (p.unlockCost != null ? p.unlockCost : (it.price != null ? it.price : (p.price != null ? p.price : 0)));
-    var unlockCost = Math.max(0, Math.min(50, parseInt(rawCost, 10) || 0));
+    var unlockCost = Math.max(0, Math.min(500, parseInt(rawCost, 10) || 0));
 
     var itemObj = Object.assign({}, it, {
       kind: targetKind,
@@ -427,21 +428,15 @@
             '</label>' +
             '<p class="curation-help">示例：适合画什么？有什么特点？将作为资源帖公开介绍。</p>' +
             '<label class="curation-field">解锁积分<span class="curation-field-err" data-err-for="unlockCost"></span>' +
-              '<input type="number" min="0" max="50" step="1" data-act="unlockCost" data-idx="0" value="' + esc(it.unlockCost != null ? it.unlockCost : 0) + '" placeholder="0–50 整数，0 为免费">' +
-              '<div class="curation-price-presets" style="display:flex;gap:6px;margin-top:6px;flex-wrap:wrap;">' +
-                '<button type="button" class="hw-price-chip" data-set-cost="0">免费</button>' +
-                '<button type="button" class="hw-price-chip" data-set-cost="5">5✦</button>' +
-                '<button type="button" class="hw-price-chip" data-set-cost="10">10✦</button>' +
-                '<button type="button" class="hw-price-chip" data-set-cost="20">20✦</button>' +
-                '<button type="button" class="hw-price-chip" data-set-cost="50">50✦</button>' +
-              '</div>' +
+              '<select data-act="unlockCost" data-idx="0">'+pointPrices().map(function(value){return '<option value="'+value+'"'+(value===Number(it.unlockCost||0)?' selected':'')+'>'+(value?value+' 积分':'免费')+'</option>';}).join('')+'</select>' +
+
             '</label>' +
             ((it.unlockCost != null && it.unlockCost > 0) ? (
               '<p class="curation-help" data-help-for="unlockCost">' +
                 '<strong>设置为付费' + esc(KIND_LABEL[model.kind] || "资源") + '后：</strong><br>' +
                 '• 别人需要消耗 <strong>' + esc(it.unlockCost) + '</strong> 积分才能在创作台使用<br>' +
                 '• 定义不会公开显示（未解锁看不到，解锁后也只在创作台生效）<br>' +
-                '• 你按比例获得分成<br>' +
+                '• 你获得80%积分分成，7天后可用<br>' +
                 '• 你自己使用不扣积分' +
               '</p>'
             ) : (
@@ -506,7 +501,7 @@
         var numCost = rawCost === "" ? 0 : parseInt(rawCost, 10);
         if (isNaN(numCost)) numCost = 0;
         else if (numCost < 0) numCost = 0;
-        else if (numCost > 50) numCost = 50;
+        else if (numCost > 500) numCost = 500;
         if (model.items[0]) model.items[0].unlockCost = numCost;
         var cHelp = root.querySelector('[data-help-for="unlockCost"]');
         if (cHelp) {
@@ -514,7 +509,7 @@
             '<strong>设置为付费' + esc(KIND_LABEL[model.kind] || "资源") + '后：</strong><br>' +
             '• 别人需要消耗 <strong>' + esc(numCost) + '</strong> 积分才能在创作台使用<br>' +
             '• 定义不会公开显示（未解锁看不到，解锁后也只在创作台生效）<br>' +
-            '• 你按比例获得分成<br>' +
+            '• 你获得80%积分分成，7天后可用<br>' +
             '• 你自己使用不扣积分'
           ) : (
             '0 为免费公开资源。所有人均可免费在创作台调用；设为 1–50 积分则需解锁后调用，你自己使用不扣积分。'
@@ -571,7 +566,7 @@
         var c = (it.images && it.images[0]) || "";
         var exs = (it.images && it.images.length > 1) ? it.images.slice(1) : [];
         var rawCost = it.unlockCost != null ? it.unlockCost : 0;
-        var unlockCost = Math.max(0, Math.min(50, parseInt(rawCost, 10) || 0));
+        var unlockCost = Math.max(0, Math.min(500, parseInt(rawCost, 10) || 0));
         model.items = [{
           kind: newKind,
           name: it.title || it.name || "",
@@ -1114,8 +1109,8 @@
         }
 
         var costVal = parseInt(it.unlockCost, 10);
-        if (isNaN(costVal) || costVal < 0 || costVal > 50) {
-          errors.push({ el: costEl, act: "unlockCost", idx: 0, message: "解锁积分需在 0 到 50 之间。" });
+        if (isNaN(costVal) || costVal < 0 || !pointPrices().includes(costVal)) {
+          errors.push({ el: costEl, act: "unlockCost", idx: 0, message: "请选择允许的积分价格档位。" });
         }
       }
 
@@ -1180,7 +1175,7 @@
           payloadItem.cover = currentItem.cover || "";
           payloadItem.images = (currentItem.images || []).slice();
           if (currentItem.unlockCost != null) {
-            payloadItem.unlockCost = Math.max(0, Math.min(50, parseInt(currentItem.unlockCost, 10) || 0));
+            payloadItem.unlockCost = Math.max(0, Math.min(500, parseInt(currentItem.unlockCost, 10) || 0));
           }
         }
         if (payloadItem.prompt === "[包含资源专属指令，已隐藏]") payloadItem.prompt = "";
@@ -1219,7 +1214,7 @@
           definition: it.definition || "",
           cover: it.cover || "",
           images: (it.images || []).slice(),
-          unlockCost: Math.max(0, Math.min(50, parseInt(it.unlockCost, 10) || 0))
+          unlockCost: Math.max(0, Math.min(500, parseInt(it.unlockCost, 10) || 0))
         };
         if (it.group != null) itemObj.group = it.group;
         body = {
@@ -1374,7 +1369,7 @@
         if (btnCost) {
           e.preventDefault();
           var cVal = parseInt(btnCost.getAttribute("data-set-cost"), 10);
-          var cInput = root.querySelector('input[data-act="unlockCost"]');
+          var cInput = root.querySelector('[data-act="unlockCost"]');
           if (cInput) {
             cInput.value = cVal;
             cInput.dispatchEvent(new Event("input", { bubbles: true }));

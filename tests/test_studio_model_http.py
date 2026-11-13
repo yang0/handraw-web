@@ -73,6 +73,18 @@ class StudioModelHTTPTests(unittest.TestCase):
         self.thread.join(timeout=3)
 
     def request(self, path, body=None, cookie=None):
+        from tests.economy_support import configure
+        configure(self.db)
+        if path.endswith('/runs') and isinstance(body,dict) and not body.get('quoteId'):
+            from backend.economy import create_quote
+            from tests.economy_support import preview_canvas
+            cid=path.split('/')[-2]
+            preview=preview_canvas(self.db,self.user,cid)
+            q=create_quote(self.db,self.user,[item['spec'] for item in preview['items'] if item['ordinal'] in body.get('ordinals',range(preview['count']))])
+            body={**body,'quoteId':q['quoteId'],'maxAmountCents':q['totalCents']}
+        if path=="/api/studio/generate" and isinstance(body,dict):
+            from tests.economy_support import http_body
+            body=http_body(self.db,{"Cookie":self.cookie if cookie is None else cookie},body)
         req = urllib.request.Request(
             self.base + path,
             data=None if body is None else json.dumps(body).encode(),
@@ -348,7 +360,7 @@ class StudioModelHTTPTests(unittest.TestCase):
         command = {
             "requestId": "canvas_http_run",
             "planHash": preview["planHash"],
-            "maxCredits": preview["quote"]["total"],
+            "maxAmountCents": preview["quote"]["totalCents"],
         }
         status, submitted = self.request(
             "/api/studio/canvases/canvas_http/runs", command

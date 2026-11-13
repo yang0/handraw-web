@@ -21,6 +21,8 @@ from backend import server, services
 from backend.curation import publish_work_direct
 from backend.resource_discussions import ensure_topic
 
+from tests.economy_support import prepare_cloud_generation
+
 
 class Fix66WorkTopicsTests(unittest.TestCase):
     def setUp(self):
@@ -159,7 +161,7 @@ class Fix66WorkTopicsTests(unittest.TestCase):
 
     def test_auto_projected_generation_work_is_not_listed(self):
         """Works auto-projected from generation completions must remain unlisted."""
-        prepared = services.prepare_cloud_generation(
+        prepared = prepare_cloud_generation(
             self.db,
             self.author,
             {"requestId": "gen-auto-test", "prompt": "auto projection"},

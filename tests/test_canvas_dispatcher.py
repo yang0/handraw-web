@@ -12,9 +12,11 @@ from backend.db import local_today_str
 from backend.generation_v3 import cancel_unsubmitted_web_slots
 from backend.server import execute_studio_generation
 from backend.services import register_user, ServiceError
-from backend.studio_canvases import save_canvas, preview_canvas, submit_canvas
+from backend.studio_canvases import save_canvas
+from tests.economy_support import preview_canvas, submit_canvas
 from tests.postgres_support import open_isolated_postgres
 from tests.test_studio_canvases import graph
+
 
 
 class CanvasDispatcherTests(unittest.TestCase):
@@ -195,35 +197,30 @@ class CanvasDispatcherTests(unittest.TestCase):
             "success",
         )
 
-    def test_quota_change_cannot_exceed_confirmed_budget_and_retry_is_idempotent(self):
-        result, _ = self.submit()
-        self.db.get_conn().execute(
-            "UPDATE wallets SET free_quota_used=3 WHERE user_id=?", (self.user["id"],)
-        )
+    def test_accepted_budget_survives_price_and_quota_changes_then_retry_gets_new_quote(self):
+        from backend.economy import create_quote
+        result,_=self.submit()
+        self.db.get_conn().execute("UPDATE generation_quota_policy SET base_units=0")
+        self.db.get_conn().execute("UPDATE generation_specs SET price_cents=99,version=version+1")
         self.dispatcher.dispatch_once()
         self.dispatcher.dispatch_once()
-        run = get_canvas_run(self.db, self.user, result["runId"])["run"]
-        self.assertEqual(run["status"], "failed")
-        self.assertTrue(
-            all(item["errorCode"] == "canvas_budget_exhausted" for item in run["items"])
-        )
-        self.assertEqual(len(self.sent), 0)
-        body = {
-            "requestId": "retry_explicit",
-            "maxCredits": run["retryQuote"]["total"],
-            "unitPrice": run["retryQuote"]["unitPrice"],
-        }
-        retry_canvas_run(self.db, self.user, run["id"], body)
+        run=get_canvas_run(self.db,self.user,result["runId"])["run"]
+        self.assertEqual(run["status"],"success")
+        self.assertEqual(run["spentAmountCents"],0)
+        self.assertEqual(len(self.sent),2)
+        # A separate cancelled run is explicitly re-quoted for the failed slots.
+        self.db.get_conn().execute("UPDATE generation_quota_policy SET base_units=10")
+        save_canvas(self.db,self.user,{"id":"retry_canvas","graph":graph(("prompt",["Retry"]))})
+        preview=preview_canvas(self.db,self.user,"retry_canvas")
+        run2=submit_canvas(self.db,self.user,"retry_canvas",{"requestId":"retry_batch","planHash":preview["planHash"]})
+        cancel_unsubmitted_web_slots(self.db,self.user,"retry_batch",[0])
+        q=create_quote(self.db,self.user,[{"ratio":"3:4"}])
+        body={"requestId":"retry_explicit","quoteId":q["quoteId"],"maxAmountCents":q["totalCents"]}
+        retry_canvas_run(self.db,self.user,run2["runId"],body)
         self.dispatcher.dispatch_once()
-        self.dispatcher.dispatch_once()
-        self.assertTrue(
-            retry_canvas_run(self.db, self.user, run["id"], body)["idempotent"]
-        )
+        self.assertTrue(retry_canvas_run(self.db,self.user,run2["runId"],body)["idempotent"])
         self.assertFalse(self.dispatcher.dispatch_once())
-        completed = get_canvas_run(self.db, self.user, run["id"])["run"]
-        self.assertEqual(completed["status"], "success")
-        self.assertEqual(completed["spentCredits"], 4)
-        self.assertEqual(len(self.sent), 2)
+        self.assertEqual(get_canvas_run(self.db,self.user,run2["runId"])["run"]["status"],"success")
 
     def test_resource_instructions_are_frozen_and_never_in_public_plan_responses(self):
         self.db.get_conn().execute(

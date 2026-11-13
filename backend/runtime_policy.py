@@ -157,6 +157,7 @@ class _TokenBucketLimiter:
 
 
 _AUTH_LIMITERS = {
+    "planning": _TokenBucketLimiter(8, 5),
     "client_error": _TokenBucketLimiter(20, 3),
     "login": _TokenBucketLimiter(8, 300),
     "register": _TokenBucketLimiter(5, 900),

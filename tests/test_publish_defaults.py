@@ -10,13 +10,9 @@ from pathlib import Path
 from unittest.mock import patch
 
 from tests.postgres_support import open_isolated_postgres
-from backend.services import (
-    filter_display_prompt,
-    get_studio_workspace,
-    get_user_studio_task,
-    prepare_cloud_generation,
-    register_user,
-)
+from backend.services import filter_display_prompt, get_studio_workspace, get_user_studio_task, register_user
+from tests.economy_support import prepare_cloud_generation
+
 
 INSTRUCTION_BLOCK = (
     "【如果主题直白包含画面元素那就按主题出图，文案由你来升华，但是不要直接描述画面。"

@@ -6,16 +6,11 @@ from unittest.mock import patch
 import unittest
 
 from backend.admin_services import admin_moderate_work, admin_resolve_report
-from backend.services import (
-    build_boot_payload,
-    prepare_cloud_generation,
-    publish_user_work,
-    register_user,
-    set_work_visibility,
-    submit_abuse_report,
-)
+from backend.services import build_boot_payload, publish_user_work, register_user, set_work_visibility, submit_abuse_report
+from tests.economy_support import prepare_cloud_generation
 
 from tests.postgres_support import open_isolated_postgres
+
 
 IMG = "/images/individual/FA/FA-013.webp"
 
@@ -177,8 +172,8 @@ class ReceiptTransparencyTests(_Base):
         )
         self.assertIn("pioneer", result)
         self.assertIn("upgradedBadge", result)
-        self.assertEqual(result["reward"], 15)
-        self.assertGreaterEqual(result["credits"], 15)
+        self.assertEqual(result["reward"], 0)
+        self.assertEqual(result["credits"], 0)
 
 
 class AdminEditPreservesPromptTests(_Base):

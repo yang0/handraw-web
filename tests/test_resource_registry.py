@@ -31,20 +31,9 @@ from unittest.mock import patch
 from tests.postgres_support import open_isolated_postgres
 from backend.server import SESSION_COOKIE_NAME, HandrawRequestHandler
 from backend import resource_registry
-from backend.services import (
-    ServiceError,
-    build_boot_payload,
-    build_skill_asset_content,
-    build_skill_library_payload,
-    check_text_has_secret,
-    get_studio_workspace,
-    login_user,
-    prepare_cloud_generation,
-    register_user,
-    send_encourage_tip,
-    toggle_user_cheer,
-    toggle_user_collection,
-)
+from backend.services import ServiceError, build_boot_payload, build_skill_asset_content, build_skill_library_payload, check_text_has_secret, get_studio_workspace, login_user, register_user, send_encourage_tip, toggle_user_cheer, toggle_user_collection
+from tests.economy_support import prepare_cloud_generation
+
 
 
 class ResourceRegistryTests(unittest.TestCase):

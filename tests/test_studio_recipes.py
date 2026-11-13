@@ -44,7 +44,9 @@ from backend.curation import publish_work_direct
 from backend.recipe_routes import compute_input_fingerprint
 from backend.resource_discussions import resolve_resource
 from backend.server import SESSION_COOKIE_NAME, HandrawRequestHandler
-from backend.services import ServiceError, prepare_cloud_generation, register_user
+from backend.services import ServiceError, register_user
+from tests.economy_support import prepare_cloud_generation
+
 
 
 class StudioRecipesTests(unittest.TestCase):
@@ -123,6 +125,10 @@ class StudioRecipesTests(unittest.TestCase):
         if token:
             headers["Authorization"] = f"Bearer {token}"
 
+        if method=="POST" and path=="/api/studio/generate" and isinstance(body,dict):
+            from tests.economy_support import http_body
+            body=http_body(self.db,headers,body)
+            data=json.dumps(body).encode("utf-8")
         req = urllib.request.Request(f"{self.base}{path}", data=data, headers=headers, method=method)
         try:
             with urllib.request.urlopen(req, timeout=20) as resp:

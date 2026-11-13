@@ -22,7 +22,9 @@ from backend.server import (
     GenerationReconciler,
     create_channel_server,
 )
-from backend.services import prepare_cloud_generation, register_user
+from backend.services import register_user
+from tests.economy_support import prepare_cloud_generation
+
 
 
 ORIGIN = "http://trusted.test"
@@ -323,6 +325,10 @@ class OpenAIImageGatewayHTTPTests(unittest.TestCase):
         if body is not None:
             headers["Content-Type"] = "application/json"
             data = json.dumps(body).encode("utf-8")
+        if method=="POST" and path=="/api/studio/generate" and isinstance(body,dict):
+            from tests.economy_support import http_body
+            body=http_body(self.db,headers,body)
+            data=json.dumps(body).encode("utf-8")
         req = urllib.request.Request(f"{self.base}{path}", data=data, headers=headers, method=method)
         try:
             with urllib.request.urlopen(req, timeout=15) as resp:

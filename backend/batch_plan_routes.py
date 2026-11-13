@@ -28,7 +28,7 @@ from .ai_client import chat
 from .config import CONTENT_DIR
 from .db import Database
 from .observability import local_debug_stacks_enabled
-from .services import ServiceError, consume_daily_usage
+from .services import ServiceError
 
 logger = logging.getLogger(__name__)
 
@@ -232,9 +232,9 @@ def execute_batch_plan(
         elif norm_fixed_layout not in valid_layouts:
             raise ServiceError("指定的固定图型编号不存在或非法", status=400, code="invalid_fixed_layout")
 
-    # Rate limiting: 50 requests/day per user
-    if not consume_daily_usage(db, user["id"], "batch_plan", limit=50):
-        raise ServiceError("今日套图规划次数已达上限（50次/天），请明天再试", status=429, code="rate_limited")
+    from .runtime_policy import check_auth_rate_limit
+    if not check_auth_rate_limit("planning",db.get_conn().cache_scope+":"+str(user["id"])):
+        raise ServiceError("规划请求过于频繁，请稍后再试",status=429,code="rate_limited")
 
     # Use the complete catalog; no first-N sampling or code-family favoritism.
     if norm_mode == "ai" and not valid_layouts:

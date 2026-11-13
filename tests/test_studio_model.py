@@ -8,15 +8,8 @@ import psycopg
 
 from backend.db import utc_now_iso
 from backend.generation_v3 import ensure_run
-from backend.services import (
-    ServiceError,
-    register_user,
-    sync_user_studio_articles,
-    get_studio_workspace,
-    complete_cloud_generation,
-    refund_failed_cloud_generation,
-    prepare_cloud_generation,
-)
+from backend.services import ServiceError, register_user, sync_user_studio_articles, get_studio_workspace, complete_cloud_generation, refund_failed_cloud_generation
+from tests.economy_support import prepare_cloud_generation
 from backend.studio_articles import get_article, select_illustration_media
 from backend.studio_execution import (
     attach_attempt,
@@ -24,6 +17,7 @@ from backend.studio_execution import (
     apply_source_input,
 )
 from tests.postgres_support import open_isolated_postgres
+
 
 
 class StudioModelTests(unittest.TestCase):
@@ -521,7 +515,7 @@ class StudioModelTests(unittest.TestCase):
         used = (
             self.db.get_conn()
             .execute(
-                "SELECT free_quota_used FROM wallets WHERE user_id=?",
+                "SELECT count(*) FROM generation_charges WHERE user_id=? AND status='reserved'",
                 (self.user["id"],),
             )
             .fetchone()[0]
@@ -540,7 +534,7 @@ class StudioModelTests(unittest.TestCase):
         remaining = (
             self.db.get_conn()
             .execute(
-                "SELECT free_quota_used FROM wallets WHERE user_id=?",
+                "SELECT count(*) FROM generation_charges WHERE user_id=? AND status='reserved'",
                 (self.user["id"],),
             )
             .fetchone()[0]

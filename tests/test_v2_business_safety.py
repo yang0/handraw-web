@@ -18,22 +18,10 @@ from backend.postgres_db import PostgresDatabase
 from tests.postgres_support import isolated_pg_dsn
 from backend.db import local_today_str
 from backend.seed import ensure_seeded
-from backend.services import (
-    ServiceError,
-    build_boot_payload,
-    claim_cloud_generation_submission,
-    complete_cloud_generation,
-    delete_user_studio_history,
-    grant_studio_media_public,
-    get_studio_workspace,
-    get_user_studio_task,
-    is_new_release_active,
-    login_user,
-    prepare_cloud_generation,
-    record_user_studio_history,
-    refund_failed_cloud_generation,
-)
+from backend.services import ServiceError, build_boot_payload, claim_cloud_generation_submission, complete_cloud_generation, delete_user_studio_history, grant_studio_media_public, get_studio_workspace, get_user_studio_task, is_new_release_active, login_user, record_user_studio_history, refund_failed_cloud_generation
+from tests.economy_support import prepare_cloud_generation
 from backend.security import hash_password
+
 
 
 @contextmanager
@@ -132,8 +120,8 @@ class HandrawBusinessSafetyTests(unittest.TestCase):
                 1,
             )
             self.assertEqual(
-                conn.execute("SELECT free_quota_used FROM wallets WHERE user_id = ?", (user["id"],)).fetchone()[0],
-                wallet_after_first["free_quota_used"],
+                conn.execute("SELECT count(*) FROM generation_charges WHERE user_id=? AND status IN ('reserved','settled')", (user["id"],)).fetchone()[0],
+                1,
             )
 
             with self.assertRaises(ServiceError) as inflight:
@@ -143,11 +131,11 @@ class HandrawBusinessSafetyTests(unittest.TestCase):
 
             refund_failed_cloud_generation(db, first["genId"], "gateway timeout")
             self.assertEqual(
-                conn.execute("SELECT free_quota_used FROM wallets WHERE user_id = ?", (user["id"],)).fetchone()[0],
+                conn.execute("SELECT count(*) FROM generation_charges WHERE user_id=? AND status IN ('reserved','settled')", (user["id"],)).fetchone()[0],
                 0,
             )
             self.assertEqual(
-                conn.execute("SELECT status FROM studio_quota_reservations WHERE generation_id = ?", (first["genId"],)).fetchone()[0],
+                conn.execute("SELECT status FROM generation_charges WHERE generation_id = ?", (first["genId"],)).fetchone()[0],
                 "released",
             )
 
@@ -164,11 +152,11 @@ class HandrawBusinessSafetyTests(unittest.TestCase):
             )
             refund_failed_cloud_generation(db, second["genId"], "late gateway timeout")
             self.assertEqual(
-                conn.execute("SELECT free_quota_used FROM wallets WHERE user_id = ?", (user["id"],)).fetchone()[0],
-                1,
+                conn.execute("SELECT count(*) FROM generation_charges WHERE user_id=? AND status IN ('reserved','settled')", (user["id"],)).fetchone()[0],
+                0,
             )
             self.assertEqual(
-                conn.execute("SELECT status FROM studio_quota_reservations WHERE generation_id = ?", (second["genId"],)).fetchone()[0],
+                conn.execute("SELECT status FROM generation_charges WHERE generation_id = ?", (second["genId"],)).fetchone()[0],
                 "released",
             )
 

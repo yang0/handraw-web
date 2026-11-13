@@ -621,6 +621,7 @@ def admin_get_dashboard(db: Database, user: dict[str, Any] | None) -> dict[str, 
             "engine": r["engine"],
             "costType": r["cost_type"],
             "creditsSpent": int(r["credits_spent"] or 0),
+            "amountCents": int(r["amount_cents"] or 0),
             "status": r["status"],
             "createdAt": format_short_time(r["created_at"]),
         }
@@ -2915,79 +2916,25 @@ def admin_delete_user(
     if uid == int(actor["id"]):
         raise ServiceError("安全保护：禁止删除当前登录的超级管理员自身账号")
     with db.transaction() as tx:
+        from .economy import lock_user
+        lock_user(tx,uid)
         target = tx.execute("SELECT * FROM users WHERE id = ?", (uid,)).fetchone()
         if not target:
             raise ServiceError("目标用户不存在", status=404)
         if target["username"] == "yang0":
             raise ServiceError("安全保护：禁止删除创站主超级管理员账号 yang0")
-        # Erase dependent rows before the account. Older implementations
-        # only removed a subset of FK children; growth/security records added
-        # in later migrations then caused user deletion to return HTTP 500.
-        # Keep foreign-key enforcement enabled throughout account deletion.
-        # Direct messages and announcements contain FK references to both
-        # sides of a conversation. Clear their children first, then parents.
-        tx.execute(
-            "DELETE FROM dm_messages WHERE sender_id = ? OR conversation_id IN "
-            "(SELECT id FROM dm_conversations WHERE user_low_id = ? OR user_high_id = ?)",
-            (uid, uid, uid),
-        )
-        tx.execute(
-            "DELETE FROM dm_members WHERE user_id = ? OR conversation_id IN "
-            "(SELECT id FROM dm_conversations WHERE user_low_id = ? OR user_high_id = ?)",
-            (uid, uid, uid),
-        )
-        tx.execute(
-            "DELETE FROM dm_conversations WHERE user_low_id = ? OR user_high_id = ?",
-            (uid, uid),
-        )
-        tx.execute("DELETE FROM dm_blocks WHERE user_id = ? OR blocked_user_id = ?", (uid, uid))
-        tx.execute(
-            "DELETE FROM dm_contact_history WHERE sender_id = ? OR recipient_id = ?",
-            (uid, uid),
-        )
-        tx.execute(
-            "DELETE FROM message_broadcast_reads WHERE user_id = ? OR broadcast_id IN "
-            "(SELECT id FROM message_broadcasts WHERE sender_id = ?)",
-            (uid, uid),
-        )
-        tx.execute("DELETE FROM message_broadcasts WHERE sender_id = ?", (uid,))
-        tx.execute(
-            "DELETE FROM media_public_grants WHERE owner_user_id = ? OR granted_by_user_id = ?",
-            (uid, uid),
-        )
-        for child_sql in (
-            "DELETE FROM sessions WHERE user_id = ?",
-            "DELETE FROM forum_moderators WHERE user_id = ?",
-            "DELETE FROM oauth_identities WHERE user_id = ?",
-            "DELETE FROM growth_events WHERE user_id = ?",
-            "DELETE FROM security_devices WHERE user_id = ?",
-            "DELETE FROM account_erasure_requests WHERE user_id = ?",
-            "DELETE FROM tip_requests WHERE user_id = ?",
-            "DELETE FROM studio_import_jobs WHERE user_id = ?",
-            "DELETE FROM studio_generation_media WHERE user_id = ?",
-            "DELETE FROM studio_quota_reservations WHERE user_id = ?",
-            "DELETE FROM redeem_code_uses WHERE user_id = ?",
-            "DELETE FROM collections WHERE user_id = ?",
-            "DELETE FROM interactions WHERE user_id = ?",
-            "DELETE FROM unlocks WHERE user_id = ?",
-            "DELETE FROM user_uploads WHERE user_id = ?",
-            "DELETE FROM studio_workflows WHERE user_id = ?",
-            "DELETE FROM studio_articles WHERE user_id = ?",
-            "DELETE FROM ledgers WHERE user_id = ?",
-            "DELETE FROM wallets WHERE user_id = ?",
-        ):
-            tx.execute(child_sql, (uid,))
-        tx.execute("DELETE FROM users WHERE id = ?", (uid,))
-        record_audit_log(
-            tx,
-            actor,
-            "user.delete",
-            "user",
-            target["username"],
-            reason or f"管理员移除账号 @{target['username']}",
-            {"role": target["role"]},
-        )
-    return {"ok": True, "userId": uid, "username": target["username"]}
+        account=tx.execute("SELECT balance_cents,held_cents FROM cash_accounts WHERE user_id=?",(uid,)).fetchone()
+        if account and (account["balance_cents"]!=0 or account["held_cents"]!=0):
+            raise ServiceError("此账号有待处理生图余额或冻结资金，请完成结算和退款后关闭",status=409,code="account_has_funds")
+        # Accounts with financial history must retain their identity and immutable
+        # ledgers. Close access instead of deleting money/point provenance.
+        tx.execute("UPDATE users SET status='frozen',closed_at=?,api_key=NULL WHERE id=?",(utc_now_iso(),uid))
+        tx.execute("DELETE FROM sessions WHERE user_id=?",(uid,))
+        tx.execute("UPDATE api_tokens SET revoked_at=? WHERE user_id=? AND revoked_at=''",(utc_now_iso(),uid))
+        tx.execute("UPDATE device_codes SET status='denied' WHERE user_id=? AND status IN ('pending','approved')",(uid,))
+        tx.execute("DELETE FROM forum_moderators WHERE user_id=?",(uid,))
+        record_audit_log(tx,actor,"user.close","user",str(uid),reason or "管理员关闭账号，保留账务记录")
+    return {"ok":True,"userId":uid,"closed":True,"accountingRetained":True}
 
 
 def admin_update_user(
@@ -3011,6 +2958,8 @@ def admin_update_user(
         if not target:
             raise ServiceError("目标用户不存在", status=404)
 
+        if target["closed_at"]:
+            raise ServiceError("账号已关闭，不能通过修改资料恢复访问",status=409,code="account_closed")
         actor_role = str(actor.get("role") or "user")
         if actor_role == "reviewer":
             actor_role = "operator"
@@ -3181,12 +3130,17 @@ def admin_refund_unlock(
     now_iso = utc_now_iso()
 
     with db.transaction() as tx:
-        ul = tx.execute("SELECT * FROM unlocks WHERE id = ?", (int(unlock_id),)).fetchone()
+        ul = tx.execute("SELECT * FROM unlocks WHERE id = ? FOR UPDATE", (int(unlock_id),)).fetchone()
         if not ul:
             raise ServiceError("解锁订单不存在", status=404)
         if ul["status"] != "settled":
             raise ServiceError("该订单已退款处理，请勿重复操作")
 
+        ids=[int(ul["user_id"])]
+        author=tx.execute("SELECT id FROM users WHERE username=?",(ul["author_username"],)).fetchone()
+        if author:ids.append(int(author[0]))
+        for point_user in sorted(set(ids)):
+            tx.execute("SELECT balance FROM wallets WHERE user_id=? FOR UPDATE",(point_user,)).fetchone()
         buyer_id = int(ul["user_id"])
         cost = int(ul["cost"] or 0)
         author_share = int(ul["author_share"] or 0)
@@ -3204,24 +3158,9 @@ def admin_refund_unlock(
             actor_id=int(actor["id"]),
         )
 
-        # 2. Claw back 80% royalty from author if applicable
-        clawed_back = 0
-        if author_share > 0 and ul["author_username"] and ul["author_username"] != "official":
-            arow = tx.execute("SELECT id FROM users WHERE username = ?", (ul["author_username"],)).fetchone()
-            if arow and int(arow["id"]) != buyer_id:
-                apply_wallet_delta(
-                    tx,
-                    int(arow["id"]),
-                    -author_share,
-                    "unlock_royalty_clawback",
-                    f"解锁订单 #{unlock_id} ({ul['target_id']}) 退款追回分成：{clean_reason}",
-                    event_key=f"ul_refund_author_{unlock_id}",
-                    ref_type=ul["target_type"],
-                    ref_id=ul["target_id"],
-                    actor_id=int(actor["id"]),
-                    allow_negative=True,
-                )
-                clawed_back = author_share
+        from .points import reverse_earning
+        reverse_earning(tx,unlock_id)
+        clawed_back=author_share
 
         tx.execute(
             "UPDATE unlocks SET status = 'refunded', refund_reason = ?, refunded_by = ?, refunded_at = ? WHERE id = ?",
@@ -3383,6 +3322,7 @@ def admin_get_gateway_overview(db: Database, user: dict[str, Any] | None, probe:
             "running": int(stats_row["running_cnt"] or 0),
             "refunded": int(stats_row["refunded_cnt"] or 0),
             "totalCreditsSpent": int(stats_row["total_credits_spent"] or 0),
+            "totalAmountCents": int(conn.execute("SELECT COALESCE(sum(amount_cents),0) FROM generation_charges WHERE status='settled'").fetchone()[0]),
         },
     }
 
@@ -3426,6 +3366,7 @@ def admin_list_generations(
             "engine": r["engine"],
             "costType": r["cost_type"],
             "creditsSpent": int(r["credits_spent"] or 0),
+            "amountCents": int(r["amount_cents"] or 0),
             "taskId": r["task_id"],
             "status": r["status"],
             "errorMsg": r["error_msg"],
@@ -3442,30 +3383,9 @@ def admin_reset_user_free_quota(
     target_user_id: int,
     reason: str = "",
 ) -> dict[str, Any]:
-    actor = require_staff(user, allowed_roles=("admin", "operator"))
-    uid = int(target_user_id)
-    today = local_today_str()
-    now_iso = utc_now_iso()
-    with db.transaction() as tx:
-        target = tx.execute("SELECT id, username FROM users WHERE id = ?", (uid,)).fetchone()
-        if not target:
-            raise ServiceError("目标用户不存在", status=404)
-        tx.execute(
-            "UPDATE wallets SET free_quota_date = ?, free_quota_used = 0, updated_at = ? WHERE user_id = ?",
-            (today, now_iso, uid),
-        )
-        record_audit_log(
-            tx,
-            actor,
-            "quota.reset",
-            "user",
-            target["username"],
-            reason or "重置用户今日创作台免费生图额度",
-        )
-    return {"ok": True, "userId": uid}
+    require_staff(user,allowed_roles=("admin",))
+    raise ServiceError("每日免费额度已停用，请在生图收费与社区积分管理中赠送指定规格额度",status=410,code="quota_grant_required")
 
-
-# ======================== 7. SITE SETTINGS & AUDIT LOGS ========================
 
 def admin_get_settings(db: Database, user: dict[str, Any] | None) -> dict[str, Any]:
     require_staff(user, allowed_roles=("admin", "operator"))

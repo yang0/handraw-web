@@ -70,7 +70,7 @@ def apply_source_input(db, user, body):
             "参数画布必须先提交组合批次", status=400, code="canvas_plan_required"
         )
     if not body.get("canvasId"):
-        for key in ("_canvasResourceInputs", "_canvasRunId", "_canvasDispatchToken"):
+        for key in ("_canvasResourceInputs", "_canvasRunId", "_canvasDispatchToken", "_canvasItemId"):
             body.pop(key, None)
     if body.get("canvasId"):
         if (
@@ -122,6 +122,7 @@ def apply_source_input(db, user, body):
             "moods",
             "whitespace",
             "mode",
+            "specId",
         ):
             if key in body and body[key] != spec.get(
                 key, "3:4" if key == "ratio" else [] if key == "refImages" else ""
@@ -134,6 +135,7 @@ def apply_source_input(db, user, body):
             batchTotal=run["expected_count"], batchIndex=index, creationSource="canvas"
         )
         body["_canvasRunId"] = run["id"]
+        body["_canvasItemId"] = claim["id"]
         body["_canvasResourceInputs"] = run["plan_json"].get("resourceInputs", {})
         body["promptFromSkill"] = False
         body.pop("historyId", None)

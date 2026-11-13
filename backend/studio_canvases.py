@@ -22,6 +22,7 @@ _PARAMETERS = {
     "moods",
     "whitespace",
     "mode",
+    "specId",
 }
 _RATIOS = {"1:1", "3:4", "4:3", "9:16", "16:9", "2.35:1", "3:2", "2:3"}
 MAX_OUTPUTS = 200
@@ -37,6 +38,7 @@ _DEFAULTS = {
     "moods": [],
     "whitespace": "",
     "mode": "graphic-text",
+    "specId": "standard-1k",
 }
 
 
@@ -341,19 +343,6 @@ def get_canvas(db, user, cid):
     }
 
 
-def quote_count(quote, count):
-    free = min(count, quote["freeRemaining"])
-    total = (count - free) * quote["unitPrice"]
-    return {
-        **quote,
-        "count": count,
-        "freeUsed": free,
-        "paidCount": count - free,
-        "total": total,
-        "affordable": quote["balance"] >= total,
-    }
-
-
 def preview_canvas(db, user, cid, *, _include_resources=False):
     canvas = get_canvas(db, user, cid)["canvas"]
     items = compile_canvas(canvas["graph"])
@@ -415,27 +404,15 @@ def preview_canvas(db, user, cid, *, _include_resources=False):
                         code="foreign_media",
                     )
             references.add(ref_key)
-    from .services import get_site_settings, get_wallet_quota_state
-
-    settings = get_site_settings(db.get_conn())
-    wallet = get_wallet_quota_state(db.get_conn(), user["id"], settings)
-    quote = quote_count(
-        {
-            "unitPrice": max(
-                0, int(settings.get("economy", {}).get("studio_credit_per_image", 2))
-            ),
-            "freeRemaining": wallet["freeQuotaRemaining"],
-            "balance": wallet["balance"],
-        },
-        len(items),
-    )
+    from .economy import pricing,quota
+    quote=pricing(db.get_conn(),user["id"],[item["spec"] for item in items])
+    quote["freeByResolution"]={line["spec"]["resolution"]:quota(db.get_conn(),user["id"],line["spec"]["resolution"])["remaining"] for line in quote["items"]}
     digest = hashlib.sha256(
         _canonical(
             {
                 "items": items,
                 "resources": assets,
-                "unitPrice": quote["unitPrice"],
-                "freeRemaining": quote["freeRemaining"],
+                "billingSpecs": [line["spec"] for line in quote["items"]],
             }
         ).encode()
     ).hexdigest()
@@ -497,18 +474,11 @@ def submit_canvas(db, user, cid, body):
     ):
         raise _error("选择的组合无效")
     items = [item for item in preview["items"] if item["ordinal"] in selected]
-    quote = quote_count(preview["quote"], len(items))
-    max_credits = body.get("maxCredits", quote["total"])
-    if (
-        type(max_credits) is not int
-        or max_credits < quote["total"]
-        or not quote["affordable"]
-    ):
-        raise _error(
-            "本次预计积分不足，请减少张数或重新确认费用",
-            status=409,
-            code="canvas_budget_required",
-        )
+    from .economy import reserve_quote
+    quote_id=str(body.get("quoteId") or "")
+    limit=body.get("maxAmountCents")
+    if type(limit) is not int or limit<0:
+        raise _error("请确认本批人民币费用",status=409,code="canvas_budget_required")
     from .generation_v3 import ensure_run, _stable_id
     from .db import utc_now_iso
 
@@ -519,10 +489,17 @@ def submit_canvas(db, user, cid, body):
         "previewCount": preview["count"],
         "selectedOrdinals": sorted(selected),
         "resourceInputs": preview["_resources"],
-        "unitPrice": quote["unitPrice"],
-        "maxCredits": max_credits,
+        "quoteId":quote_id,
+        "maxAmountCents":limit,
     }
     with db.transaction() as tx:
+        from .studio_execution import lock_generation_actor
+        lock_generation_actor(tx,user["id"])
+        lines=reserve_quote(tx,user["id"],quote_id,key)
+        expected=[{key:item["spec"].get(key,default) for key,default in (("specId","standard-1k"),("ratio","3:4"))} for item in items]
+        actual=[{"specId":line["spec"]["id"],"ratio":line["spec"]["ratio"]} for line in lines]
+        if actual!=expected or sum(line["amountCents"] for line in lines)>limit:
+            raise _error("本批规格或金额与已确认报价不符",status=409,code="canvas_budget_required")
         rid = ensure_run(
             tx,
             user_id=user["id"],
@@ -564,6 +541,8 @@ def submit_canvas(db, user, cid, body):
                     utc_now_iso(),
                 ),
             )
+        for index in range(len(items)):
+            tx.execute("UPDATE generation_charges SET item_id=? WHERE quote_id=? AND position=?",(_stable_id("item",rid,index),quote_id,index))
     return _run_response(rid, key, items)
 
 

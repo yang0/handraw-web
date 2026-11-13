@@ -16,15 +16,9 @@ from pathlib import Path
 from unittest.mock import patch
 
 from backend.server import HandrawRequestHandler
-from backend.services import (
-    ServiceError,
-    get_user_public_generations,
-    get_user_public_generation_by_id,
-    record_user_studio_history,
-    get_studio_workspace,
-    prepare_cloud_generation,
-    register_user,
-)
+from backend.services import ServiceError, get_user_public_generations, get_user_public_generation_by_id, record_user_studio_history, get_studio_workspace, register_user
+from tests.economy_support import prepare_cloud_generation
+
 
 WHITELIST_FIELDS = {
     "id",

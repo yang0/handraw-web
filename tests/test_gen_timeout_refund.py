@@ -219,6 +219,12 @@ class StudioGenerateTimeoutRefundHTTPTests(unittest.TestCase):
     def setUp(self):
         conn = self.db.get_conn()
         today = local_today_str()
+        from backend.economy import finish_charge
+        from backend.studio_execution import lock_generation_actor
+        with self.db.transaction() as tx:
+            lock_generation_actor(tx,self.user['id'])
+            for old in tx.execute("SELECT generation_id FROM generation_charges WHERE user_id=? AND status='reserved' AND generation_id IS NOT NULL",(self.user['id'],)).fetchall():
+                finish_charge(tx,old[0],success=False)
         conn.execute("UPDATE studio_generations SET status = 'success' WHERE user_id = ?", (self.user["id"],))
         conn.execute("UPDATE wallets SET free_quota_used = 0, balance = 20, free_quota_date = ? WHERE user_id = ?", (today, self.user["id"]))
         conn.commit()
@@ -250,6 +256,8 @@ class StudioGenerateTimeoutRefundHTTPTests(unittest.TestCase):
             return raw_cookie.split(";")[0]
 
     def _post_generate(self, payload: dict) -> tuple[int, dict]:
+        from tests.economy_support import http_body
+        payload=http_body(self.db,{"Cookie":self.cookie},payload)
         data = json.dumps(payload).encode("utf-8")
         req = urllib.request.Request(
             f"{self.base}/api/studio/generate",
@@ -293,7 +301,7 @@ class StudioGenerateTimeoutRefundHTTPTests(unittest.TestCase):
 
         # Check quota is reserved (not refunded back to 0 used)
         wallet = conn.execute("SELECT free_quota_used, balance FROM wallets WHERE user_id = ?", (uid,)).fetchone()
-        self.assertEqual(wallet["free_quota_used"], 1)
+        self.assertEqual(conn.execute("SELECT count(*) FROM generation_charges WHERE user_id=? AND status='reserved'",(uid,)).fetchone()[0], 1)
         self.assertEqual(wallet["balance"], 20)
 
     def test_connection_refused_refunds_immediately(self):
@@ -391,7 +399,7 @@ class StudioGenerateTimeoutRefundHTTPTests(unittest.TestCase):
         self.assertEqual(row["status"], "queued")
 
         wallet = conn.execute("SELECT free_quota_used, balance FROM wallets WHERE user_id = ?", (uid,)).fetchone()
-        self.assertEqual(wallet["free_quota_used"], 1)
+        self.assertEqual(conn.execute("SELECT count(*) FROM generation_charges WHERE user_id=? AND status='reserved'",(uid,)).fetchone()[0], 1)
 
     def test_unconfigured_gateway_refunds_immediately(self):
         """Unconfigured gateway (GatewayNotConfigured before network) -> refund immediately, 502 with refunded: true."""
@@ -490,7 +498,7 @@ class StudioGenerateTimeoutRefundHTTPTests(unittest.TestCase):
         self.assertEqual(status1, 200)
         self.assertTrue(res1.get("confirming"))
         wallet = conn.execute("SELECT free_quota_used FROM wallets WHERE user_id = ?", (uid,)).fetchone()
-        self.assertEqual(wallet["free_quota_used"], 1)
+        self.assertEqual(conn.execute("SELECT count(*) FROM generation_charges WHERE user_id=? AND status='reserved'",(uid,)).fetchone()[0], 1)
 
         # Clear active generation so we can run next test
         conn.execute("UPDATE studio_generations SET status = 'success' WHERE user_id = ?", (uid,))

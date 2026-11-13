@@ -5,15 +5,11 @@ import unittest
 
 from backend.canvas_runs import get_canvas_run
 from backend.services import ServiceError, register_user
-from backend.studio_canvases import (
-    compile_canvas,
-    save_canvas,
-    get_canvas,
-    preview_canvas,
-    submit_canvas,
-)
+from backend.studio_canvases import compile_canvas, save_canvas, get_canvas
+from tests.economy_support import preview_canvas, submit_canvas
 from backend.studio_execution import apply_source_input
 from tests.postgres_support import open_isolated_postgres
+
 
 
 def graph(*parameters, mode="cartesian", repeat=1):

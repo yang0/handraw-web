@@ -16,7 +16,7 @@
     operator: [
       { id: "dashboard", icon: "📊", label: "运营审查看板", desc: "社区活跃作品、官方目录点亮覆盖度、待裁定举报预警与内容安全态势" },
       { id: "scenarios", icon: "🎯", label: "首页场景", desc: "配置首页使用场景与精选置顶样图" },
-      { id: "users", icon: "👥", label: "用户治理与兑换码", desc: "普通违规账号冻结、荣誉授勋、每日免费生图额度重置与活动积分兑换码发放" },
+      { id: "users", icon: "👥", label: "用户治理与兑换码", desc: "普通违规账号冻结、荣誉授勋、按规格赠送免费生图额度与活动积分兑换码发放" },
       { id: "works", icon: "🖼️", label: "作品精选与全站评论", desc: "优质作品精选推荐、72h 首发曝光提权、违规下架与作品/论坛/画风图型评论治理" },
       { id: "governance", icon: "💬", label: "论坛运营与举报裁定", desc: "优质交流帖置顶加精、积分悬赏人工仲裁、违规举报核实下架与误报驳回" },
       { id: "settings", icon: "📣", label: "社区公告配置", desc: "配置全站顶部运营活动横幅与行动号召文案（底层黑盒机密与网关参数已隔离）" },
@@ -273,7 +273,7 @@
           <div class="adm-role-matrix-grid" style="grid-template-columns:repeat(auto-fit,minmax(240px,1fr));">
             <div class="adm-role-matrix-card">
               <div style="font-weight:800;color:#b74227;">👑 超级管理员 (admin)</div>
-              <div style="color:var(--adm-ink-soft);margin-top:2px;">7 大全量模块：新建/删除用户、角色提权、任命论坛版主、云端黑盒 Prompt、积分调账、网关与审计。</div>
+              <div style="color:var(--adm-ink-soft);margin-top:2px;">7 大全量模块：新建/关闭账号、角色提权、任命论坛版主、云端黑盒 Prompt、积分调账、网关与审计。</div>
             </div>
             <div class="adm-role-matrix-card">
               <div style="font-weight:800;color:#9e5a12;">🧭 运营审查员 (operator)</div>
@@ -1292,7 +1292,7 @@
           </div>
           ${c.canCreateUser
             ? `<button class="adm-btn adm-btn-primary" id="btn-new-user">+ 新建用户账号</button>`
-            : `<span class="adm-badge neutral">${effRole() === "operator" ? "运营模式：可授勋荣誉与重置额度" : "审核风控模式：仅限冻结违规普通用户"}</span>`}
+            : `<span class="adm-badge neutral">${effRole() === "operator" ? "运营模式：可授勋荣誉" : "审核风控模式：仅限冻结违规普通用户"}</span>`}
         </div>
         <div class="adm-table-wrap">
           <table class="adm-table">
@@ -1301,7 +1301,7 @@
                 <th>ID / 账号信息</th>
                 <th>系统角色 & 论坛版主职务</th>
                 <th>共创荣誉等级</th>
-                <th>积分钱包 / 今日免费额度</th>
+                <th>社区积分 / 1K免费额度</th>
                 <th>状态 / 会话</th>
                 <th>用户管理操作</th>
               </tr>
@@ -1327,7 +1327,7 @@
                     </td>
                     <td>
                       <div><strong style="color:var(--adm-vermilion);">${u.credits}✦</strong> ${u.walletLocked ? `<span class="adm-badge hidden">钱包已锁</span>` : ""}</div>
-                      <div style="font-size:11.5px;color:var(--adm-ink-muted);">今日免费生图剩余：${u.freeQuotaRemaining}/${u.freeQuotaMax}</div>
+                      <div style="font-size:11.5px;color:var(--adm-ink-muted);">1K免费生图剩余：${u.freeQuotaRemaining}/${u.freeQuotaMax}</div>
                     </td>
                     <td>
                       <span class="adm-badge ${esc(u.status)}">${esc(u.status)}</span>
@@ -1338,7 +1338,7 @@
                         <button class="adm-btn adm-btn-sm" data-user-detail="${u.id}">📋 账号管理</button>
                         ${c.canManageModerators ? `<button class="adm-btn adm-btn-sm" data-user-mod-appoint="${esc(u.username)}">🛡️ 设版主</button>` : ""}
                         ${c.canAdjustCredits ? `<button class="adm-btn adm-btn-sm adm-btn-primary" data-user-credit="${u.id}" data-user-name="${esc(u.username)}">± 调账</button>` : ""}
-                        ${c.canResetFreeQuota ? `<button class="adm-btn adm-btn-sm" data-user-quota="${u.id}">↺ 重置额度</button>` : ""}
+                        ${effRole()==="admin" ? `<button class="adm-btn adm-btn-sm" data-user-quota="${u.id}">赠送1K额度</button>` : ""}
                       </div>
                     </td>
                   </tr>
@@ -1483,7 +1483,7 @@
         <div class="adm-kpi-card">
           <div class="adm-kpi-label">🛡️ 失败自动退费保护</div>
           <div class="adm-kpi-val jade">${st.refunded} 单已退</div>
-          <div class="adm-kpi-foot">累计积分消耗：${st.totalCreditsSpent}✦（网关报错 100% 原路秒退）</div>
+          <div class="adm-kpi-foot">累计生图结算 ¥${((st.totalAmountCents||0)/100).toFixed(2)}；明确失败释放预占，未知结果继续查询</div>
         </div>
       </div>
 
@@ -1517,7 +1517,7 @@
                   <td>@${esc(it.username)}</td>
                   <td>
                     <span class="adm-badge ${it.engine === "live" ? "exclusive" : "neutral"}">${esc(it.engine)}</span>
-                    <span style="font-size:12px;color:var(--adm-ink-soft);margin-left:4px;">${it.creditsSpent > 0 ? `-${it.creditsSpent}✦` : esc(it.costType)}</span>
+                    <span style="font-size:12px;color:var(--adm-ink-soft);margin-left:4px;">${it.costType === "cash" ? `¥${((it.amountCents||0)/100).toFixed(2)}` : it.costType === "free_entitlement" ? "免费规格额度" : "历史记录"}</span>
                   </td>
                   <td><code>${esc(it.recipeSummary || it.mode)}</code></td>
                   <td style="max-width:300px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="${esc(it.prompt)}">${esc(it.prompt)}</td>
@@ -1616,23 +1616,7 @@
         </div>` : ""}
       </div>
 
-      ${canSys ? `
-      <div class="adm-panel">
-        <div class="adm-panel-head">
-          <h3 class="adm-panel-title">✦ 积分经济闭环核心参数（仅超级管理员可调）</h3>
-        </div>
-        <div class="adm-form-grid" style="grid-template-columns:repeat(auto-fit,minmax(200px,1fr));">
-          <div class="adm-field"><label>新用户注册欢迎礼 (✦)</label><input class="adm-input" type="number" id="eco-welcome" value="${esc(eco.welcome_credits ?? 20)}" /></div>
-          <div class="adm-field"><label>每日签到奖励 (✦)</label><input class="adm-input" type="number" id="eco-checkin" value="${esc(eco.daily_checkin_credits ?? 5)}" /></div>
-          <div class="adm-field"><label>公开作品基础奖励 (✦)</label><input class="adm-input" type="number" id="eco-work" value="${esc(eco.work_publish_credits ?? 5)}" /></div>
-          <div class="adm-field"><label>荒地开荒额外加奖 (✦)</label><input class="adm-input" type="number" id="eco-pioneer" value="${esc(eco.pioneer_bonus_credits ?? 10)}" /></div>
-          <div class="adm-field"><label>贡献共创画风/图型奖励 (✦)</label><input class="adm-input" type="number" id="eco-asset" value="${esc(eco.asset_publish_credits ?? 15)}" /></div>
-          <div class="adm-field"><label>每日免费云端生图额度 (张)</label><input class="adm-input" type="number" id="eco-quota" value="${esc(eco.daily_free_quota ?? 3)}" /></div>
-          <div class="adm-field"><label>超额单张云端生图消耗 (✦)</label><input class="adm-input" type="number" id="eco-gen-cost" value="${esc(eco.studio_credit_per_image ?? 2)}" /></div>
-          <div class="adm-field"><label>付费解锁作者分成比例 (0~1)</label><input class="adm-input" type="number" step="0.05" id="eco-share" value="${esc(eco.author_share_ratio ?? 0.8)}" /></div>
-        </div>
-        <button class="adm-btn adm-btn-primary" id="btn-save-eco">💾 保存积分经济配置</button>
-      </div>` : ""}
+      ${canSys ? `<div class="adm-panel" data-economy-admin></div>` : ""}
     `;
   }
 
@@ -1763,6 +1747,8 @@
 
     if (!state.boot?.demoMode) root.querySelectorAll("[data-demo-only]").forEach(node => node.remove());
     bindConsoleEvents();
+    const economyRoot=root.querySelector('[data-economy-admin]');
+    if(economyRoot)window.HandrawEconomy?.mountAdmin(economyRoot);
   }
 
   /* ======================== MODALS (CREATE USER, USER DETAIL, MODERATORS, CATALOG, BOUNTY) ======================== */
@@ -2006,7 +1992,7 @@
         <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;margin-bottom:16px;">
           <div>
             ${canDeleteThisUser
-              ? `<button type="button" class="adm-btn adm-btn-danger" id="mu-delete">🗑️ 移除此账号</button>`
+              ? `<button type="button" class="adm-btn adm-btn-danger" id="mu-delete">关闭账号（保留账务）</button>`
               : ""}
           </div>
           <div style="display:flex;gap:8px;">
@@ -2064,16 +2050,16 @@
         delBtn.onclick = async () => {
           if (delBtn.getAttribute("data-armed") !== "1") {
             delBtn.setAttribute("data-armed", "1");
-            delBtn.textContent = "⚠️ 再次点击确认永久删除";
+            delBtn.textContent = "再次点击关闭账号，保留账务记录";
             return;
           }
           try {
             await api(`/api/admin/users/${u.id}/delete`, {
               method: "POST",
-              body: { reason: document.getElementById("mu-reason").value.trim() || `超管移除账号 @${u.username}` },
+              body: { reason: document.getElementById("mu-reason").value.trim() || `管理员关闭账号 @${u.username}` },
             });
             closeModal();
-            toast(`已移除用户账号 @${u.username}`);
+            toast(`已关闭用户账号 @${u.username}`);
             await reloadCurrent();
           } catch (err) {
             toast(err.message, true);
@@ -3418,8 +3404,10 @@
     root.querySelectorAll("[data-user-quota]").forEach((btn) => {
       btn.addEventListener("click", async () => {
         try {
-          await api(`/api/admin/users/${btn.getAttribute("data-user-quota")}/reset-quota`, { method: "POST", body: {} });
-          toast("已重置该用户今日免费生图额度");
+          const units=Number(prompt("赠送多少张1K免费额度？","10"));if(!Number.isInteger(units)||units<=0)throw Error("请输入正整数张数");
+          const reason=prompt("填写赠送原因");if(!reason)return;
+          await api('/api/admin/economy',{method:'POST',body:{action:'grant',resolution:'1k',units,reason,userIds:[Number(btn.getAttribute('data-user-quota'))],requestId:'gift_'+crypto.randomUUID().replace(/-/g,'')}});
+          toast("已赠送1K免费生图额度");
           await reloadCurrent();
         } catch (err) {
           toast(err.message, true);
@@ -3580,35 +3568,6 @@
           toast(err.message, true);
         } finally {
           btnSaveFeatured.disabled = false;
-        }
-      };
-    }
-
-    const btnSaveEco = document.getElementById("btn-save-eco");
-    if (btnSaveEco) {
-      btnSaveEco.onclick = async () => {
-        try {
-          const res = await api("/api/admin/settings", {
-            method: "POST",
-            body: {
-              section: "economy",
-              values: {
-                welcome_credits: parseInt(document.getElementById("eco-welcome").value || "20", 10),
-                daily_checkin_credits: parseInt(document.getElementById("eco-checkin").value || "5", 10),
-                work_publish_credits: parseInt(document.getElementById("eco-work").value || "5", 10),
-                pioneer_bonus_credits: parseInt(document.getElementById("eco-pioneer").value || "10", 10),
-                asset_publish_credits: parseInt(document.getElementById("eco-asset").value || "15", 10),
-                daily_free_quota: parseInt(document.getElementById("eco-quota").value || "3", 10),
-                studio_credit_per_image: parseInt(document.getElementById("eco-gen-cost").value || "2", 10),
-                author_share_ratio: parseFloat(document.getElementById("eco-share").value || "0.8"),
-              },
-              reason: "调整积分经济闭环发放与消耗参数",
-            },
-          });
-          state.data.settings = res.settings;
-          toast("积分经济参数已实时更新生效");
-        } catch (err) {
-          toast(err.message, true);
         }
       };
     }

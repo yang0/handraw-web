@@ -13,6 +13,8 @@ from pathlib import Path
 from backend import skill_paths, skill_prompt
 from backend.services import _compose_skill_prompt
 
+from tests.economy_support import prepare_cloud_generation
+
 REPO = "https://github.com/yang0/handraw-style"
 
 
@@ -123,7 +125,8 @@ class SkillPromptTests(unittest.TestCase):
         from unittest.mock import patch
         from tempfile import TemporaryDirectory
         from backend.server import init_database
-        from backend.services import prepare_cloud_generation, register_user
+        from backend.services import register_user
+        from tests.economy_support import prepare_cloud_generation
 
         with TemporaryDirectory() as temp_dir:
             db_path = Path(temp_dir) / "test.db"
@@ -187,7 +190,8 @@ class SkillPromptTests(unittest.TestCase):
         from unittest.mock import patch
         from tempfile import TemporaryDirectory
         from backend.server import init_database
-        from backend.services import ServiceError, prepare_cloud_generation, register_user
+        from backend.services import ServiceError, register_user
+        from tests.economy_support import prepare_cloud_generation
 
         with TemporaryDirectory() as temp_dir:
             db_path = Path(temp_dir) / "test_inflight.db"
@@ -229,7 +233,8 @@ class SkillPromptTests(unittest.TestCase):
         from unittest.mock import patch
         from tempfile import TemporaryDirectory
         from backend.server import init_database
-        from backend.services import prepare_cloud_generation, register_user
+        from backend.services import register_user
+        from tests.economy_support import prepare_cloud_generation
 
         with TemporaryDirectory() as temp_dir:
             db_path = Path(temp_dir) / "test_concurrent.db"
@@ -277,7 +282,7 @@ class SkillPromptTests(unittest.TestCase):
             ).fetchall()
             self.assertEqual(len(rows), 1, "Only 1 studio_generations row should be created")
 
-            w = db.get_conn().execute("SELECT free_quota_used FROM wallets WHERE user_id = ?", (int(user["id"]),)).fetchone()
+            w = db.get_conn().execute("SELECT count(*) AS free_quota_used FROM generation_charges WHERE status='reserved' AND user_id = ?", (int(user["id"]),)).fetchone()
             self.assertEqual(w["free_quota_used"], 1, "Free quota must only be debited 1 time")
 
             db.close_thread_conn()
@@ -333,6 +338,8 @@ class SkillPromptTests(unittest.TestCase):
                         return {"id": "gw_task_123", "status": "queued"}
 
                     def post(body):
+                        from tests.economy_support import http_body
+                        body=http_body(db,{"Authorization":f"Bearer {token}"},body)
                         req = urllib.request.Request(
                             f"{base_url}/api/studio/generate",
                             data=json.dumps(body).encode("utf-8"),
@@ -393,7 +400,7 @@ class SkillPromptTests(unittest.TestCase):
                         self.assertEqual(saved_row["prompt_ready"], 1)
 
                         w = db.get_conn().execute(
-                            "SELECT free_quota_used FROM wallets WHERE user_id = (SELECT id FROM users WHERE username = 'tester_retry_user')"
+                            "SELECT count(*) AS free_quota_used FROM generation_charges WHERE status='reserved' AND user_id = (SELECT id FROM users WHERE username = 'tester_retry_user')"
                         ).fetchone()
                         self.assertEqual(w["free_quota_used"], 1, "Quota should only be debited once")
 
@@ -446,13 +453,14 @@ class SkillPromptTests(unittest.TestCase):
                         gw_calls.append(payload)
                         return {"id": "gw_task_g2", "status": "queued"}
 
+                    from tests.economy_support import http_body
                     req = urllib.request.Request(
                         f"{base_url}/api/studio/generate",
-                        data=json.dumps({
+                        data=json.dumps(http_body(db,{"Authorization":f"Bearer {token}"},{
                             "prompt": "fallback prompt test",
                             "style1": "FA-001",
                             "requestId": "req-g2-fallback-1",
-                        }).encode("utf-8"),
+                        })).encode("utf-8"),
                         headers={
                             "Content-Type": "application/json",
                             "Accept": "application/json",
@@ -479,7 +487,7 @@ class SkillPromptTests(unittest.TestCase):
                     self.assertIn("fallback prompt test", saved_row["prompt"])
 
                     w = db.get_conn().execute(
-                        "SELECT free_quota_used FROM wallets WHERE user_id = (SELECT id FROM users WHERE username = 'tester_g2_user')"
+                        "SELECT count(*) AS free_quota_used FROM generation_charges WHERE status='reserved' AND user_id = (SELECT id FROM users WHERE username = 'tester_g2_user')"
                     ).fetchone()
                     self.assertEqual(w["free_quota_used"], 1, "Quota should only be debited once")
 
@@ -492,7 +500,8 @@ class SkillPromptTests(unittest.TestCase):
     def test_requests_not_needing_compose_set_prompt_ready_1(self):
         from tempfile import TemporaryDirectory
         from backend.server import init_database
-        from backend.services import register_user, prepare_cloud_generation
+        from backend.services import register_user
+        from tests.economy_support import prepare_cloud_generation
 
         with TemporaryDirectory() as temp_dir:
             db_path = Path(temp_dir) / "test_prompt_ready_1.db"

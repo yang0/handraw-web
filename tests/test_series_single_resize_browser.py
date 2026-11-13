@@ -165,6 +165,8 @@ class SeriesSingleResizeBrowserTests(unittest.TestCase):
 
     @classmethod
     def _post_generate(cls, payload: dict) -> tuple[int, dict]:
+        from tests.economy_support import http_body
+        payload=http_body(cls.db,{"Cookie":cls.cookie},payload)
         opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
         req = urllib.request.Request(
             f"{cls.base}/api/studio/generate",
@@ -180,7 +182,7 @@ class SeriesSingleResizeBrowserTests(unittest.TestCase):
 
     def _wallet_snapshot(self) -> dict:
         row = self.db.get_conn().execute(
-            "SELECT balance, free_quota_used FROM wallets WHERE user_id = ?",
+            "SELECT w.balance,(SELECT count(*) FROM generation_charges c WHERE c.user_id=w.user_id AND c.quota_source IS NOT NULL AND c.status IN ('reserved','settled')) free_quota_used FROM wallets w WHERE user_id = ?",
             (self.user["id"],),
         ).fetchone()
         return dict(row)
@@ -226,8 +228,20 @@ class SeriesSingleResizeBrowserTests(unittest.TestCase):
                 )
                 self.assertEqual(login_resp.status, 200)
 
+                def generate(selector):
+                    page.locator(selector).click()
+                    dialog=page.locator('.economy-dialog')
+                    dialog.wait_for(state='visible')
+                    self.assertIn('社区积分不支付生图费用',dialog.inner_text())
+                    dialog.locator('button[type="submit"]').click()
+
                 page.goto(f"{self.base}/studio/?entry=batch", wait_until="networkidle")
-                page.wait_for_selector("#batch-series-main", timeout=10000)
+                try:
+                    page.wait_for_selector("#batch-series-main", timeout=10000)
+                except Exception:
+                    print("Series startup errors:",page_errors,flush=True)
+                    print("Series startup page:",page.locator('body').inner_text()[:1800],flush=True)
+                    raise
 
                 # Inject legacy cached Series tab state: 2 frames in UI, stale activeBatchId from a
                 # 3-frame DB run WITHOUT activeBatchTotal.
@@ -271,7 +285,7 @@ class SeriesSingleResizeBrowserTests(unittest.TestCase):
                 gen_events.clear()
 
                 with page.expect_response(is_generation_success, timeout=15000):
-                    page.locator('[data-generate-series-idx="0"]').click()
+                    generate('[data-generate-series-idx="0"]')
                 page.wait_for_selector('[data-series-select-idx="0"].has-result', timeout=10000)
 
                 self.assertEqual([e["status"] for e in gen_events], [409, 200], gen_events)
@@ -289,6 +303,7 @@ class SeriesSingleResizeBrowserTests(unittest.TestCase):
                     + (wallet_after_heal["free_quota_used"] - wallet_before_heal["free_quota_used"])
                 )
                 self.assertEqual(spent_heal, 1)
+                self.assertEqual(wallet_before_heal["balance"],wallet_after_heal["balance"],"Generation must not spend community points")
 
                 # Wait until busy state unlocks before adding a 3rd frame.
                 page.wait_for_function(
@@ -311,7 +326,7 @@ class SeriesSingleResizeBrowserTests(unittest.TestCase):
                 theme_input.fill("图3雨后茶馆")
 
                 with page.expect_response(is_generation_success, timeout=15000):
-                    page.locator('[data-generate-series-idx="2"]').click()
+                    generate('[data-generate-series-idx="2"]')
                 page.wait_for_selector('[data-series-select-idx="2"].has-result', timeout=10000)
 
                 self.assertEqual([e["status"] for e in gen_events], [200], gen_events)
@@ -331,7 +346,7 @@ class SeriesSingleResizeBrowserTests(unittest.TestCase):
                 self.gw_state.fail_next_message = "mock upstream gateway 502 failure"
                 page.locator('[data-series-select-idx="1"]').click()
                 page.wait_for_selector('[data-generate-series-idx="1"]', timeout=5000)
-                page.locator('[data-generate-series-idx="1"]').click()
+                generate('[data-generate-series-idx="1"]')
                 page.wait_for_selector(".batch-series-failed small", timeout=10000)
 
                 failed_text = page.locator(".batch-series-failed small").inner_text()
@@ -367,7 +382,7 @@ class SeriesSingleResizeBrowserTests(unittest.TestCase):
                 page.set_viewport_size({"width": 1440, "height": 900})
                 gen_events.clear()
                 with page.expect_response(is_generation_success, timeout=15000):
-                    page.locator('[data-retry-idx="1"]').click()
+                    generate('[data-retry-idx="1"]')
                 page.wait_for_selector('[data-series-select-idx="1"].has-result', timeout=10000)
                 self.assertEqual([e["status"] for e in gen_events], [200], gen_events)
                 self.assertEqual(gen_events[0]["req"].get("batchId"), frame2_batch_id)

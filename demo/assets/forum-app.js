@@ -1083,7 +1083,7 @@
           <div class="hw-compose-footer-right" style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;">
             <div class="hw-paid-price-ctrl" id="compose-paid-price-box" style="display:${d.publishMode === "paid" ? "flex" : "none"};align-items:center;gap:6px;background:var(--gold-wash);padding:4px 10px;border:1px solid var(--gold-border);border-radius:8px;">
               <span style="font-size:13px;font-weight:750;color:var(--gold-text, #92400e);white-space:nowrap;">阅读定价：</span>
-              <input type="number" id="compose-paid-price" class="hw-input" min="1" max="100" step="1" value="${d.price || 10}" style="width:58px;padding:3px 6px;font-size:13px;font-weight:750;text-align:center;border-radius:6px;" />
+              <select id="compose-paid-price" class="hw-input" style="width:80px;padding:3px 6px;">${(App.state.pointPriceOptions?.topic||[5,10,20,50,100]).filter(v=>v>0).map(v=>`<option value="${v}" ${v===(d.price||10)?'selected':''}>${v}</option>`).join('')}</select>
               <span style="font-size:13px;font-weight:750;color:var(--gold-text, #92400e);">✦</span>
               <div class="hw-price-presets" id="compose-price-presets" style="display:flex;align-items:center;gap:4px;">
                 ${[5, 10, 20, 50].map((preset) => `
@@ -1282,7 +1282,7 @@
             <div style="margin-bottom:18px;">
               <label for="paywall-modal-price" style="display:block;font-size:13px;font-weight:800;margin-bottom:8px;color:var(--ink-body);">设置付费阅读价格（✦ 积分）：</label>
               <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;">
-                <input type="number" id="paywall-modal-price" class="hw-input" min="1" max="100" step="1" value="${curPrice}" style="width:80px;padding:6px 10px;font-size:15px;font-weight:800;text-align:center;border-radius:8px;" />
+                <select id="paywall-modal-price" class="hw-input">${(App.state.pointPriceOptions?.topic||[5,10,20,50,100]).filter(v=>v>0).map(v=>`<option value="${v}" ${v===curPrice?'selected':''}>${v}</option>`).join('')}</select>
                 <span style="font-size:15px;font-weight:800;color:var(--gold);">✦</span>
                 <div style="display:flex;align-items:center;gap:6px;">
                   ${[5, 10, 20, 50].map((p) => `
@@ -2234,7 +2234,7 @@
                   : `<div class="hw-locked-gate-box" style="padding:24px;text-align:center;background:var(--paper-bg);border:1px dashed var(--line-strong);border-radius:10px;">
                       <div style="font-weight:850;font-size:15px;color:var(--gold);margin-bottom:6px;">🔒 此资源需解锁后在线使用</div>
                       <p style="margin:0 0 12px;font-size:12.5px;color:var(--ink-muted);">官网独占：只能在创作台在线调用，不展示定义。解锁花费 <strong>${res.unlockCost || 0}</strong> 积分</p>
-                      <button type="button" class="btn btn-primary btn-sm" id="resource-btn-unlock">🔓 解锁后可在线使用</button>
+                      <button type="button" class="btn btn-primary btn-sm" id="resource-btn-unlock">🔓 解锁站内使用</button>
                     </div>`)
               : isPending
                   ? (res.definition
@@ -2456,10 +2456,10 @@
                 🔒 此处以下为 ${topic.price || 10}✦ 付费专属核心章节
               </div>
               <p style="margin:0 0 16px;font-size:13px;color:var(--ink-muted);">
-                支付 ${topic.price || 10}✦ 积分解锁后续全文（包含核心生图控制词与防翻车交付细节，80% 收益实时转入作者 @${esc(topic.authorName)} 账户）
+                支付 ${topic.price || 10}✦ 积分解锁后续全文（包含核心生图控制词与防翻车交付细节，80% 积分分成将在7天后转入作者 @${esc(topic.authorName)} 账户）
               </p>
               <button type="button" class="btn btn-primary" id="topic-btn-unlock" style="padding:10px 28px;font-size:14.5px;font-weight:800;border-radius:10px;">
-                🔓 立即使用 ${topic.price || 10}✦ 积分解锁全文
+                🔓 立即使用 ${topic.price || 10}✦ 积分解锁后查看与复制全文
               </button>
             </div>
           `
@@ -3751,7 +3751,7 @@
           }
           ${
             t.price > 0
-              ? `<span style="background:var(--gold-wash);border:1px solid var(--gold-border);color:var(--gold);font-size:11.5px;font-weight:800;padding:1px 7px;border-radius:999px;">${unlocked ? "💎 干货已解锁" : `💎 ${t.price} 积分解锁全文`}</span>`
+              ? `<span style="background:var(--gold-wash);border:1px solid var(--gold-border);color:var(--gold);font-size:11.5px;font-weight:800;padding:1px 7px;border-radius:999px;">${unlocked ? "💎 干货已解锁" : `💎 ${t.price} 积分解锁后查看与复制全文`}</span>`
               : ""
           }
           ${

@@ -66,6 +66,10 @@ class SecurityHTTPTests(unittest.TestCase):
         if body is not None:
             data = json.dumps(body, ensure_ascii=False).encode("utf-8")
             req_headers["Content-Type"] = "application/json"
+        if method=="POST" and path=="/api/studio/generate" and isinstance(body,dict):
+            from tests.economy_support import http_body
+            body=http_body(self.db,req_headers,body)
+            data=json.dumps(body).encode("utf-8")
         req = urllib.request.Request(self.base + path, data=data, headers=req_headers, method=method)
         try:
             with urllib.request.urlopen(req, timeout=10) as response:

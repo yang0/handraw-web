@@ -526,6 +526,8 @@ def cancel_unsubmitted_web_slots(
     if any(type(p) is not int or p < 0 for p in positions):
         raise ServiceError("取消图片索引必须为非负整数", status=400, code="invalid_cancel_positions")
     with db.transaction() as tx:
+        from .studio_execution import lock_generation_actor
+        lock_generation_actor(tx,uid)
         query = (
             "SELECT id,expected_count,creation_mode FROM generation_runs "
             "WHERE user_id=? AND source='web' AND external_run_id=?"
@@ -573,6 +575,13 @@ def cancel_unsubmitted_web_slots(
                 (_stable_id("item", run["id"], position),
                  run["id"], position,None if run["creation_mode"]=="other" else pos, now, now),
             )
+            from .economy import release_item
+            item=tx.execute("SELECT id FROM generation_items WHERE run_id=? AND position=?",(run["id"],position)).fetchone()
+            if item:
+                release_item(tx,item[0])
+            for charge in tx.execute("SELECT c.* FROM generation_charges c JOIN generation_quotes q ON q.id=c.quote_id WHERE q.user_id=? AND q.batch_key=? AND c.slot_position=? AND c.generation_id IS NULL AND c.status='reserved' FOR UPDATE OF c",(uid,batch_id,pos)).fetchall():
+                from .economy import finish_reservation
+                finish_reservation(tx,charge)
             cancelled.append(pos)
 
         refresh_run_status(tx, str(run["id"]))

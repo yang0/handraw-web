@@ -46,7 +46,7 @@ from typing import Any
 from .ai_client import chat
 from .batch_plan_routes import get_style_display_name, get_valid_layout_map
 from .db import Database
-from .services import ServiceError, consume_daily_usage
+from .services import ServiceError
 from .skill_paths import SKILL_DIR
 
 VALID_IMAGE_TYPES = {"process", "concept", "comparison", "infographic", "scene", "mood"}
@@ -181,9 +181,9 @@ def execute_article_plan(
     if user.get("_auth_kind") == "token":
         raise ServiceError("token_scope_denied", status=403, code="token_disallowed")
 
-    # Rate limiting: 30 requests/day per user
-    if not consume_daily_usage(db, user["id"], "article_plan", limit=30):
-        raise ServiceError("今日文章规划次数已达上限（30 次/天），请明天再试", status=429, code="rate_limited")
+    from .runtime_policy import check_auth_rate_limit
+    if not check_auth_rate_limit("planning",db.get_conn().cache_scope+":"+str(user["id"])):
+        raise ServiceError("规划请求过于频繁，请稍后再试",status=429,code="rate_limited")
 
     clean_title = str(title or "").strip() or "未命名文章"
     warnings: list[str] = []

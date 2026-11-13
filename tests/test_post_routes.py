@@ -51,6 +51,9 @@ class PostRoutesHTTPTests(unittest.TestCase):
         cls.buyer, _ = register_user(cls.db, "pr_buyer", "pass-buyer")
         cls.admin, _ = register_user(cls.db, "pr_admin", "pass-admin")
 
+        with cls.db.transaction() as tx:
+            from backend.services import apply_wallet_delta
+            apply_wallet_delta(tx,cls.reader['id'],20,'admin_adjust','Fixture tip budget')
         # Give buyer some credits to unlock paid items
         conn = cls.db.get_conn()
         conn.execute("UPDATE wallets SET balance = 100 WHERE user_id = ?", (cls.buyer["id"],))
@@ -851,6 +854,9 @@ class PostRoutesHTTPTests(unittest.TestCase):
             conn.commit()
             payee_bal_before = int(conn.execute("SELECT balance FROM wallets WHERE user_id = ?", (payee_uid,)).fetchone()["balance"])
 
+            with self.db.transaction() as tx:
+                services.apply_wallet_delta(tx,u_tipper['id'],10,'admin_adjust','Fixture tipping budget')
+            tipper_bal_before += 10
             tip_res = services.send_encourage_tip(self.db, u_tipper, "asset", "FA-002", amount=2)
             self.assertTrue(tip_res["ok"])
             self.assertEqual(tip_res["credits"], tipper_bal_before - 2)
@@ -929,7 +935,6 @@ class PostRoutesHTTPTests(unittest.TestCase):
         finally:
             conn.execute("DELETE FROM site_settings WHERE key = 'economy'")
             conn.execute("DELETE FROM catalog_assets WHERE code = 'USR-TEST-01'")
-            conn.execute("DELETE FROM ledgers WHERE ref_id IN ('FA-002', 'USR-TEST-01')")
             conn.execute("DELETE FROM interactions WHERE target_id IN ('FA-002', 'USR-TEST-01')")
             conn.commit()
 
@@ -1017,7 +1022,7 @@ class PostRoutesHTTPTests(unittest.TestCase):
                 "title": "缺少分界线的付费帖",
                 "category": "experience",
                 "publishMode": "paid",
-                "price": 15,
+                "price": 20,
                 "bodyHtml": "<p>这里全是正文，但是完全没有插入分界线！</p>",
             },
             token=author_token,
@@ -1033,7 +1038,7 @@ class PostRoutesHTTPTests(unittest.TestCase):
                 "title": "分界线后无内容的付费帖",
                 "category": "experience",
                 "publishMode": "paid",
-                "price": 15,
+                "price": 20,
                 "bodyHtml": "<p>前序免费公开内容</p><div class=\"hw-paywall-divider\"><span>分界线</span></div>",
             },
             token=author_token,
@@ -1041,10 +1046,10 @@ class PostRoutesHTTPTests(unittest.TestCase):
         self.assertEqual(status, 400)
         self.assertIn("收费正文", payload.get("error", ""))
 
-        # 4. Valid paid post with custom price 15
+        # 4. Valid paid post with allowed price 20
         paid_body = (
             "<p>前序公开试读章节与背景介绍</p>"
-            "<div class=\"hw-paywall-divider\" data-paywall-price=\"15\">"
+            "<div class=\"hw-paywall-divider\" data-paywall-price=\"20\">"
             "<div class=\"hw-paywall-divider-pill\"><span class=\"hw-paywall-pill-text\">此处以下为 15✦ 专属核心交付章节</span></div>"
             "</div>"
             "<p>付费解锁后的绝密独家交付正文内容，深入讲解了提示词调优和模型微调秘籍。</p>"
@@ -1056,7 +1061,7 @@ class PostRoutesHTTPTests(unittest.TestCase):
                 "title": "15✦ 独家手绘风提示词工程进阶指南",
                 "category": "experience",
                 "publishMode": "paid",
-                "price": 15,
+                "price": 20,
                 "summary": "<p>前序公开试读章节与背景介绍</p>",
                 "bodyHtml": paid_body,
                 "lockedBody": paid_body,
@@ -1068,13 +1073,13 @@ class PostRoutesHTTPTests(unittest.TestCase):
         topic = payload.get("topic") or {}
         topic_id = topic.get("id")
         self.assertTrue(topic_id)
-        self.assertEqual(topic.get("price"), 15)
+        self.assertEqual(topic.get("price"), 20)
 
         # 5. Anonymous view: cannot see lockedBody or paid content
         status, anon_payload = self._request("GET", f"/api/posts/{topic_id}")
         self.assertEqual(status, 200)
         anon_topic = anon_payload.get("topic") or {}
-        self.assertEqual(anon_topic.get("price"), 15)
+        self.assertEqual(anon_topic.get("price"), 20)
         self.assertEqual(anon_topic.get("lockedBody"), "")
         self.assertIn("前序公开试读", anon_topic.get("summary", ""))
         self.assertNotIn("绝密独家交付正文内容", anon_topic.get("summary", ""))
@@ -1107,11 +1112,11 @@ class PostRoutesHTTPTests(unittest.TestCase):
         self.assertTrue(unlock_res.get("ok"))
         self.assertFalse(unlock_res.get("alreadyUnlocked", False))
 
-        # Check wallet balances: buyer deducted 15, author credited 12 (80% of 15)
+        # Buyer spends 20; author share is pending for seven days.
         buyer_bal_after = int(conn.execute("SELECT balance FROM wallets WHERE user_id = ?", (buyer_uid,)).fetchone()["balance"])
         author_bal_after = int(conn.execute("SELECT balance FROM wallets WHERE user_id = ?", (author_uid,)).fetchone()["balance"])
-        self.assertEqual(buyer_bal_after, buyer_bal_before - 15)
-        self.assertEqual(author_bal_after, author_bal_before + 12)
+        self.assertEqual(buyer_bal_after, buyer_bal_before - 20)
+        self.assertEqual(author_bal_after, author_bal_before)
 
         # Buyer views after unlock -> unlocked, lockedBody visible
         status, buyer_post_payload = self._request("GET", f"/api/posts/{topic_id}", token=buyer_token)

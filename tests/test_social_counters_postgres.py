@@ -31,6 +31,10 @@ class PostgresSocialCounterTests(unittest.TestCase):
             register_user(self.db, name, "IsolatedSocialPassword!")[0]
             for name in ("social_author", "social_reader", "social_second")
         )
+        from backend.services import apply_wallet_delta
+        with self.db.transaction() as tx:
+            for participant in (self.author,self.reader,self.second_reader):
+                apply_wallet_delta(tx,participant["id"],20,"admin_adjust","Fixture endowment for social concurrency")
         self.db.get_conn().execute("""
             INSERT INTO works(id,author_username,author_name,title,prompt,published_at_ms,created_at,updated_at)
             VALUES ('social-work', ?, 'Author', 'Work', '', 1, '', '')
@@ -92,7 +96,7 @@ class PostgresSocialCounterTests(unittest.TestCase):
 
         created = like("set")
         self.assertTrue(all(result["liked"] for result in created))
-        self.assertEqual(sorted(result["rewarded"] for result in created), [0, 2])
+        self.assertEqual(sorted(result["rewarded"] for result in created), [0, 0])
         self.assertEqual((self.count("likes"), self.interactions("like_work")), (1, 1))
         removed = like("unset")
         self.assertTrue(all(not result["liked"] for result in removed))
@@ -103,7 +107,7 @@ class PostgresSocialCounterTests(unittest.TestCase):
         self.assertEqual(self.db.get_conn().execute(
             "SELECT count(*) FROM ledgers WHERE kind='first_cheer' AND user_id=?",
             (self.reader["id"],),
-        ).fetchone()[0], 1)
+        ).fetchone()[0], 0)
 
     def test_duplicate_collection_set_and_unset(self):
         for action, expected in (("set", 1), ("unset", 0)):
@@ -119,7 +123,7 @@ class PostgresSocialCounterTests(unittest.TestCase):
         self.assertEqual(self.db.get_conn().execute(
             "SELECT count(*) FROM ledgers WHERE kind='first_collect' AND user_id=?",
             (self.reader["id"],),
-        ).fetchone()[0], 1)
+        ).fetchone()[0], 0)
 
     def test_distinct_users_cheer_and_remove_without_lost_updates(self):
         for expected in (2, 0):

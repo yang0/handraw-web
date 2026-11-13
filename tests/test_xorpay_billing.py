@@ -47,8 +47,8 @@ class XorPayBillingTests(unittest.TestCase):
                     "title": "100 积分标准包",
                     "description": "100 credits",
                     "credits": 100,
-                    "price_cents": 990,
-                    "price_display": "¥9.9",
+                    "price_cents": 1000,
+                    "price_display": "¥10",
                     "badge": "推荐",
                 },
             ],
@@ -175,7 +175,7 @@ class XorPayBillingTests(unittest.TestCase):
         self.assertEqual(st, 200)
         self.assertEqual(res["order"]["packId"], "pack_100")
         self.assertEqual(res["order"]["credits"], 100)
-        self.assertEqual(res["order"]["amountCents"], 990)
+        self.assertEqual(res["order"]["amountCents"], 1000)
         self.assertEqual(res["order"]["currency"], "CNY")
         self.assertEqual(res["order"]["status"], "pending")
         self.assertEqual(res["order"]["checkoutId"], "xorp_order_9988")
@@ -186,7 +186,7 @@ class XorPayBillingTests(unittest.TestCase):
         method, path, sent_data, _ = captured_requests[0]
         self.assertEqual(method, "POST")
         self.assertEqual(path, f"/api/pay/{self.aid}")
-        self.assertEqual(sent_data["price"], "9.90")
+        self.assertEqual(sent_data["price"], "10.00")
         self.assertEqual(sent_data["pay_type"], "alipay")
         order_id = res["order"]["id"]
         self.assertEqual(sent_data["order_id"], order_id)
@@ -237,7 +237,7 @@ class XorPayBillingTests(unittest.TestCase):
         invalid_body = urllib.parse.urlencode({
             "aoid": "aoid_test_1001",
             "order_id": order_id,
-            "pay_price": "9.90",
+            "pay_price": "10.00",
             "pay_time": "2026-11-13 14:00:00",
             "sign": "invalid_sig_12345",
         })
@@ -251,11 +251,11 @@ class XorPayBillingTests(unittest.TestCase):
         self.assertEqual(body_bad["code"], "invalid_webhook_signature")
 
         # 2. Valid signature should settle order and return HTTP 200 'ok'
-        valid_sign = xorpay_sign("aoid_test_1001", order_id, "9.90", "2026-11-13 14:00:00", self.app_secret)
+        valid_sign = xorpay_sign("aoid_test_1001", order_id, "10.00", "2026-11-13 14:00:00", self.app_secret)
         valid_body = urllib.parse.urlencode({
             "aoid": "aoid_test_1001",
             "order_id": order_id,
-            "pay_price": "9.90",
+            "pay_price": "10.00",
             "pay_time": "2026-11-13 14:00:00",
             "detail": json.dumps({"transaction_id": "ali_202611130001", "buyer": "test_buyer"}),
             "sign": valid_sign,
@@ -272,7 +272,7 @@ class XorPayBillingTests(unittest.TestCase):
         # Verify wallet credits granted to User A (initial 20 + 100 recharge = 120)
         conn = self.db.get_conn()
         wal = conn.execute("SELECT balance FROM wallets WHERE user_id = ?", (self.user_a["id"],)).fetchone()
-        self.assertEqual(wal["balance"], 120)
+        self.assertEqual(wal["balance"], 100)
 
         # Verify order marked paid in database
         ord_row = conn.execute("SELECT * FROM payment_orders WHERE id = ?", (order_id,)).fetchone()
@@ -290,7 +290,7 @@ class XorPayBillingTests(unittest.TestCase):
         self.assertEqual(st_dup, 200)
         self.assertEqual(body_dup, "ok")
         wal2 = conn.execute("SELECT balance FROM wallets WHERE user_id = ?", (self.user_a["id"],)).fetchone()
-        self.assertEqual(wal2["balance"], 120)
+        self.assertEqual(wal2["balance"], 100)
 
     def test_sync_order_from_provider_query2(self) -> None:
         def fake_pay(method: str, path: str, data=None, *, api_base="https://xorpay.com", timeout=20.0):
@@ -332,7 +332,7 @@ class XorPayBillingTests(unittest.TestCase):
         self.assertEqual(st_sync, 200)
         self.assertTrue(body_sync["ok"])
         self.assertEqual(body_sync["order"]["status"], "paid")
-        self.assertEqual(body_sync["credits"], 70)
+        self.assertEqual(body_sync["credits"], 50)
         self.assertTrue(body_sync["applied"])
 
         # Second sync should be idempotent
@@ -345,7 +345,7 @@ class XorPayBillingTests(unittest.TestCase):
             )
         self.assertEqual(st_sync2, 200)
         self.assertFalse(body_sync2["applied"])
-        self.assertEqual(body_sync2["credits"], 70)
+        self.assertEqual(body_sync2["credits"], 50)
 
     def test_user_cross_account_isolation(self) -> None:
         def fake_pay(method: str, path: str, data=None, *, api_base="https://xorpay.com", timeout=20.0):

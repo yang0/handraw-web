@@ -689,8 +689,21 @@ class GenerationReconciler:
                     continue
         return handled
 
+    def reconcile_economy_once(self) -> None:
+        from .points import settle_due
+        from .economy import release_abandoned_quotes
+        tx=self.db.get_conn()
+        owners=tx.execute("SELECT author_id AS uid FROM creator_point_earnings WHERE status='pending' AND available_at<=now() UNION SELECT c.user_id AS uid FROM generation_charges c JOIN generation_quotes q ON q.id=c.quote_id WHERE c.status='reserved' AND c.item_id IS NULL AND c.generation_id IS NULL AND q.expires_at<now() LIMIT 100").fetchall()
+        for owner in owners:
+            settle_due(self.db,owner["uid"])
+            release_abandoned_quotes(self.db,owner["uid"])
+
     def _run(self) -> None:
         while not self._stop.is_set():
+            try:
+                self.reconcile_economy_once()
+            except Exception:
+                logger.exception("worker=economy-maintenance iteration failed; will retry")
             try:
                 from .redis_jobs import generation_reconcile_lease
                 with generation_reconcile_lease() as lease:
@@ -1967,6 +1980,8 @@ def execute_studio_generation(db, user, body, *, demo_mode=False, request_log_id
                 "error": existing.get("error") or "",
                 "costType": prep.get("costType") or "",
                 "creditsSpent": prep.get("creditsSpent") or 0,
+                "amountCents": prep.get("amountCents",0),
+                "billingSpec": prep.get("billingSpec"),
                 "credits": prep.get("credits") or 0,
                 "freeQuotaRemaining": prep.get("freeQuotaRemaining") or 0,
             }
@@ -1997,6 +2012,8 @@ def execute_studio_generation(db, user, body, *, demo_mode=False, request_log_id
                 "finalPrompt": prep.get("finalPrompt") or "",
                 "costType": prep["costType"],
                 "creditsSpent": prep["creditsSpent"],
+                "amountCents": prep.get("amountCents",0),
+                "billingSpec": prep.get("billingSpec"),
                 "credits": prep["credits"],
                 "freeQuotaRemaining": prep["freeQuotaRemaining"],
             }
@@ -2040,7 +2057,11 @@ def execute_studio_generation(db, user, body, *, demo_mode=False, request_log_id
         gw_model = str(cfg.get("model") or prep.get("model") or "gpt-image-2").strip()
         gw_quality = str(cfg.get("quality") or "auto").strip() or "auto"
         gw_timeout = int(cfg.get("timeout") or (180 if is_openai_gw else 28))
-        gw_size = size_for_ratio(ratio)
+        spec=prep.get("billingSpec")
+        if spec:
+            gw_model=spec["model"]
+            gw_quality=spec["quality"]
+        gw_size = spec["size"] if spec else size_for_ratio(ratio)
 
         if is_openai_gw:
             endpoint = "/v1/images/edits" if refs else "/v1/images/generations"
@@ -2095,6 +2116,8 @@ def execute_studio_generation(db, user, body, *, demo_mode=False, request_log_id
                 "finalPrompt": prep.get("finalPrompt") or "",
                 "costType": prep["costType"],
                 "creditsSpent": prep["creditsSpent"],
+                "amountCents": prep.get("amountCents",0),
+                "billingSpec": prep.get("billingSpec"),
                 "credits": prep["credits"],
                 "freeQuotaRemaining": prep["freeQuotaRemaining"],
             }
@@ -2132,6 +2155,8 @@ def execute_studio_generation(db, user, body, *, demo_mode=False, request_log_id
                 "status": gw_res.get("status") or "queued",
                 "costType": prep["costType"],
                 "creditsSpent": prep["creditsSpent"],
+                "amountCents": prep.get("amountCents",0),
+                "billingSpec": prep.get("billingSpec"),
                 "credits": prep["credits"],
                 "freeQuotaRemaining": prep["freeQuotaRemaining"],
             }
@@ -2242,6 +2267,8 @@ def execute_studio_generation(db, user, body, *, demo_mode=False, request_log_id
                 "confirming": True,
                 "costType": prep["costType"],
                 "creditsSpent": prep["creditsSpent"],
+                "amountCents": prep.get("amountCents",0),
+                "billingSpec": prep.get("billingSpec"),
                 "credits": prep["credits"],
                 "freeQuotaRemaining": prep["freeQuotaRemaining"],
             }
@@ -2407,6 +2434,9 @@ class HandrawRequestHandler(BaseHTTPRequestHandler):
             raise ServiceError("请求过于频繁，请稍后再试", status=429, code="rate_limited")
 
     def _feature_get(self, req_path: str, qs: dict[str, list[str]]) -> bool:
+        from .economy_routes import handle_get
+        if handle_get(self,req_path,qs):
+            return True
         try:
             from .features import handle_feature_get
         except ImportError:
@@ -2414,6 +2444,9 @@ class HandrawRequestHandler(BaseHTTPRequestHandler):
         return bool(handle_feature_get(self, req_path, qs))
 
     def _feature_post(self, req_path: str, body: dict[str, Any]) -> bool:
+        from .economy_routes import handle_post
+        if handle_post(self,req_path,body):
+            return True
         try:
             from .features import handle_feature_post
         except ImportError:
@@ -2942,8 +2975,8 @@ class HandrawRequestHandler(BaseHTTPRequestHandler):
                     "rechargeEnabled": recharge_enabled(),
                     "trustedOrigins": sorted(trusted_origins()),
                     "model": resolve_gateway_model(settings, cfg),
-                    "dailyFreeQuota": int(econ.get("daily_free_quota", 3)),
-                    "creditPerImage": int(econ.get("studio_credit_per_image", 2)),
+                    "billingMode":"cash",
+                    "specifications": __import__("backend.economy",fromlist=["specs"]).specs(self.db.get_conn()),
                 }
             )
             return
@@ -4202,7 +4235,7 @@ class HandrawRequestHandler(BaseHTTPRequestHandler):
             return
 
         if req_path == "/api/studio/generate":
-            for key in ("_canvasDispatchToken","_canvasResourceInputs","_canvasRunId"):
+            for key in ("_canvasDispatchToken","_canvasResourceInputs","_canvasRunId","_canvasItemId"):
                 body.pop(key,None)
             payload,status=execute_studio_generation(
                 self.db,self._current_user(required=True),body,

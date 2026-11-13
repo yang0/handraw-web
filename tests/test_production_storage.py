@@ -108,7 +108,7 @@ class NativePostgresTests(unittest.TestCase):
         from ops import bootstrap_postgres_v3
 
         dsn = self.enterContext(isolated_pg_dsn(initialize=False))
-        previous_migrations = tuple(path for path in bootstrap_postgres_v3.MIGRATIONS if not path.name.startswith("postgres_111_"))
+        previous_migrations = tuple(path for path in bootstrap_postgres_v3.MIGRATIONS if not path.name.startswith(("postgres_111_","postgres_119_")))
         with patch.object(bootstrap_postgres_v3, "MIGRATIONS", previous_migrations), patch.dict(
             os.environ, {"HANDRAW_ALLOW_PG_BOOTSTRAP": "YES"},
         ):
@@ -127,6 +127,7 @@ class NativePostgresTests(unittest.TestCase):
                 """)
                 conn.commit()
                 conn.execute(ddl)
+                conn.execute((Path(__file__).resolve().parents[1]/"backend/postgres_119_economy.sql").read_text(encoding="utf-8"))
                 self.assertEqual(conn.execute(
                     "SELECT event_key FROM public.payment_webhook_events"
                 ).fetchall(), [("fixture-event",)])

@@ -1647,7 +1647,7 @@
 
   function unlockWithCredits(id, cost, label, authorName, onUnlocked) {
     if (!App.state.loggedIn) {
-      openLoginModal(`登录后可使用积分解锁「${label}」（新用户注册立赠 20 积分）`);
+      openLoginModal(`登录后可使用积分解锁「${label}」（完成账号验证可获得20积分）`);
       return false;
     }
     if ((App.state.unlockedIds || []).includes(id)) {
@@ -1686,7 +1686,7 @@
             aTarget.definition = unlockedText;
             aTarget.definitionLocked = false;
           }
-          toast(`✨ 解锁成功！已扣除 ${res.cost ?? cost} 积分${authorName ? "（80% 已实时分账原作者）" : ""}`);
+          toast(`✨ 解锁成功！已扣除 ${res.cost ?? cost} 积分${authorName ? "（作者获得80%积分分成，7天后可用）" : ""}`);
           await refreshFromServer();
           if (onUnlocked) onUnlocked(unlockedText);
         })
@@ -2362,7 +2362,7 @@
       if (App.channel === "forum" && typeof window.HANDRAW_FORUM_OPEN_AUTH === "function") {
         window.HANDRAW_FORUM_OPEN_AUTH("登录后即可赞赏支持！");
       } else {
-        openLoginModal("登录后可使用积分为喜爱的创作者赞赏加油（新用户注册立赠 20 积分）！");
+        openLoginModal("登录后可使用积分为喜爱的创作者赞赏加油（完成账号验证可获得20积分）！");
       }
       return;
     }
@@ -2585,7 +2585,7 @@
     }
 
     if (!App.state.loggedIn) {
-      openLoginModal("登录后可使用积分为喜爱的创作者赞赏加油（新用户注册立赠 20 积分）！");
+      openLoginModal("登录后可使用积分为喜爱的创作者赞赏加油（完成账号验证可获得20积分）！");
       return false;
     }
     if (!targetObj) return false;
@@ -2761,7 +2761,7 @@
 
   async function performServerCheckin() {
     if (!App.state.loggedIn) {
-      openLoginModal("登录后即可每日打卡领取 +5 积分并重置 3 次免费生图额度！");
+      openLoginModal("登录后可签到领取1社区积分，每自然月最多20分；生图免费额度不随签到恢复。");
       return false;
     }
     if (App.state.dailyCheckedIn) {
@@ -2774,7 +2774,7 @@
         App.state.dailyCheckedIn = true;
         App.state.credits = res.credits;
         App.state.freeQuotaRemaining = res.freeQuotaRemaining;
-        toast(`🎉 签到成功！获得 +${res.bonus || 5} 积分，今日免费在线生图额度已满格 (${res.freeQuotaRemaining}/${res.freeQuotaMax})`);
+        toast(`签到成功，本次获得 ${res.bonus ?? 0} 社区积分；免费生图额度不变。`);
         await refreshFromServer();
         return true;
       } catch (err) {
@@ -2782,11 +2782,8 @@
         return false;
       }
     }
-    App.state.dailyCheckedIn = true;
-    addLedger("每日社区创作打卡奖励", +5);
-    saveState();
-    toast("🎉 签到成功！获得 +5 积分，今日免费在线生图额度已满格 (3/3)");
-    return true;
+    toast("签到需要连接服务器，请联网后重试。");
+    return false;
   }
 
   /* ======================== CHROME (SANDBOX BAR + TOPBAR + ANNOUNCEMENT) ======================== */
@@ -2966,7 +2963,7 @@
                       </div>
                       ${
                         !s.dailyCheckedIn
-                          ? `<button type="button" class="btn btn-sm btn-gold" id="hw-dropdown-btn-checkin" style="font-size:11.5px;padding:3px 8px;">📅 签到 +5</button>`
+                          ? `<button type="button" class="btn btn-sm btn-gold" id="hw-dropdown-btn-checkin" style="font-size:11.5px;padding:3px 8px;">📅 签到 +1</button>`
                           : `<span style="font-size:11px;color:var(--jade);font-weight:700;">✅ 今日已签到</span>`
                       }
                     </div>
@@ -3338,7 +3335,7 @@
 
     container.innerHTML = `
       <div style="background:var(--vermilion-wash);border:1px solid var(--vermilion-border);border-radius:10px;padding:11px 14px;margin-bottom:14px;font-size:13.2px;color:var(--ink-strong);">
-        <strong>✨ ${esc(reasonText || "登录即享每日免费在线生图额度、云端收藏同步、互动鼓励与积分激励")}</strong>
+        <strong>✨ ${esc(reasonText || "新账号享10张1K免费生图额度、云端收藏同步与社区权益")}</strong>
       </div>
 
       <div class="hw-segmented" style="width:100%;margin-bottom:14px;" id="auth-mode-tabs">
@@ -3445,7 +3442,7 @@
           </div>
           <div style="margin:-4px 0 14px;font-size:12.4px;"><a href="?view=recovery" data-account-recovery>忘记密码</a></div>
           <div style="display:grid;gap:6px;margin-bottom:14px;font-size:12.4px;color:var(--ink-muted);">
-            <div>✦ 登录后立享全站实测大图、完整提示词、每日 3 次免费生图与跨子域名收藏夹</div>
+            <div>✦ 新账号享10张1K免费生图额度，社区积分用于解锁内容与资源</div>
             <div>✦ 原 Discourse 老论坛迁移账号支持原邮箱/用户名直接登录并自动升级加密</div>
           </div>
           <p id="auth-inline-error" role="alert" style="color:var(--vermilion);font-size:13px;margin:0 0 10px;"></p>

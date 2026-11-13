@@ -13,6 +13,17 @@
  */
 (function () {
   const S = window.HANDRAW_SHARED;
+  if(window.HandrawEconomy&&!window.__HANDRAW_TESTING__) {
+    const control=document.createElement('div');control.dataset.economyPicker='';
+    let pickerAccount;
+    const place=()=>{
+      const toolbar=document.querySelector('.ic-studio-topbar,.ic-studio-toolbar,.studio-topbar,.ic-pv-topbar');
+      if(toolbar&&!toolbar.contains(control))toolbar.appendChild(control);
+      const account=S.App.state?.loggedIn ? String(S.App.state?.user?.id||S.App.state?.username||'signed-in') : 'guest';
+      if(account!==pickerAccount){pickerAccount=account;void window.HandrawEconomy.mountPicker(control);}
+    };
+    document.body.appendChild(control);new MutationObserver(place).observe(document.getElementById('studio-app-root'),{childList:true,subtree:true});place();
+  }
   const E = window.HANDRAW_CANVAS_ENGINE;
   const { App, esc, toast, channelUrl } = S;
 
@@ -368,29 +379,16 @@
 
   // A priced article action needs explicit opt-in. Price shown here is an
   // estimate; every actual reservation remains verified by the backend.
-  async function confirmArticleGenerationCost(count, { replacing = false, skipped = 0 } = {}) {
-    const guard = window.HandrawArticleGenerationGuard;
-    if (!guard) {
-      toast("费用确认模块尚未加载，请刷新页面后重试");
-      return false;
-    }
-    const demo = isDemoGenerationEnabled();
-    const free = App.state?.freeQuotaRemaining ?? App.state?.free_quota_remaining;
-    const price = CS.serverCfg?.creditPerImage;
-    const balance = App.state?.credits;
-    const quote = guard.quote(count, { demo, free, unitPrice: price, balance });
-    if (!quote.ok) {
-      toast(quote.reason);
-      return false;
-    }
-    if (!demo && !quote.affordable) {
-      toast("当前积分余额不足，请减少生成张数或补充额度");
-      return false;
-    }
-    const response = await guard.confirmGeneration(count, {
-      demo, free, unitPrice: price, balance, replacing, skipped
-    });
-    return Boolean(response.approved);
+  const articleBilling=new Map();
+  async function confirmArticleGenerationCost(count,{cards=[],art={}}={}) {
+    if(isDemoGenerationEnabled()) return true;
+    try {
+      const items=cards.length?cards.map(c=>({ratio:c.ratio||(c.role==='cover'?art.coverRatio||art.settings?.coverRatio||'2.35:1':art.inlineRatio||art.settings?.inlineRatio||'4:3')})):Array.from({length:count},()=>({ratio:'4:3'}));
+      const quote=await window.HandrawEconomy.confirm(items);
+      if(!quote)return false;
+      cards.forEach((card,index)=>articleBilling.set(card.id,{quoteId:quote.quoteId,quoteIndex:index,specId:quote.items[index].spec.id}));
+      return true;
+    }catch(e){toast(e.message);return false;}
   }
 
   function reconcileDetachedBatchState(parts) {
@@ -5188,7 +5186,7 @@
         throw err;
       }
     }
-    throw new Error("等待时间较长，生成结果出来后会出现在生图历史里；如果最终没有生成，额度或积分会自动退还。");
+    throw new Error("等待时间较长，生成结果出来后会出现在生图历史里；如果最终没有生成，免费额度或生图余额会释放预占。");
   }
 
   function applyDurableTaskResult(task, images, errorMessage = "") {
@@ -5997,7 +5995,7 @@
       return false;
     }
     if (!skipCostConfirmation && !(await confirmArticleGenerationCost(1, {
-      replacing: Boolean(card.imageUrl)
+      cards:[card],art:target.art
     }))) return false;
     if (isStaleScope(runEpoch, runScope) || card.status === "generating") return false;
     if (card.status !== "error") card.requestId = "";
@@ -6089,7 +6087,8 @@
             } : {}),
             requestId,
             clientRequestId: requestId,
-            confirmCost: true
+            confirmCost: true,
+            ...(articleBilling.get(card.id)||{})
           })
         });
         const data = await resp.json();
@@ -6260,7 +6259,7 @@
 
     const prevDispCount = target.isActiveCanvas ? getDownstreamDisplayNodes(planNode.id).length : 0;
     if (!(await confirmArticleGenerationCost(effectiveTargets.length, {
-      skipped: allCards.length - effectiveTargets.length
+      cards:effectiveTargets,art:target.art
     }))) return false;
     if (isStaleScope(runEpoch, runScope) || planNode.data.status === "generating") return false;
     // Retry incomplete cards in the SAME logical run if all selected cards
@@ -6471,6 +6470,13 @@
     const pendingCount = resolvedOnlyIdx === null
       ? plan.specs.length - completedBefore.size : 1;
     if (!confirmPotentialGenerationCost(pendingCount)) return false;
+    const billingIndexes=resolvedOnlyIdx===null?plan.specs.map((_,i)=>i).filter(i=>!completedBefore.has(i)):[resolvedOnlyIdx];
+    let billingQuote=null;
+    if(isLiveGenerationEnabled()) {
+      try {billingQuote=await window.HandrawEconomy.confirm(billingIndexes.map(i=>({ratio:plan.specs[i].ratio||'3:4',slotPosition:i})));}
+      catch(e){toast(e.message);return false;}
+      if(!billingQuote)return false;
+    }
 
     const prevActiveBatchId = ctrl.data.activeBatchId || "";
     const prevActiveBatchTotal = Number(ctrl.data.activeBatchTotal || 0);
@@ -6779,6 +6785,7 @@
                   requestId,
                   clientRequestId: requestId,
                   confirmCost: true,
+                  ...(billingQuote?{quoteId:billingQuote.quoteId,quoteIndex:billingIndexes.indexOf(i),specId:billingQuote.items[billingIndexes.indexOf(i)].spec.id}:{}),
                   ...(CS.forkGenerationSource?.generationId ? {
                     forkGenerationId: CS.forkGenerationSource.generationId,
                     forkItemId: CS.forkGenerationSource.itemId || ""
@@ -8086,6 +8093,7 @@
                               <span style="font-size:12px;color:var(--ic-muted);">${(h.items || []).length} 张</span>
                               <span style="font-size:12px;color:var(--ic-muted);font-family:var(--font-mono);">${esc(h.createdAt || "")}</span>
                               <span style="font-size:12px;color:var(--ic-muted);">· ${esc(h.recipeSummary || "自由生图")}</span>
+                              ${h.billing?.chargeCount ? `<span style="font-size:12px;color:var(--ic-muted);">已结算 ¥${(h.billing.amountCents/100).toFixed(2)} · 免费 ${h.billing.freeUsed} 张${h.billing.heldCents||h.billing.freeHeld ? ` · 预占 ¥${(h.billing.heldCents/100).toFixed(2)} / 免费 ${h.billing.freeHeld} 张` : ""}</span>` : ""}
                             </div>
 
                             <div style="display:flex;align-items:center;gap:7px;flex-wrap:wrap;">
@@ -12745,6 +12753,7 @@
         scope:activeCacheScope,api:S.apiJson,
         loggedIn:()=>Boolean(App.state?.loggedIn && App.state?.serverBacked),
         resources:kind=>kind==="style"?Catalog.styles:Catalog.layouts,
+        specifications:()=>window.HandrawEconomy.specs,
         parameterChoices:field=>field==="colors"?Catalog.colors:field==="tones"?Catalog.tones:
           field==="moods"?[...new Set([...(Catalog.moods||[]),...E.DEFAULT_MOOD_POOL])]:field==="whitespace"?E.WHITESPACE_OPTIONS:[],
         pickResource:settings=>openSkillFieldPickerModal(null,settings.field,settings),
@@ -12959,18 +12968,8 @@
   let quickBusy = null;
 
   function generationCostText(count) {
-    const qty = count != null && Number.isFinite(Number(count)) ? Math.max(0, Number(count)) : null;
-    if (CS.engineMode === "demo") return `演示模式 · 本批 ${qty ?? "待确认"} 张，不消耗真实生图额度`;
-    if (!App.state?.loggedIn) return "登录后查看免费额度、积分余额与本批预计费用";
-    const rawFree = App.state.freeQuotaRemaining ?? App.state.free_quota_remaining;
-    const rawPrice = CS.serverCfg?.creditPerImage;
-    const free = rawFree == null ? NaN : Number(rawFree);
-    const price = rawPrice == null ? NaN : Number(rawPrice);
-    const freeKnown = Number.isFinite(free) && free >= 0;
-    const priceKnown = Number.isFinite(price) && price >= 0;
-    const total = qty !== null && freeKnown && priceKnown ? Math.max(0, qty - free) * price : null;
-    const balance = Number(App.state.credits);
-    return `本批 ${qty ?? "待确认"} 张 · 免费额度 ${freeKnown ? free : "待确认"} 张 · 单张 ${priceKnown ? price : "待确认"} 积分 · 预计 ${total ?? "待确认"} 积分${Number.isFinite(balance) ? ` · 余额 ${balance} 积分` : ""}`;
+    if(CS.engineMode==='demo')return '演示模式，不消耗真实余额与额度';
+    return `本批 ${count??'待确认'} 张 · 按规格人民币计费 · 1K免费额度优先使用 · 生成前确认费用`;
   }
 
   function getQuickParts(graph = CS.graph) {
@@ -16108,7 +16107,7 @@
           }
           if (resp.status === 429) {
             CS.articlePlanError = {
-              text: errMsg || "今日 AI 规划次数已达上限（30 次），请明天再试",
+              text: errMsg || "请求过于频繁，请稍后再规划",
               canRetry: false,
               canTemplate: false
             };

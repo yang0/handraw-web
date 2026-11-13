@@ -8,8 +8,9 @@ function store(t,api,scope="user:canvas") {
   const instance=new CanvasStore({api,scope,loggedIn:()=>true,storage:{getItem:key=>storage.get(key),setItem:(key,value)=>storage.set(key,value)}});
   t.after(()=>instance.close());return instance;
 }
-function preview() {return {planHash:"hash",quote:{freeRemaining:1,unitPrice:2,balance:10},items:[{ordinal:0,spec:{prompt:"A"}},{ordinal:1,spec:{prompt:"B"}}]};}
-function run(id="run") {return {id,status:"success",items:[],count:0,retryQuote:{total:0,unitPrice:2},spentCredits:0,maxCredits:0};}
+function billingQuote(){return {quoteId:"test-quote",items:[{spec:{id:'standard-1k',resolution:'1k',priceCents:20}},{spec:{id:'standard-1k',resolution:'1k',priceCents:20}}],freeByResolution:{'1k':1},totalCents:20,balanceCents:100,affordable:true};}
+function preview() {return {planHash:"hash",quote:billingQuote(),items:[{ordinal:0,spec:{prompt:"A"}},{ordinal:1,spec:{prompt:"B"}}]};}
+function run(id="run") {return {id,status:"success",items:[],count:0,retryQuote:{totalCents:0},spentAmountCents:0,maxAmountCents:0};}
 function legacyGraph() {
   return {nodes:[
     {id:"theme",type:"parameter",parameter:"prompt",values:[""],x:32,y:32},
@@ -231,10 +232,10 @@ test("preview uses the saved document and never submits per-image generation req
   storage.clear();const calls=[];const s=store(t,async(url,options)=>{calls.push(url);if(url.endsWith("/preview")) return preview();return {writeSeq:1};});
   s.doc.graph.nodes[0].fields.prompt=["Theme"];s.edit();await s.expand();
   assert.equal(calls.length,2);assert.equal(calls[0],"/api/studio/canvases");assert.ok(calls[1].endsWith("/preview"));
-  assert.equal(s.selected.size,2);assert.equal(selectedQuote(s.preview,2).total,2);assert.ok(!calls.includes("/api/studio/generate"));
+  assert.equal(s.selected.size,2);assert.equal(selectedQuote(s.preview,2).totalCents,20);assert.ok(!calls.includes("/api/studio/generate"));
 });
 test("an unknown submission persists its exact idempotency key and survives page recreation",async t=>{
-  storage.clear();let original;const first=store(t,async(url,options)=>{original=JSON.parse(JSON.stringify(options.body));throw new Error("connection lost");});
+  storage.clear();let original;const first=store(t,async(url,options)=>{if(url==='/api/studio/quote')return {...billingQuote(),totalCents:0};original=JSON.parse(JSON.stringify(options.body));throw new Error("connection lost");});
   first.doc.writeSeq=1;first.preview=preview();first.selected=new Set([1]);first.submitKey="same-command";
   await assert.rejects(first.submit(),/connection lost/);first.close();
   const calls=[];const recovered=store(t,async(url,options)=>{
@@ -258,14 +259,14 @@ test("account scope changes prevent late save responses from modifying the new a
 });
 test("stopping only targets pending items and retry replays an unknown command",async t=>{
   storage.clear();const calls=[];let retries=0;const s=store(t,async(url,options)=>{
-    calls.push([url,options?.body]);if(url.endsWith("/retry")){retries++;if(retries===1) throw new Error("unknown response");return {ok:true};}
+    calls.push([url,options?.body]);if(url==='/api/studio/quote')return {...billingQuote(),totalCents:40};if(url.endsWith("/retry")){retries++;if(retries===1) throw new Error("unknown response");return {ok:true};}
     return url.includes("/canvas-runs/")?{run:run()}:{ok:true};
   });
   s.run={...run(),id:"run",batchId:"batch",items:[{ordinal:0,status:"pending"},{ordinal:1,status:"generating"},{ordinal:2,status:"success"}]};
   s.runId="run";await s.stopPending();assert.deepEqual(Array.from(calls[0][1].positions),[0]);
-  s.run={...run(),id:"run",retryQuote:{total:4,unitPrice:2},spentCredits:2,maxCredits:2};
+  s.run={...run(),id:"run",retryQuote:{totalCents:40},items:[{status:"failed",spec:{prompt:"a"}}],spentAmountCents:20,maxAmountCents:20};
   await assert.rejects(s.retry(),/unknown response/);await s.retry();const commands=calls.filter(([url])=>url.endsWith("/retry"));
-  assert.equal(commands[0][1].requestId,commands[1][1].requestId);assert.equal(commands[1][1].maxCredits,6);
+  assert.equal(commands[0][1].requestId,commands[1][1].requestId);assert.equal(commands[1][1].maxAmountCents,40);
 });
 
 test("canvas and run lists load beyond their first windows without losing entries or retry positions",async t=>{

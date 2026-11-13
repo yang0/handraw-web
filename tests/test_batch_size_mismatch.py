@@ -118,6 +118,8 @@ class BatchSizeMismatchHTTPTests(unittest.TestCase):
             return resp.headers.get("Set-Cookie", "").split(";", 1)[0]
 
     def _post_generate(self, payload: dict) -> tuple[int, dict]:
+        from tests.economy_support import http_body
+        payload=http_body(self.db,{"Cookie":self.cookie},payload)
         opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
         req = urllib.request.Request(
             f"{self.base}/api/studio/generate",

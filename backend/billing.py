@@ -55,6 +55,7 @@ def _serialize_order(row: Any) -> dict[str, Any]:
         "id": str(row["id"]),
         "provider": str(row["provider"] or "xorpay"),
         "packId": str(row["pack_id"]),
+        "purpose": row.get("purpose","points"),
         "credits": int(row["credits"]),
         "amountCents": int(row["amount_cents"]),
         "currency": str(row["currency"] or "CNY"),
@@ -145,6 +146,7 @@ def _xorpay_api_request(
     *,
     api_base: str = "https://xorpay.com",
     timeout: float = 20.0,
+    retry: bool = True,
 ) -> dict[str, Any]:
     url = f"{api_base.rstrip('/')}{path}"
     data_bytes: bytes | None = None
@@ -202,7 +204,7 @@ def _xorpay_api_request(
             raise ServiceError("支付网关请求失败，请稍后重试", status=502, code="payment_gateway_error") from exc
         except Exception as exc:
             elapsed_ms = (_dt.datetime.now(_dt.timezone.utc) - started).total_seconds() * 1000
-            if attempt == 0 and isinstance(exc, (urllib.error.URLError, OSError, TimeoutError)):
+            if retry and attempt == 0 and isinstance(exc, (urllib.error.URLError, OSError, TimeoutError)):
                 logger.warning(
                     "XorPay API transient transport error (retrying): method=%s path=%s elapsed_ms=%.1f err=%s",
                     method.upper(),
@@ -379,7 +381,7 @@ def create_checkout_order(
     clean_pack_id = str(pack_id or "").strip()
     package = next((p for p in cfg["active_packages"] if p["id"] == clean_pack_id), None)
     if not package:
-        raise ServiceError("无效的积分充值档位", status=400, code="invalid_package")
+        raise ServiceError("无效的购买档位", status=400, code="invalid_package")
 
     provider = str(cfg.get("provider") or "xorpay").strip().lower()
     uid = int(user["id"])
@@ -392,7 +394,7 @@ def create_checkout_order(
         price_cents = int(package["price_cents"])
         price_str = f"{price_cents / 100:.2f}"
         pay_type = str(cfg.get("pay_type") or "alipay").strip().lower()
-        order_name = f"Handraw 积分充值 - {package['title']}"
+        order_name = f"Handraw - {package['title']}"
         notify_url = str(cfg.get("notify_url") or f"{main_origin}/api/webhooks/xorpay").strip()
         aid = str(cfg["aid"]).strip()
         app_secret = str(cfg["app_secret"]).strip()
@@ -413,10 +415,10 @@ def create_checkout_order(
             tx.execute(
                 """
                 INSERT INTO payment_orders (
-                    id, user_id, provider, pack_id, variant_id, credits, amount_cents, currency,
+                    id, user_id, provider, pack_id, variant_id, credits, amount_cents, currency, purpose,
                     status, checkout_id, checkout_url, provider_order_id, provider_order_number,
                     test_mode, meta_json, created_at, updated_at, paid_at
-                ) VALUES (?, ?, 'xorpay', ?, ?, ?, ?, ?, 'pending', '', ?, '', '', ?, ?, ?, ?, NULL)
+                ) VALUES (?, ?, 'xorpay', ?, ?, ?, ?, ?, ?, 'pending', '', ?, '', '', ?, ?, ?, ?, NULL)
                 """,
                 (
                     order_id,
@@ -426,6 +428,7 @@ def create_checkout_order(
                     int(package["credits"]),
                     price_cents,
                     str(cfg["currency"]),
+                    str(package.get("purpose") or "points"),
                     cashier_url,
                     1 if test_mode else 0,
                     json.dumps(
@@ -527,10 +530,10 @@ def create_checkout_order(
         tx.execute(
             """
             INSERT INTO payment_orders (
-                id, user_id, provider, pack_id, variant_id, credits, amount_cents, currency,
+                id, user_id, provider, pack_id, variant_id, credits, amount_cents, currency, purpose,
                 status, checkout_id, checkout_url, provider_order_id, provider_order_number,
                 test_mode, meta_json, created_at, updated_at, paid_at
-            ) VALUES (?, ?, 'creem', ?, ?, ?, ?, ?, 'pending', '', '', '', '', ?, ?, ?, ?, NULL)
+            ) VALUES (?, ?, 'creem', ?, ?, ?, ?, ?, ?, 'pending', '', '', '', '', ?, ?, ?, ?, NULL)
             """,
             (
                 order_id,
@@ -540,6 +543,7 @@ def create_checkout_order(
                 int(package["credits"]),
                 int(package["price_cents"]),
                 str(cfg["currency"]),
+                    str(package.get("purpose") or "points"),
                 1 if test_mode else 0,
                 json.dumps({"packTitle": package["title"], "redirectBase": creem_origin}, ensure_ascii=False),
                 now,
@@ -660,6 +664,10 @@ def _settle_paid_order_tx(
     provider: str = "xorpay",
     meta_patch: dict[str, Any] | None = None,
 ) -> tuple[dict[str, Any], int, bool]:
+    owner=tx.execute("SELECT user_id FROM payment_orders WHERE id=?",(order_id,)).fetchone()
+    if owner:
+        from .economy import lock_user
+        lock_user(tx,owner[0])
     query = "SELECT * FROM payment_orders WHERE id = ?"
     query += " FOR UPDATE"
     order = tx.execute(query, (order_id,)).fetchone()
@@ -687,27 +695,36 @@ def _settle_paid_order_tx(
     if cur_status == "refunded":
         raise ServiceError("该订单已退款，无法再次入账", status=409, code="order_already_refunded")
 
-    if cur_status == "paid":
+    if cur_status in ("paid","partially_refunded"):
         existing_poid = str(order["provider_order_id"] or "").strip()
         if existing_poid and existing_poid != clean_provider_order_id:
             raise ServiceError("该订单已由其他支付单完成入账", status=409, code="order_conflict")
         bal_row = tx.execute("SELECT balance FROM wallets WHERE user_id = ?", (uid,)).fetchone()
         bal = int(bal_row["balance"]) if bal_row else 0
+        if order.get("purpose")=="cash":
+            from .economy import cash
+            bal=cash(tx,uid)["balanceCents"]
         return _serialize_order(order), bal, False
 
     credits = int(order["credits"])
     now = utc_now_iso()
     event_prefix = clean_provider
-    new_bal, applied = apply_wallet_delta(
-        tx,
-        uid,
-        credits,
-        "recharge",
-        f"在线充值积分到账 (+{credits} 积分)",
-        event_key=f"{event_prefix}_order_{clean_provider_order_id}",
-        ref_type="payment_order",
-        ref_id=order_id,
-    )
+    if order.get("purpose")=="cash":
+        from .economy import cash_delta
+        state,applied=cash_delta(tx,uid,int(order["amount_cents"]),0,"recharge",f"payment:{order_id}",ref=order_id)
+        tx.execute("INSERT INTO cash_lots(order_id,user_id,remaining_cents) VALUES(?,?,?) ON CONFLICT DO NOTHING",(order_id,uid,order["amount_cents"]))
+        new_bal=state["balanceCents"]
+    else:
+        new_bal, applied = apply_wallet_delta(
+            tx,
+            uid,
+            credits,
+            "recharge",
+            f"在线充值积分到账 (+{credits} 积分)",
+            event_key=f"{event_prefix}_order_{clean_provider_order_id}",
+            ref_type="payment_order",
+            ref_id=order_id,
+        )
     new_meta = _merge_meta_json(order["meta_json"], meta_patch or {})
     tx.execute(
         """
@@ -743,6 +760,10 @@ def _refund_order_tx(
     meta_patch: dict[str, Any] | None = None,
 ) -> tuple[dict[str, Any] | None, int | None, bool]:
     clean_poid = str(provider_order_id or "").strip()
+    candidate=tx.execute("SELECT user_id FROM payment_orders WHERE (provider=? AND provider_order_id=? AND provider_order_id<>'') OR id=? LIMIT 1",(provider,clean_poid,order_id_hint)).fetchone()
+    if candidate:
+        from .economy import lock_user
+        lock_user(tx,candidate[0])
     query = "SELECT * FROM payment_orders WHERE provider = ? AND provider_order_id = ?"
     params: tuple[Any, ...] = (provider, clean_poid)
     query += " FOR UPDATE"
@@ -754,10 +775,9 @@ def _refund_order_tx(
     if not order:
         return None, None, False
 
-    uid = int(order["user_id"])
     oid = str(order["id"])
     effective_poid = clean_poid or str(order["provider_order_id"] or "").strip()
-    was_paid = str(order["status"] or "") == "paid"
+    was_paid = str(order["status"] or "") in ("paid","partially_refunded")
     now = utc_now_iso()
     new_meta = _merge_meta_json(order["meta_json"], meta_patch or {})
 
@@ -768,27 +788,8 @@ def _refund_order_tx(
     applied = False
     new_bal: int | None = None
     if was_paid and effective_poid:
-        credits = int(order["credits"])
-        event_prefix = provider
-        new_bal, applied = apply_wallet_delta(
-            tx,
-            uid,
-            -credits,
-            "recharge_refund",
-            f"充值订单退款扣回 (-{credits} 积分)",
-            event_key=f"{event_prefix}_refund_{effective_poid}",
-            ref_type="payment_order",
-            ref_id=oid,
-            allow_negative=True,
-        )
-        if applied:
-            tx.execute(
-                """
-                INSERT INTO notifications(user_id, kind, title, target_type, target_id, created_at)
-                VALUES(?, ?, ?, ?, ?, ?)
-                """,
-                (uid, "wallet", f"充值订单已退款，扣回 {credits}✦ 积分", "wallet", oid, now),
-            )
+        from .billing_refunds import apply_provider_refund
+        new_bal,applied=apply_provider_refund(tx,order,effective_poid)
     refreshed = tx.execute("SELECT * FROM payment_orders WHERE id = ?", (oid,)).fetchone()
     return _serialize_order(refreshed), new_bal, applied
 
@@ -925,7 +926,7 @@ def process_xorpay_webhook(
             "event": "pay",
             "applied": applied,
             "order": settled_order,
-            "credits": new_bal,
+            **({"balanceCents":new_bal} if settled_order and settled_order.get("purpose")=="cash" else {"credits":new_bal}),
             "response_body": "ok",
         }
 
@@ -1092,7 +1093,7 @@ def process_creem_webhook(
                 "event": event_type,
                 "applied": applied,
                 "order": settled_order,
-                "credits": new_bal,
+                **({"balanceCents":new_bal} if settled_order and settled_order.get("purpose")=="cash" else {"credits":new_bal}),
             }
 
         if event_type == "refund.created":
@@ -1130,7 +1131,7 @@ def process_creem_webhook(
                 "event": event_type,
                 "applied": applied,
                 "order": refunded_order,
-                "credits": new_bal,
+                **({"balanceCents":new_bal} if refunded_order and refunded_order.get("purpose")=="cash" else {"credits":new_bal}),
             }
 
         tx.execute(
@@ -1226,7 +1227,7 @@ def sync_payment_order_from_provider(
             return {
                 "ok": True,
                 "order": settled_order,
-                "credits": new_bal,
+                **({"balanceCents":new_bal} if settled_order and settled_order.get("purpose")=="cash" else {"credits":new_bal}),
                 "applied": applied,
             }
 
@@ -1332,6 +1333,6 @@ def sync_payment_order_from_provider(
     return {
         "ok": True,
         "order": settled_order,
-        "credits": new_bal,
+        **({"balanceCents":new_bal} if settled_order and settled_order.get("purpose")=="cash" else {"credits":new_bal}),
         "applied": applied,
     }

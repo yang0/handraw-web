@@ -28,7 +28,7 @@ class CreemBillingTests(unittest.TestCase):
         self.cfg_payload = {
             "provider": "creem",
             "test_mode": True,
-            "currency": "USD",
+            "currency": "CNY",
             "api_key": self.api_key,
             "webhook_secret": self.webhook_secret,
             "packages": [
@@ -37,8 +37,8 @@ class CreemBillingTests(unittest.TestCase):
                     "title": "50 积分尝鲜包",
                     "description": "50 credits",
                     "credits": 50,
-                    "price_cents": 100,
-                    "price_display": "$1",
+                    "price_cents": 500,
+                    "price_display": "¥5",
                     "product_id": "prod_test_50_pack",
                 },
                 {
@@ -46,8 +46,8 @@ class CreemBillingTests(unittest.TestCase):
                     "title": "100 积分标准包",
                     "description": "100 credits",
                     "credits": 100,
-                    "price_cents": 199,
-                    "price_display": "$1.99",
+                    "price_cents": 1000,
+                    "price_display": "¥10",
                     "badge": "推荐",
                     "product_id": "prod_test_100_pack",
                 },
@@ -121,7 +121,7 @@ class CreemBillingTests(unittest.TestCase):
         cfg = load_payment_config()
         self.assertTrue(cfg["enabled"])
         self.assertEqual(cfg["provider"], "creem")
-        self.assertEqual(cfg["currency"], "USD")
+        self.assertEqual(cfg["currency"], "CNY")
         pub = get_public_billing_summary(cfg)
         self.assertTrue(pub["enabled"])
         self.assertEqual(pub["provider"], "creem")
@@ -169,8 +169,8 @@ class CreemBillingTests(unittest.TestCase):
         self.assertEqual(st, 200)
         self.assertEqual(res["order"]["packId"], "pack_100")
         self.assertEqual(res["order"]["credits"], 100)
-        self.assertEqual(res["order"]["amountCents"], 199)
-        self.assertEqual(res["order"]["currency"], "USD")
+        self.assertEqual(res["order"]["amountCents"], 1000)
+        self.assertEqual(res["order"]["currency"], "CNY")
         self.assertEqual(res["order"]["status"], "pending")
         self.assertEqual(res["order"]["checkoutId"], "ch_creem_1234")
         self.assertEqual(res["checkoutUrl"], "https://checkout.creem.io/test/payment/ch_creem_1234")
@@ -197,14 +197,14 @@ class CreemBillingTests(unittest.TestCase):
                 "request_id": order_id,
                 "status": "completed",
                 "mode": "test",
-                "product": {"id": "prod_test_100_pack", "currency": "USD", "price": 199},
+                "product": {"id": "prod_test_100_pack", "currency": "CNY", "price": 1000},
                 "order": {
                     "id": "ord_creem_9988",
                     "object": "order",
                     "product": "prod_test_100_pack",
-                    "amount": 199,
-                    "amount_paid": 199,
-                    "currency": "USD",
+                    "amount": 1000,
+                    "amount_paid": 1000,
+                    "currency": "CNY",
                     "status": "paid",
                     "transaction": "tran_creem_5566",
                     "mode": "test",
@@ -235,7 +235,7 @@ class CreemBillingTests(unittest.TestCase):
         self.assertEqual(st_ok, 200)
         self.assertTrue(ok_res["applied"])
         self.assertEqual(ok_res["order"]["status"], "paid")
-        self.assertEqual(ok_res["credits"], 120)
+        self.assertEqual(ok_res["credits"], 100)
 
         # Duplicate delivery stays idempotent
         st_dup, dup_res = self._req(
@@ -265,8 +265,8 @@ class CreemBillingTests(unittest.TestCase):
                 "id": "ref_creem_1",
                 "object": "refund",
                 "status": "succeeded",
-                "refund_amount": 199,
-                "refund_currency": "USD",
+                "refund_amount": 1000,
+                "refund_currency": "CNY",
                 "reason": "requested_by_customer",
                 "mode": "test",
                 "transaction": {"id": "tran_creem_5566", "order": "ord_creem_9988", "status": "refunded"},
@@ -289,7 +289,7 @@ class CreemBillingTests(unittest.TestCase):
         self.assertEqual(st_ref, 200)
         self.assertTrue(ref_res["applied"])
         self.assertEqual(ref_res["order"]["status"], "refunded")
-        self.assertEqual(ref_res["credits"], 20)
+        self.assertEqual(ref_res["credits"], 0)
 
     def test_checkout_gateway_failure_marks_order_failed(self) -> None:
         from backend.services import ServiceError
@@ -388,7 +388,7 @@ class CreemBillingTests(unittest.TestCase):
                 "order": {
                     "id": "ord_creem_777",
                     "status": "paid",
-                    "currency": "USD",
+                    "currency": "CNY",
                     "amount": 50,
                     "amount_paid": 50,
                     "product": "prod_test_50_pack",
@@ -413,9 +413,9 @@ class CreemBillingTests(unittest.TestCase):
                 "order": {
                     "id": "ord_creem_777",
                     "status": "paid",
-                    "currency": "USD",
-                    "amount": 100,
-                    "amount_paid": 100,
+                    "currency": "CNY",
+                    "amount": 500,
+                    "amount_paid": 500,
                     "transaction": "tran_creem_777",
                     "product": "prod_test_50_pack",
                 },
@@ -428,7 +428,7 @@ class CreemBillingTests(unittest.TestCase):
             )
             self.assertEqual(st_sync, 200)
             self.assertTrue(sync_res["applied"])
-            self.assertEqual(sync_res["credits"], 70)
+            self.assertEqual(sync_res["credits"], 50)
             self.assertEqual(sync_res["order"]["status"], "paid")
 
             # Duplicate claim of ord_creem_777 against ord_b fails 409
@@ -441,9 +441,9 @@ class CreemBillingTests(unittest.TestCase):
                 "order": {
                     "id": "ord_creem_777",
                     "status": "paid",
-                    "currency": "USD",
-                    "amount": 100,
-                    "amount_paid": 100,
+                    "currency": "CNY",
+                    "amount": 500,
+                    "amount_paid": 500,
                     "product": "prod_test_50_pack",
                 },
             }

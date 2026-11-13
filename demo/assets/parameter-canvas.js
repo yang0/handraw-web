@@ -1,7 +1,7 @@
 /* Independent parameter documents and durable generation batches. */
 (function (global) {
   "use strict";
-  const labels={prompt:"主题",style1:"画风方案",style2:"副画风",layout:"图型",ratio:"比例",refImages:"参考图组",colors:"配色",tones:"影调",moods:"氛围",whitespace:"留白",mode:"创作模式"};
+  const labels={prompt:"主题",style1:"画风方案",style2:"副画风",layout:"图型",ratio:"比例",refImages:"参考图组",colors:"配色",tones:"影调",moods:"氛围",whitespace:"留白",mode:"创作模式",specId:"图片规格"};
   const ratios=["1:1","3:4","4:3","9:16","16:9","2.35:1","3:2","2:3"];
   const uid=prefix=>prefix+"_"+(global.crypto?.randomUUID?.().replace(/-/g,"") || Date.now().toString(36)+Math.random().toString(36).slice(2));
   const clone=value=>JSON.parse(JSON.stringify(value));
@@ -91,6 +91,7 @@
     if (["refImages", "colors", "tones", "moods"].includes(field)) return [];
     if (field === "ratio") return "3:4";
     if (field === "mode") return "graphic-text";
+    if (field === "specId") return "standard-1k";
     return "";
   }
   function parameterField(node, field) {
@@ -223,9 +224,14 @@
     }
     return node;
   }
-  function selectedQuote(preview,count) {
-    const q=preview.quote,free=Math.min(count,q.freeRemaining),total=(count-free)*q.unitPrice;
-    return {count,freeUsed:free,paidCount:count-free,total,affordable:total<=q.balance};
+  function selectedQuote(preview,selection) {
+    const chosen=selection instanceof Set?[...selection]:preview.items.slice(0,selection).map(x=>x.ordinal);
+    const remaining={...preview.quote.freeByResolution};let totalCents=0,freeCount=0;
+    for(const ordinal of chosen.sort((a,b)=>a-b)) {
+      const line=preview.quote.items[ordinal],r=line.spec.resolution;
+      if((remaining[r]||0)>0) {remaining[r]--;freeCount++;} else totalCents+=line.spec.priceCents||0;
+    }
+    return {count:chosen.length,freeCount,totalCents,affordable:totalCents<=preview.quote.balanceCents};
   }
 
   // Bounded examples use the same field and edge order as the saved plan.
@@ -508,10 +514,13 @@
     async submit() {
       if(!this.submission) {
         if(!this.preview || !this.selected.size) throw new Error("请先预览并选择需要生成的组合");
-        const quote=selectedQuote(this.preview,this.selected.size);
-        if(!quote.affordable) throw new Error("积分余额不足，请减少生成张数");
+        const quote=selectedQuote(this.preview,this.selected);
+        if(!quote.affordable) throw new Error("生图余额不足，请先充值");
+        const ordinals=[...this.selected].sort((a,b)=>a-b);
+        const accepted=await this.options.api('/api/studio/quote',{method:'POST',body:{items:ordinals.map(i=>this.preview.items[i].spec)}});
+        if(accepted.totalCents!==quote.totalCents) throw new Error("费用已变化，请重新预览并确认");
         this.submission={canvasId:this.doc.id,body:{requestId:this.submitKey,planHash:this.preview.planHash,
-          ordinals:[...this.selected].sort((a,b)=>a-b),maxCredits:quote.total}};
+          ordinals,quoteId:accepted.quoteId,maxAmountCents:accepted.totalCents}};
       }
       this.persist();
       this.notify();
@@ -587,8 +596,11 @@
     }
     async retry() {
       const run=this.run;if(!run) return;
-      if(!this.retryPayload) this.retryPayload={requestId:uid("canvas_retry"),unitPrice:run.retryQuote.unitPrice,
-        maxCredits:Math.max(run.maxCredits,run.spentCredits+run.retryQuote.total)};
+      if(!this.retryPayload) {
+        const accepted=await this.options.api('/api/studio/quote',{method:'POST',body:{items:run.items.filter(x=>['failed','cancelled'].includes(x.status)).map(x=>x.spec)}});
+        if(accepted.totalCents!==run.retryQuote.totalCents) throw new Error("重试费用已变化，请刷新后重新确认");
+        this.retryPayload={requestId:uid("canvas_retry"),quoteId:accepted.quoteId,maxAmountCents:accepted.totalCents};
+      }
       await this.options.api(`/api/studio/canvas-runs/${encodeURIComponent(run.id)}/retry`,{method:"POST",body:this.retryPayload});
       this.retryPayload=null;await this.refreshRun();
     }
@@ -702,6 +714,7 @@
     if(field==="refImages") return `<button type="button" ${base} data-action="refs">选择一组参考图（${value.length}/6）</button><div class="pc-references">${value.map(url=>`<img src="${esc(url)}" alt="已选参考图" loading="lazy">`).join("")}</div>`;
     if(field==="prompt") return `<textarea aria-label="主题候选 ${index+1}" placeholder="描述想画的内容，例如雨后森林中的小屋" ${base}>${esc(value)}</textarea>`;
     if(field==="ratio") return `<select aria-label="比例候选 ${index+1}" ${base}>${ratios.map(r=>`<option ${r===value?"selected":""}>${r}</option>`).join("")}</select>`;
+    if(field==="specId") return `<select aria-label="图片规格候选 ${index+1}" ${base}>${(options.specifications?.()||[]).filter(s=>s.enabled&&s.verified).map(s=>`<option value="${esc(s.id)}" ${s.id===value?'selected':''}>${esc(s.name)} · ${s.priceCents==null?'尚未配置收费价格':window.HandrawEconomy.yuan(s.priceCents)+'/张'}</option>`).join('')}</select>`;
     if(field==="mode") return `<div class="pc-option-pills" role="group" aria-label="创作模式候选 ${index+1}">${creationModes.map(item=>`<button type="button" data-action="choose-single" ${base} data-option="${item.value}" aria-pressed="${value===item.value}">${item.label}</button>`).join("")}</div>`;
     if(field==="style1") return resourceValue(node,value,index,"style1")+resourceValue(node,value,index,"style2");
     if(field==="layout") return resourceValue(node,value,index,"layout");
@@ -1087,7 +1100,7 @@
   function batchControls(run) {
     return `<div class="pc-run-actions"><button type="button" data-action="refresh">刷新</button>
       ${run.items.some(item => item.status === "pending") ? '<button type="button" data-action="stop">停止未提交任务</button>' : ""}
-      ${run.items.some(item => ["failed","cancelled"].includes(item.status)) ? `<button type="button" data-action="retry">重试未成功项（预计 ${run.retryQuote.total} 积分）</button>` : ""}</div>`;
+      ${run.items.some(item => ["failed","cancelled"].includes(item.status)) ? `<button type="button" data-action="retry">重试未成功项（预计 ${window.HandrawEconomy.yuan(run.retryQuote.totalCents)}）</button>` : ""}</div>`;
   }
 
   function previewHtml() {
@@ -1095,13 +1108,13 @@
     if (current.submission) return '<p role="status">上一批提交状态待确认。</p><button type="button" class="pc-primary" data-action="submit">确认提交状态</button>';
     const preview = current.preview;
     if (!preview) return `<p role="status">${current.expanding?"正在重新核对出图内容与费用…":"参数已更新，请重新预览出图内容与费用。"}</p><button type="button" data-action="recheck-preview" ${current.expanding?"disabled":""}>重新预览</button>`;
-    const q = selectedQuote(preview, current.selected.size);
-    return `<p>已选 ${q.count} / ${preview.count} 张 · 免费 ${q.freeUsed} 张 · 预计 ${q.total} 积分</p>
+    const q = selectedQuote(preview, current.selected);
+    return `<p>已选 ${q.count} / ${preview.count} 张 · 免费 ${q.freeCount} 张 · 预计 ${window.HandrawEconomy.yuan(q.totalCents)}</p>
       ${current.confirmation === "submit"
-        ? `<div class="pc-confirm" role="group" aria-label="确认本次生成"><strong>确认生成 ${q.count} 张？</strong><p>积分上限 ${q.total}。关闭页面后仍会继续生成。</p><div><button type="button" data-action="cancel-confirm">返回检查</button><button type="button" class="pc-primary" data-action="confirm-submit">确认并开始生成</button></div></div>`
+        ? `<div class="pc-confirm" role="group" aria-label="确认本次生成"><strong>确认生成 ${q.count} 张？</strong><p>人民币费用上限 ${window.HandrawEconomy.yuan(q.totalCents)}。关闭页面后仍会继续生成。</p><div><button type="button" data-action="cancel-confirm">返回检查</button><button type="button" class="pc-primary" data-action="confirm-submit">确认并开始生成</button></div></div>`
         : `<button type="button" class="pc-primary" data-action="submit" ${!q.count || !q.affordable ? "disabled" : ""}>生成选中的 ${q.count} 张</button>`}
       <button type="button" data-action="recheck-preview" ${current.expanding ? "disabled" : ""}>重新核对费用</button>
-      ${!q.affordable ? '<p class="pc-next-action">积分不足，请减少勾选数量。</p>' : ""}
+      ${!q.affordable ? '<p class="pc-next-action">生图余额不足，请先充值或减少勾选数量。</p>' : ""}
       <div class="pc-plan-list">${preview.items.map(item => `<label><input type="checkbox" data-select="${item.ordinal}" ${current.selected.has(item.ordinal) ? "checked" : ""}><span><b>${item.ordinal + 1}.</b> ${esc(String(item.spec?.prompt || "").slice(0,100))}<small>${esc([creationModes.find(mode=>mode.value===item.spec?.mode)?.label,item.spec?.style1,item.spec?.style2,item.spec?.layout,item.spec?.ratio].filter(Boolean).join(" · "))}</small></span></label>`).join("")}</div>`;
   }
 
@@ -1110,7 +1123,7 @@
     return `${entries || '<p class="pc-muted">此画布暂无出图记录。</p>'}
       ${current.recentCursor ? `<button type="button" data-action="more-runs" ${current.recentLoading ? "disabled" : ""}>${current.recentLoading ? "正在载入…" : "加载更早的批次"}</button>` : ""}
       ${current.runId && !run ? '<p role="status">正在载入批次…</p>' : ""}
-      ${run ? `<p>完成 ${completedCount(run.items)} / ${run.count} 张 · 已用 ${run.spentCredits} 积分</p>${batchControls(run)}
+      ${run ? `<p>完成 ${completedCount(run.items)} / ${run.count} 张 · 已用 ${window.HandrawEconomy.yuan(run.spentAmountCents)}</p>${batchControls(run)}
         ${orphaned.length ? '<button type="button" data-action="show-detached-output">查看未关联到节点的结果</button>' : ""}
         ${run.items.length > orphaned.length ? '<button type="button" data-action="focus-run-output">定位出图节点</button>' : ""}` : ""}`;
   }
@@ -1428,7 +1441,7 @@
       if(action==="recheck-preview") {return void busy(()=>current.expand());}
       if(action==="refresh") return void busy(()=>current.refreshRun());
       if(action==="stop") return void busy(()=>current.stopPending());
-      if(action==="retry") {if(global.confirm(`重试未成功项，额外预计 ${current.run.retryQuote.total} 积分；已成功项不重复生成。是否继续？`)) busy(()=>current.retry());return;}
+      if(action==="retry") {if(global.confirm(`重试未成功项，额外预计 ${window.HandrawEconomy.yuan(current.run.retryQuote.totalCents)}；已成功项不重复生成。是否继续？`)) busy(()=>current.retry());return;}
       if(action==="submit" && !current.submitting && current.submission) {submitFromPreview();return;}
       if(action==="submit") {current.confirmation="submit";renderPanels();root.querySelector('[data-action="confirm-submit"]')?.focus();return;}
       if(action==="cancel-confirm") {current.confirmation=null;renderPanels();root.querySelector('[data-action="submit"]')?.focus();return;}

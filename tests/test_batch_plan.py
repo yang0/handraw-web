@@ -5,7 +5,7 @@ Covers:
 2. Fixed mode layout consistency: all returned items have layout == fixedLayout; invalid fixedLayout returns 400.
 3. AI layout sanitation: invalid layout codes returned by model are discarded (fallback to fixedLayout or empty).
 4. Deterministic template fallback: returns source: "template" and exact count items when AI model is unconfigured/fails.
-5. Rate limiting: 50 requests/day per user returns 429.
+5. Free planning retains burst protection without a daily quota.
 """
 from __future__ import annotations
 
@@ -311,33 +311,15 @@ class BatchPlanRoutesTests(unittest.TestCase):
         self.assertIn("响应超时", res["error"])
         self.assertIn("stage=upstream reason=timeout", "\n".join(logs.output))
 
-    def test_05_daily_quota_limit(self) -> None:
-        """5. Daily quota limit 50 requests/day per user triggers 429."""
-        from backend.db import local_today_str
-        # Exhaust 50 requests via direct DB manipulation
-        with self.db.transaction() as tx:
-            tx.execute(
-                """
-                INSERT INTO daily_usage (user_id, scope, usage_date, count)
-                VALUES (?, 'batch_plan', ?, 50)
-                ON CONFLICT(user_id, scope, usage_date) DO UPDATE SET count = 50
-                """,
-                (self.user["id"], local_today_str()),
-            )
-
-        st, res = self._req(
-            "POST",
-            "/api/studio/batch-plan",
-            {
-                "seed": "都市慢生活",
-                "count": 6,
-                "layoutMode": "fixed",
-                "fixedLayout": "SC-021",
-            },
-            cookie=self.cookie,
-        )
-        self.assertEqual(st, 429)
-        self.assertEqual(res.get("code"), "rate_limited")
+    def test_05_free_planning_keeps_burst_protection(self):
+        payload={"seed":"都市慢生活","count":6,"layoutMode":"fixed","fixedLayout":"SC-021"}
+        with patch("backend.runtime_policy.check_auth_rate_limit",return_value=False):
+            status,res=self._req("POST","/api/studio/batch-plan",payload,cookie=self.cookie)
+        self.assertEqual(status,429)
+        self.assertEqual(res["code"],"rate_limited")
+        with patch("backend.runtime_policy.check_auth_rate_limit",return_value=True):
+            status,res=self._req("POST","/api/studio/batch-plan",payload,cookie=self.cookie)
+        self.assertEqual(status,200)
 
 
 if __name__ == "__main__":

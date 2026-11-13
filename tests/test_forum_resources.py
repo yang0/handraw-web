@@ -72,7 +72,7 @@ class ForumResourceTests(unittest.TestCase):
             # Issue #21: 免费画风/图型未收录前，所有人均可查看定义
             self.assertIn('秘密定义', detail['resource']['definition'])
         # Paid pending items must NOT expose definition to unlogged visitors
-        _, paid_subs = self.batch(price=5)
+        _, paid_subs = self.batch(price=10)
         for kind in ('style', 'layout'):
             p_detail = R.resource_detail(self.db, None, kind, paid_subs[kind]['targetId'])
             self.assertNotIn('秘密', json.dumps(p_detail, ensure_ascii=False))
@@ -87,7 +87,9 @@ class ForumResourceTests(unittest.TestCase):
         self.assertEqual(self.db.get_conn().execute('SELECT COUNT(*) FROM asset_comments').fetchone()[0],0)
 
     def test_paid_permissions_and_blackbox_never_leak(self):
-        _,subs=self.batch(5);self.approve_all()
+        with self.db.transaction() as tx:
+            S.apply_wallet_delta(tx,self.users['outsider']['id'],30,'admin_adjust','Fixture resource unlock budget')
+        _,subs=self.batch(10);self.approve_all()
         # Catalog assets (style, layout) require unlock
         for kind in ('style','layout'):
             sub=subs[kind]

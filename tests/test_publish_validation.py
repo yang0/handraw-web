@@ -73,12 +73,12 @@ class PublishValidationTests(unittest.TestCase):
         result = self._publish(styles=["FA-013", "FB-001"])
         self.assertEqual(result["status"], "published")
 
-    def test_pioneer_flag_is_set_on_first_share_of_an_unclaimed_style(self):
+    def test_publish_does_not_book_a_removed_pioneer_points_reward(self):
         result = self._publish()
         row = self.db.get_conn().execute(
             "SELECT pioneer_rewarded FROM works WHERE id = ?", (result["workId"],)
         ).fetchone()
-        self.assertEqual(int(row["pioneer_rewarded"]), 1)
+        self.assertEqual(int(row["pioneer_rewarded"]), 0)
 
 
 class VisibilitySyncTests(unittest.TestCase):

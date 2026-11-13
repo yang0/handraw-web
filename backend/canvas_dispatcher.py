@@ -105,6 +105,8 @@ class CanvasDispatcher:
                     (item["run_id"],),
                 ).fetchone()
                 if failed_code:
+                    from .economy import release_item
+                    release_item(tx,item["id"])
                     tx.execute(
                         "UPDATE generation_items SET status='failed',error_code=?,updated_at=? "
                         "WHERE id=? AND status='pending' AND dispatch_token=?",

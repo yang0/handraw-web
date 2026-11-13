@@ -36,6 +36,8 @@ from backend import resource_registry
 from backend import services as S
 from backend.services import ServiceError
 
+from tests.economy_support import prepare_cloud_generation
+
 
 class TestDefinitionVisibility(TestCase):
     def setUp(self) -> None:
@@ -411,7 +413,7 @@ class TestDefinitionVisibility(TestCase):
         # Unlock asset for buyer
         S.unlock_paid_item(self.db, self.buyer, "asset", self.paid_pub_code)
 
-        gen_res = S.prepare_cloud_generation(
+        gen_res = prepare_cloud_generation(
             self.db,
             self.buyer,
             {"prompt": "画一只小猫", "style1": self.paid_pub_code, "promptFromSkill": True},
