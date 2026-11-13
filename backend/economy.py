@@ -47,7 +47,7 @@ def cash_delta(
         return cash(tx, uid), False
     balance = account["balance_cents"] + delta
     frozen = account["held_cents"] + held
-    if frozen < 0 or balance < 0 and not debt:
+    if frozen < 0 or delta < 0 and balance < 0 and not debt:
         raise error("生图余额不足，请先充值", "insufficient_cash")
     tx.execute(
         "UPDATE cash_accounts SET balance_cents=?,held_cents=?,updated_at=now() WHERE user_id=?",
@@ -86,20 +86,28 @@ def quota(tx, uid, resolution="1k"):
     # Expiring gifts are spent first, then the perpetual basic allowance.
     gifts = []
     for row in tx.execute(
-        "SELECT id,units FROM generation_quota_grants WHERE user_id=? AND resolution=? AND revoked_at IS NULL AND (expires_at IS NULL OR expires_at>now()) ORDER BY expires_at NULLS LAST,created_at,id",
+        "SELECT id,units,revoked_at IS NULL AND (expires_at IS NULL OR expires_at>now()) active FROM generation_quota_grants WHERE user_id=? AND resolution=? ORDER BY expires_at NULLS LAST,created_at,id",
         (uid, resolution),
     ).fetchall():
         used, held = counts.get(row["id"], (0, 0))
+        total = row["units"] if row["active"] else used + held
         gifts.append(
             {
                 "id": row["id"],
-                "total": row["units"],
+                "total": total,
                 "used": used,
                 "held": held,
-                "remaining": max(0, row["units"] - used - held),
+                "remaining": max(0, total - used - held),
             }
         )
     sources = gifts + sources
+    # Lowering the base authorization never cancels accepted tasks. Their usage
+    # still participates in the total-authorized minus used/held formula.
+    deficit = sum(max(0, s["used"] + s["held"] - s["total"]) for s in sources)
+    for source in reversed(sources):
+        withheld = min(source["remaining"], deficit)
+        source["remaining"] -= withheld
+        deficit -= withheld
     return {
         "resolution": resolution,
         "baseUnits": base,
@@ -451,13 +459,17 @@ def reconcile(tx):
     point_rows = tx.execute(
         "SELECT w.user_id,w.balance,COALESCE(l.units,0) ledger_balance FROM wallets w LEFT JOIN (SELECT user_id,sum(delta) units FROM ledgers GROUP BY user_id) l ON l.user_id=w.user_id WHERE w.balance<>COALESCE(l.units,0)"
     ).fetchall()
+    point_sources = tx.execute(
+        "SELECT w.user_id,w.balance,COALESCE(l.units,0) source_units FROM wallets w LEFT JOIN (SELECT user_id,sum(remaining_units) units FROM point_lots GROUP BY user_id) l ON l.user_id=w.user_id WHERE GREATEST(w.balance,0)<>COALESCE(l.units,0)"
+    ).fetchall()
     held_rows = tx.execute(
         "WITH charge AS (SELECT user_id,sum(amount_cents) units FROM generation_charges WHERE status='reserved' GROUP BY user_id), refund AS (SELECT r.user_id,sum(r.amount_cents) units FROM billing_refund_requests r JOIN payment_orders o ON o.id=r.order_id WHERE o.purpose='cash' AND r.status IN ('pending','processing','unknown') GROUP BY r.user_id) SELECT a.user_id,a.held_cents,COALESCE(c.units,0)+COALESCE(r.units,0) expected FROM cash_accounts a LEFT JOIN charge c ON c.user_id=a.user_id LEFT JOIN refund r ON r.user_id=a.user_id WHERE a.held_cents<>COALESCE(c.units,0)+COALESCE(r.units,0)"
     ).fetchall()
     return {
-        "ok": not (cash_rows or point_rows or held_rows),
+        "ok": not (cash_rows or point_rows or point_sources or held_rows),
         "cashMismatches": [dict(r) for r in cash_rows],
         "pointsMismatches": [dict(r) for r in point_rows],
+        "pointSourceMismatches": [dict(r) for r in point_sources],
         "holdMismatches": [dict(r) for r in held_rows],
     }
 

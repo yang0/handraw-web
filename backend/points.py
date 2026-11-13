@@ -8,6 +8,10 @@ from .economy import error
 def track_delta(tx, uid, ledger_id, delta, kind, ref_type, ref_id):
     """Called under the locked points wallet, in the same transaction as its ledger."""
     if delta > 0:
+        balance = tx.execute(
+            "SELECT balance FROM wallets WHERE user_id=?", (uid,)
+        ).fetchone()[0]
+        available = max(0, balance) - max(0, balance - delta)
         # Refund restores consumed lots rather than turning gifts into bought points.
         if kind in ("unlock_refund", "refund") and ref_type in ("asset", "topic"):
             original = tx.execute(
@@ -24,14 +28,10 @@ def track_delta(tx, uid, ledger_id, delta, kind, ref_type, ref_id):
                     (original[0],),
                 ).fetchone()
                 if has_allocations or not historical:
-                    restore(tx, original[0], delta)
+                    restore(tx, original[0], delta, available=available)
                     return
                 # Pre-launch legacy points were not real cash purchases. Their
                 # historic unlock refunds restore earned points, never principal.
-        balance = tx.execute(
-            "SELECT balance FROM wallets WHERE user_id=?", (uid,)
-        ).fetchone()[0]
-        available = max(0, balance) - max(0, balance - delta)
         tx.execute(
             "INSERT INTO point_lots(user_id,source_key,source_kind,payment_order_id,original_units,remaining_units) VALUES(?,?,?,?,?,?) ON CONFLICT DO NOTHING",
             (
@@ -87,17 +87,20 @@ def track_delta(tx, uid, ledger_id, delta, kind, ref_type, ref_id):
         # earnings repay it before there is any spendable balance.
 
 
-def restore(tx, ledger_id, amount):
+def restore(tx, ledger_id, amount, *, available):
     remaining = amount
+    debt_repayment = amount - available
     for row in tx.execute(
         "SELECT * FROM point_allocations WHERE ledger_id=? ORDER BY lot_id FOR UPDATE",
         (ledger_id,),
     ).fetchall():
         units = min(remaining, row["units"] - row["restored_units"])
         if units:
+            repaid = min(units, debt_repayment)
+            debt_repayment -= repaid
             tx.execute(
                 "UPDATE point_lots SET remaining_units=remaining_units+? WHERE id=?",
-                (units, row["lot_id"]),
+                (units - repaid, row["lot_id"]),
             )
             tx.execute(
                 "UPDATE point_allocations SET restored_units=restored_units+? WHERE ledger_id=? AND lot_id=?",

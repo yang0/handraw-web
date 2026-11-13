@@ -220,7 +220,7 @@ class EconomyTests(unittest.TestCase):
         }
         economy.admin_action(self.db, self.user, body)
         economy.admin_action(self.db, self.user, body)
-        self.assertEqual(economy.quota(self.db.get_conn(), self.uid)["remaining"], 2)
+        self.assertEqual(economy.quota(self.db.get_conn(), self.uid)["remaining"], 1)
         gift = (
             self.db.get_conn()
             .execute("SELECT id FROM generation_quota_grants")
@@ -242,6 +242,73 @@ class EconomyTests(unittest.TestCase):
                 self.user,
                 {"action": "base", "units": 1, "confirmation": p["confirmation"]},
             )
+
+    def test_base_total_adjustments_follow_authorization_formula(self):
+        q = self.quote(6)
+        with self.db.transaction() as tx:
+            economy.reserve_quote(tx, self.uid, q["quoteId"], "six-free")
+            for row in tx.execute(
+                "SELECT * FROM generation_charges ORDER BY position"
+            ).fetchall():
+                economy.finish_reservation(tx, row, success=True)
+        self.db.get_conn().execute("UPDATE generation_quota_policy SET base_units=20")
+        self.assertEqual(economy.quota(self.db.get_conn(), self.uid)["remaining"], 14)
+        self.db.get_conn().execute("UPDATE generation_quota_policy SET base_units=0")
+        economy.admin_action(
+            self.db,
+            {**self.user, "role": "admin"},
+            {
+                "action": "grant",
+                "userIds": [self.uid],
+                "units": 8,
+                "reason": "new authorized total",
+                "requestId": "after-base-lowering",
+            },
+        )
+        state = economy.quota(self.db.get_conn(), self.uid)
+        self.assertEqual(
+            (state["total"], state["used"], state["held"], state["remaining"]),
+            (8, 6, 0, 2),
+        )
+        self.assertEqual(sum(s["remaining"] for s in state["sources"]), 2)
+
+    def test_expired_or_revoked_gifts_keep_only_accepted_authorization(self):
+        economy.admin_action(
+            self.db,
+            {**self.user, "role": "admin"},
+            {
+                "action": "grant",
+                "userIds": [self.uid],
+                "units": 3,
+                "reason": "three-gift",
+                "requestId": "three-gift",
+            },
+        )
+        q = self.quote(2)
+        with self.db.transaction() as tx:
+            economy.reserve_quote(tx, self.uid, q["quoteId"], "gift-batch")
+            rows = tx.execute(
+                "SELECT * FROM generation_charges ORDER BY position"
+            ).fetchall()
+            self.assertTrue(all(r["quota_source"] != "base" for r in rows))
+            economy.finish_reservation(tx, rows[0], success=True)
+        for statement in (
+            "UPDATE generation_quota_grants SET expires_at=now()-interval '1 second'",
+            "UPDATE generation_quota_grants SET revoked_at=now()",
+        ):
+            self.db.get_conn().execute(statement)
+            state = economy.quota(self.db.get_conn(), self.uid)
+            self.assertEqual(
+                (state["total"], state["used"], state["held"], state["remaining"]),
+                (12, 1, 1, 10),
+            )
+        with self.db.transaction() as tx:
+            economy.finish_reservation(tx, rows[1], success=False)
+        state = economy.quota(self.db.get_conn(), self.uid)
+        self.assertEqual(
+            (state["total"], state["used"], state["held"], state["remaining"]),
+            (11, 1, 0, 10),
+        )
 
 
 class PointsAndPaymentsTests(unittest.TestCase):
@@ -332,6 +399,218 @@ class PointsAndPaymentsTests(unittest.TestCase):
             .fetchall()
         )
         self.assertEqual({r[0]: r[1] for r in rows}, {"earned": 20, "purchased": 0})
+
+    def test_content_refund_after_payment_reversal_does_not_recreate_spendable_lots(
+        self,
+    ):
+        from backend.billing import _refund_order_tx
+
+        self.paid_order("points")
+        with self.db.transaction() as tx:
+            apply_wallet_delta(
+                tx,
+                self.uid,
+                -30,
+                "unlock_spend",
+                "content",
+                event_key="content-spend",
+                ref_type="asset",
+                ref_id="REFUND-RESOURCE",
+            )
+            _refund_order_tx(
+                tx, provider="xorpay", provider_order_id="provider-order-test"
+            )
+        self.assertEqual(
+            self.db.get_conn()
+            .execute("SELECT balance FROM wallets WHERE user_id=?", (self.uid,))
+            .fetchone()[0],
+            -30,
+        )
+        with self.db.transaction() as tx:
+            apply_wallet_delta(
+                tx,
+                self.uid,
+                30,
+                "unlock_refund",
+                "content refund",
+                event_key="content-refund",
+                ref_type="asset",
+                ref_id="REFUND-RESOURCE",
+            )
+            self.assertFalse(
+                apply_wallet_delta(
+                    tx,
+                    self.uid,
+                    30,
+                    "unlock_refund",
+                    "duplicate",
+                    event_key="content-refund",
+                    ref_type="asset",
+                    ref_id="REFUND-RESOURCE",
+                )[1]
+            )
+        self.assertEqual(
+            self.db.get_conn()
+            .execute("SELECT balance FROM wallets WHERE user_id=?", (self.uid,))
+            .fetchone()[0],
+            0,
+        )
+        self.assertEqual(
+            self.db.get_conn()
+            .execute(
+                "SELECT sum(remaining_units) FROM point_lots WHERE user_id=?",
+                (self.uid,),
+            )
+            .fetchone()[0],
+            0,
+        )
+        self.assertEqual(
+            self.db.get_conn()
+            .execute(
+                "SELECT sum(restored_units) FROM point_allocations a JOIN ledgers l ON l.id=a.ledger_id WHERE l.event_key='content-spend'"
+            )
+            .fetchone()[0],
+            30,
+        )
+
+    def test_content_refund_restores_only_surplus_after_partial_debt_repayment(self):
+        from backend.billing import _refund_order_tx
+
+        self.paid_order("points")
+        with self.db.transaction() as tx:
+            apply_wallet_delta(
+                tx,
+                self.uid,
+                -30,
+                "unlock_spend",
+                "content",
+                ref_type="asset",
+                ref_id="PARTIAL-REFUND",
+            )
+            _refund_order_tx(
+                tx, provider="xorpay", provider_order_id="provider-order-test"
+            )
+            apply_wallet_delta(
+                tx, self.uid, 20, "admin_adjust", "earned after reversal"
+            )
+            apply_wallet_delta(
+                tx,
+                self.uid,
+                30,
+                "unlock_refund",
+                "content refund",
+                ref_type="asset",
+                ref_id="PARTIAL-REFUND",
+            )
+        self.assertEqual(
+            self.db.get_conn()
+            .execute("SELECT balance FROM wallets WHERE user_id=?", (self.uid,))
+            .fetchone()[0],
+            20,
+        )
+        self.assertEqual(
+            self.db.get_conn()
+            .execute(
+                "SELECT sum(remaining_units) FROM point_lots WHERE user_id=?",
+                (self.uid,),
+            )
+            .fetchone()[0],
+            20,
+        )
+
+    def reversed_cash_generation(self):
+        from backend.billing import _refund_order_tx
+
+        self.paid_order()
+        self.db.get_conn().execute("UPDATE generation_quota_policy SET base_units=0")
+        quote = economy.create_quote(self.db, self.user, [{"ratio": "3:4"}])
+        result = prepare_cloud_generation(
+            self.db,
+            self.user,
+            {
+                "prompt": "cash refund race",
+                "requestId": "reversed-cash-task",
+                "quoteId": quote["quoteId"],
+                "confirmCost": True,
+            },
+        )
+        with self.db.transaction() as tx:
+            _refund_order_tx(
+                tx, provider="xorpay", provider_order_id="provider-order-test"
+            )
+        return result["genId"]
+
+    def test_accepted_generation_can_settle_after_provider_reversal(self):
+        gid = self.reversed_cash_generation()
+        complete_cloud_generation(
+            self.db, gid, "upstream-task", ["/images/poster-demo-autumn-equinox.webp"]
+        )
+        self.assertEqual(
+            economy.cash(self.db.get_conn(), self.uid),
+            {"balanceCents": -25, "heldCents": 0},
+        )
+        self.paid_order(key="after-debt")
+        self.assertEqual(
+            economy.cash(self.db.get_conn(), self.uid)["balanceCents"], 975
+        )
+        self.assertEqual(
+            self.db.get_conn()
+            .execute(
+                "SELECT remaining_cents FROM cash_lots WHERE order_id='after-debt'"
+            )
+            .fetchone()[0],
+            975,
+        )
+        self.assertTrue(economy.reconcile(self.db.get_conn())["ok"])
+
+    def test_failed_generation_clears_hold_after_provider_reversal(self):
+        gid = self.reversed_cash_generation()
+        refund_failed_cloud_generation(self.db, gid, "confirmed failure")
+        refund_failed_cloud_generation(self.db, gid, "duplicate failure")
+        self.assertEqual(
+            economy.cash(self.db.get_conn(), self.uid),
+            {"balanceCents": 0, "heldCents": 0},
+        )
+        self.assertEqual(
+            self.db.get_conn()
+            .execute(
+                "SELECT remaining_cents FROM cash_lots WHERE order_id='order-test'"
+            )
+            .fetchone()[0],
+            0,
+        )
+        self.assertTrue(economy.reconcile(self.db.get_conn())["ok"])
+
+    def test_recharge_that_only_partially_repays_cash_debt_has_no_refundable_principal(
+        self,
+    ):
+        from backend.billing_refunds import request_refund
+
+        with self.db.transaction() as tx:
+            economy.cash_delta(
+                tx,
+                self.uid,
+                -1500,
+                0,
+                "provider_refund",
+                "reversed-prior-income",
+                debt=True,
+            )
+        self.paid_order(key="partial-debt")
+        self.assertEqual(
+            economy.cash(self.db.get_conn(), self.uid)["balanceCents"], -500
+        )
+        self.assertEqual(
+            self.db.get_conn()
+            .execute(
+                "SELECT remaining_cents FROM cash_lots WHERE order_id='partial-debt'"
+            )
+            .fetchone()[0],
+            0,
+        )
+        with self.assertRaisesRegex(ServiceError, "未消费余额"):
+            request_refund(self.db, self.user, {"orderId": "partial-debt"})
+        self.assertTrue(economy.reconcile(self.db.get_conn())["ok"])
 
     def test_unsubmitted_quote_expires_but_accepted_attempt_stays_reserved(self):
         first = economy.create_quote(

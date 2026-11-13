@@ -241,7 +241,7 @@ def apply_wallet_delta(
             return cur_balance, False
 
     new_balance = cur_balance + int(delta)
-    if new_balance < 0 and not allow_negative:
+    if delta < 0 and new_balance < 0 and not allow_negative:
         raise ServiceError(f"积分不足（需 {abs(delta)} 积分，当前可用 {cur_balance} 积分）", status=400, code="insufficient_credits")
 
     tx.execute("UPDATE wallets SET balance = ?, updated_at = ? WHERE user_id = ?", (new_balance, now, user_id))

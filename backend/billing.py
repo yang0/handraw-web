@@ -712,7 +712,8 @@ def _settle_paid_order_tx(
     if order.get("purpose")=="cash":
         from .economy import cash_delta
         state,applied=cash_delta(tx,uid,int(order["amount_cents"]),0,"recharge",f"payment:{order_id}",ref=order_id)
-        tx.execute("INSERT INTO cash_lots(order_id,user_id,remaining_cents) VALUES(?,?,?) ON CONFLICT DO NOTHING",(order_id,uid,order["amount_cents"]))
+        unspent=max(0,state["balanceCents"])-max(0,state["balanceCents"]-int(order["amount_cents"]))
+        tx.execute("INSERT INTO cash_lots(order_id,user_id,remaining_cents) VALUES(?,?,?) ON CONFLICT DO NOTHING",(order_id,uid,unspent))
         new_bal=state["balanceCents"]
     else:
         new_bal, applied = apply_wallet_delta(
