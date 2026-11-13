@@ -3625,7 +3625,7 @@
     return `
       <div class="hw-inline-drawer" data-inline-share-panel="1">
         <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap;">
-          <strong style="font-size:13.8px;color:var(--gold);">📤 便捷分享${esc(tName)} · 每邀 1 位新画友得 +15✦ 积分</strong>
+          <strong style="font-size:13.8px;color:var(--gold);">📤 便捷分享${esc(tName)} · 邀请朋友一起交流</strong>
           <button type="button" class="btn btn-sm" data-close-inline-share="1">收起 ×</button>
         </div>
         <div style="display:grid;grid-template-columns:120px 1fr;gap:14px;align-items:start;">

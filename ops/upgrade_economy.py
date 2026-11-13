@@ -34,7 +34,7 @@ def upgrade(dsn, *, apply=False):
             "applied": False,
             "installed": installed,
             "contributionGuardsInstalled": guards_installed,
-            "requiredVersion": 120,
+            "requiredVersion": 121,
             "realPaymentOrders": real_orders,
             "pointWallets": users,
             "retainedPoints": points,
@@ -48,6 +48,7 @@ def upgrade(dsn, *, apply=False):
             for filename in (
                 "postgres_119_economy.sql",
                 "postgres_120_contribution_guards.sql",
+                "postgres_121_reward_promotions.sql",
             ):
                 conn.execute(
                     (

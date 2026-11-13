@@ -34,6 +34,7 @@ MIGRATIONS = (
     ROOT / "backend" / "postgres_118_studio_model.sql",
     ROOT / "backend" / "postgres_119_economy.sql",
     ROOT / "backend" / "postgres_120_contribution_guards.sql",
+    ROOT / "backend" / "postgres_121_reward_promotions.sql",
 )
 
 

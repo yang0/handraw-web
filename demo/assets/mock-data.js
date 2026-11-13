@@ -968,7 +968,7 @@
       category: "assets",
       categoryLabel: "🎨 画风与图型专区",
       pinned: false,
-      title: "【荒地开垦召集令】这几个冷门宝藏画风（FB-055 / FC-028 / FH-043）出图美哭了，首晒立拿 +15 积分！",
+      title: "【画风探索】试试这些冷门宝藏画风（FB-055 / FC-028 / FH-043）",
       author: "forest_mori",
       authorName: "森屿绘本屋",
       createdAt: "1 天前",
@@ -996,7 +996,7 @@
         ratio: "3:4",
         mood: "神秘"
       },
-      summary: "大家别光盯着 FA 前二十号薅啦！FB-055 点描古地图幻想绘本风和 FH-043 复古普鲁士蓝珊瑚红丝网旅行插画美到窒息，而且现在这些编号下作品数不到 3 个，去晒首图系统直接奖 +15 积分！",
+      summary: "试试 FB-055 点描古地图幻想绘本风和 FH-043 复古普鲁士蓝珊瑚红丝网旅行插画。欢迎分享实测效果与创作经验；普通发布不发积分，优质作品经管理员评定后可获得贡献奖励。",
       lockedBody: "",
       replies: []
     },
@@ -1341,10 +1341,10 @@
       topics: JSON.parse(JSON.stringify(INITIAL_TOPICS)),
       communityResources: JSON.parse(JSON.stringify(COMMUNITY_RESOURCES)),
       ledger: [
-        { id: "l1", time: "今天 09:40", reason: "作品《秋分节气手账》被收藏满 10 次里程碑奖励", delta: +5 },
-        { id: "l2", time: "昨天 21:15", reason: "解锁角色设定作品《黑猫侍者特调师》完整参数", delta: -10 },
-        { id: "l3", time: "昨天 18:02", reason: "通过专属分享海报成功邀请好友 @momo 注册", delta: +15 },
-        { id: "l4", time: "昨天 10:00", reason: "新老用户迁移激活礼包（Discourse 账号无缝承接）", delta: +118 }
+        { id: "l1", time: "今天 09:40", reason: "作品《秋分节气手账》被评为优质作品奖励", delta: +5 },
+        { id: "l2", time: "昨天 21:15", reason: "解锁收费教程《角色设定创作方法》", delta: -10 },
+        { id: "l3", time: "昨天 18:02", reason: "原创画风审核通过奖励", delta: +20 },
+        { id: "l4", time: "昨天 10:00", reason: "完成账号验证奖励", delta: +20 }
       ]
     };
   }

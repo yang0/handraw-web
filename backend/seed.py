@@ -64,7 +64,7 @@ DEFAULT_SITE_SETTINGS: dict[str, object] = {
     "announcement": {
         "enabled": True,
         "badge": "✨ 2.0 正式上线",
-        "text": "Handraw 手绘风社区升级版：360+ 画风与 160+ 图型全量打通无限画布，荒地首晒立奖 +15✦！",
+        "text": "生图余额与社区积分独立记账，新账号享10张1K免费生图额度，文章与系列图AI规划免费。",
         "cta_label": "去创作台体验 ↗",
         "cta_channel": "studio",
     },
