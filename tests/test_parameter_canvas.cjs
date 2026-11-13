@@ -2,7 +2,7 @@
 const test=require("node:test"),assert=require("node:assert/strict"),vm=require("node:vm"),fs=require("node:fs");
 const context={window:{__HANDRAW_TESTING__:true},setTimeout,clearTimeout,console};
 vm.createContext(context);vm.runInContext(fs.readFileSync("demo/assets/parameter-canvas.js","utf8"),context);
-const {CanvasStore,selectedQuote,arrangeNodes,pickResourceCandidate,simpleFlow,combinationSummary,addGuidedParameter,connectionError,addCanvasNode,outputItems,groupExistingParameters}=context.window.HandrawParameterCanvas.testing;
+const {CanvasStore,selectedQuote,arrangeNodes,pickResourceCandidate,simpleFlow,combinationSummary,addGuidedParameter,connectionError,addCanvasNode,outputItems,groupExistingParameters,matchingPreview,matchingSources}=context.window.HandrawParameterCanvas.testing;
 const storage=new Map();
 function store(t,api,scope="user:canvas") {
   const instance=new CanvasStore({api,scope,loggedIn:()=>true,storage:{getItem:key=>storage.get(key),setItem:(key,value)=>storage.set(key,value)}});
@@ -59,10 +59,41 @@ test("the optional guided view keeps the three steps and automatic parameter inc
   const root={innerHTML:"",querySelector:()=>null,querySelectorAll:()=>[]};
   canvas.mount(root,{scope:"guided-render",loggedIn:()=>false,resources:()=>[]});
   t.after(()=>{canvas.reset();delete context.window.localStorage;});
-  for(const text of ["准备参数","选择搭配方式","预览与出图","2 个主题 × 3 种画风 → 6 组","按顺序一一搭配"]) assert.ok(root.innerHTML.includes(text));
+  for(const text of ["准备参数","这批怎么画","预览与出图"]) assert.ok(root.innerHTML.includes(text));
   assert.ok(root.innerHTML.includes('data-action="guided-add"'));
   assert.ok(!root.innerHTML.includes('class="pc-world"'));
   assert.ok(!root.innerHTML.includes('data-drag='));
+});
+
+test("matching examples follow field order, sequential pairing, fixed values and repeats",()=>{
+  const inputs=[
+    {name:"主题",unit:"个",count:2,samples:[{prompt:"森林"},{prompt:"公园"}]},
+    {name:"画风",unit:"种",count:2,samples:[{style1:"FA-001"},{style1:"FA-002"}]},
+    {name:"比例",count:1,samples:[{ratio:"16:9"}]}
+  ];
+  const cross=matchingPreview(inputs,"cartesian"),pairs=matchingPreview(inputs,"zip");
+  assert.equal(cross.count,4);
+  assert.deepEqual(Array.from(cross.samples,row=>row.prompt+row.style1),["森林FA-001","森林FA-002","公园FA-001","公园FA-002"]);
+  assert.deepEqual(Array.from(pairs.samples,row=>row.prompt+row.style1),["森林FA-001","公园FA-002"]);
+  assert.ok(cross.samples.every(row=>row.ratio==="16:9"));
+  assert.equal(matchingPreview(inputs,"zip",2).samples[1].prompt,"森林");
+  inputs[1].count=3;inputs[1].samples.push({style1:"FA-003"});
+  assert.match(matchingPreview(inputs,"zip").error,/2个主题、3种画风/);
+  assert.match(matchingPreview(inputs,"cartesian",40).error,/200/);
+});
+
+test("downstream examples retain upstream rows beyond the four displayed samples",()=>{
+  const graph={nodes:[
+    {id:"themes",type:"parameter",parameter:"prompt",values:["A","B","C","D","E"]},
+    {id:"styles",type:"parameter",parameter:"style1",values:["1","2","3","4","5"]},
+    {id:"set",type:"combine",mode:"zip"},
+    {id:"out",type:"output"}
+  ],edges:[{from:"themes",to:"set"},{from:"styles",to:"set"},{from:"set",to:"out"}]};
+  const info=matchingSources(graph,graph.nodes[3]);
+  assert.equal(info.sources[0].samples[4].prompt,"E");
+  assert.equal(info.sources[0].samples[4].style1,"5");
+  graph.edges.push({from:"set",to:"set"});
+  assert.match(matchingSources(graph,graph.nodes[3]).error,/循环/);
 });
 
 test("node view opens by default and exposes one anchor for each usable direction",t=>{

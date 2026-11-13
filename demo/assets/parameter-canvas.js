@@ -173,6 +173,107 @@
     const q=preview.quote,free=Math.min(count,q.freeRemaining),total=(count-free)*q.unitPrice;
     return {count,freeUsed:free,paidCount:count-free,total,affordable:total<=q.balance};
   }
+
+  // Bounded examples use the same field and edge order as the saved plan.
+  function matchingPreview(sources, mode, repeat=1, limit=4) {
+    if (!sources.length || sources.some(source=>!source.count)) return {count:0,samples:[],error:"先填写出图内容"};
+    const lengths=sources.map(source=>source.count),longest=Math.max(...lengths);
+    if (mode==="zip" && lengths.some(count=>count!==1 && count!==longest)) {
+      const sizes=sources.filter(source=>source.count>1).map(source=>`${source.count}${source.unit||"项"}${source.name}`).join("、");
+      return {count:0,samples:[],error:`${sizes}，数量不同，无法按序号配对。补齐数量，或选择全部尝试。`};
+    }
+    const count=(mode==="zip"?longest:lengths.reduce((a,b)=>a*b,1))*repeat;
+    if (!Number.isInteger(repeat)||repeat<1||repeat>200) return {count:0,samples:[],error:"每种结果的张数需为 1–200"};
+    const samples=[];
+    for(let index=0;index<Math.min(count,limit);index++) {
+      let position=Math.floor(index/repeat);
+      const picks=[];
+      for(let i=sources.length-1;i>=0;i--) {
+        const offset=mode==="zip"?(lengths[i]===1?0:position):position%lengths[i];
+        picks.unshift(sources[i].samples[offset]);
+        if(mode!=="zip") position=Math.floor(position/lengths[i]);
+      }
+      const row={};
+      for(const pick of picks) {
+        if (!pick) continue;
+        for(const [key,value] of Object.entries(pick)) {
+          if(Object.hasOwn(row,key)) return {count:0,samples:[],error:`${labels[key]}被设置了两次，请保留其中一处。`};
+          row[key]=value;
+        }
+      }
+      samples.push(row);
+    }
+    return {count,samples,error:count>200?"超过单批 200 张，请减少内容或张数。":""};
+  }
+
+  function matchingSources(graph,node,active=new Set()) {
+    if (active.has(node.id)) return {sources:[],error:"连线形成了循环，请先调整连线"};
+    const next=new Set(active).add(node.id);
+    if(isParameter(node)) {
+      const fields=node.type==="parameter"?[node.parameter]
+        : node.fieldOrder || Object.keys(node.fields).sort((a,b)=>Number(b==="prompt")-Number(a==="prompt")||a.localeCompare(b));
+      return {sources:fields.map(field=>{
+        const values=node.type==="parameter"?node.values:node.fields[field];
+        const samples=values.map(value=>field==="style1" && value && typeof value==="object"?value:{[field]:value});
+        return {name:field==="style1"?"画风":labels[field],field,unit:field==="prompt"?"个":"种",count:values.length,samples};
+      })};
+    }
+    const sources=[];
+    for(const edge of graph.edges.filter(edge=>edge.to===node.id)) {
+      const input=graph.nodes.find(item=>item.id===edge.from);
+      if(!input) return {sources:[],error:"请重新连接已删除的节点"};
+      const nested=matchingSources(graph,input,next);
+      if(nested.error) return nested;
+      const result=matchingPreview(nested.sources,input.mode||"cartesian",input.type==="output"?Number(input.repeat??1):1,200);
+      if(result.error) return {sources:[],error:result.error};
+      sources.push({
+        name:input.type==="parameter"?nested.sources[0].name:nodeName(input),
+        field:input.type==="parameter"?input.parameter:null,
+        unit:input.type==="parameter"?nested.sources[0].unit:"组",
+        count:result.count,samples:result.samples
+      });
+    }
+    return {sources};
+  }
+
+  function exampleValue(field,value) {
+    if(field==="style1"||field==="style2"||field==="layout") {
+      const resource=(options.resources?.(field==="layout"?"layout":"style")||[]).find(item=>(item.id||item.code)===value);
+      return {label:resource?.name_zh||resource?.name||value,image:resource?.image};
+    }
+    if(field==="refImages") return {label:value.length?`${value.length} 张参考图`:""};
+    if(field==="mode") return {label:value==="image-only"?"纯图":"图文"};
+    return {label:Array.isArray(value)?value.join("、"):String(value??"")};
+  }
+
+  function matchingHtml(node) {
+    const {sources,error}=matchingSources(current.doc.graph,node);
+    if(error) return `<p class="pc-match-warning">${esc(error)}</p>`;
+    if(sources.some(source=>source.field==="prompt" && source.samples.some(row=>!String(row.prompt).trim()))) {
+      return '<p class="pc-muted">填写主题后，这里会显示将要画出的内容。</p>';
+    }
+    const mode=node.mode||"cartesian",repeat=node.type==="output"?Number(node.repeat??1):1;
+    const result=matchingPreview(sources,mode,repeat);
+    const varying=sources.filter(source=>source.count>1);
+    const crossTitle=varying.length===2
+      ?`每个${varying[0].name}都试所有${varying[1].name}`:"所有选择都试一遍";
+    const choices=varying.length>1?`<div class="pc-match-choices" role="group" aria-label="选择这批怎么画">${[
+      ["cartesian",crossTitle],["zip","第 1 个配第 1 个"]
+    ].map(([value,title])=>{
+      const info=matchingPreview(sources,value,repeat);
+      return `<button type="button" data-action="match-mode" data-node="${esc(node.id)}" data-match-mode="${value}" aria-pressed="${mode===value}">
+        <strong>${esc(title)}</strong><span>${info.error && value==="zip"?"数量不同，需补齐后配对":`共 ${Number.isFinite(info.count)?info.count:"超过 200"} ${node.type==="output"?"张":"组"}`}</span></button>`;
+    }).join("")}</div>`:"";
+    const examples=result.samples.map((row,index)=>`<li><span class="pc-example-number">${index+1}</span><div>${Object.keys(labels).filter(field=>Object.hasOwn(row,field)).map(field=>{
+      const {label,image}=exampleValue(field,row[field]);
+      if(!label) return "";
+      return `<span class="pc-example-value" title="${esc(label)}">${image?`<img src="${esc(image)}" alt="" loading="lazy">`:""}${esc(label.slice(0,48))}</span>`;
+    }).join("")}</div></li>`).join("");
+    const fixed=sources.filter(source=>source.count===1 && source.samples.some(row=>Object.values(row).some(value=>Array.isArray(value)?value.length:value)));
+    return `${choices}${result.error?`<p class="pc-match-warning" role="status">${esc(result.error)}</p>`:""}
+      ${examples?`<p class="pc-example-title">将画出这些内容${result.count>4?"（先看前 4 项）":""}</p><ol class="pc-match-examples">${examples}</ol>`:""}
+      ${varying.length && fixed.length?'<p class="pc-match-note">只填一项的设置，每张都会用。</p>':""}`;
+  }
   class CanvasStore {
     constructor(options) {
       this.options=options; this.doc=blank(); this.list=[]; this.recent=[]; this.run=null;
@@ -404,14 +505,9 @@
       const info=combinationSummary(current.doc.graph);
       summary.innerHTML=info.problem?`<p class="pc-next-action">${esc(info.problem)}</p>`:`<div class="pc-total"><strong>${info.count}</strong><span>张图片</span></div><p class="pc-formula">${esc(info.formula)}</p>`;
     }
-    for (const element of root.querySelectorAll("[data-group-summary]")) {
-      const node=current.doc.graph.nodes.find(item=>item.id===element.dataset.groupSummary);
-      const counts=fieldList(node).map(field=>field.values.length);
-      const longest=Math.max(...counts);
-      if(counts.includes(0)) element.textContent="每个参数至少保留一个候选";
-      else if(node.fields.prompt?.some(value=>!String(value).trim())) element.textContent="填写主题后，点击顶部「预览出图」";
-      else if(node.mode==="zip" && counts.some(count=>count!==1 && count!==longest)) element.textContent="按顺序搭配时，多候选参数的数量要相同";
-      else element.textContent=`${node.mode==="zip"?longest:counts.reduce((a,b)=>a*b,1)} 组参数`;
+    for (const element of root.querySelectorAll("[data-matching-node]")) {
+      const node=current.doc.graph.nodes.find(item=>item.id===element.dataset.matchingNode);
+      updateMarkup(element,matchingHtml(node));
     }
     for(const button of root?.querySelectorAll('[data-action="preview"]')||[]) {
       const info=combinationSummary(current.doc.graph);
@@ -455,12 +551,12 @@
     return node.values.map((value,i)=>`<div class="pc-candidate">
       <div class="pc-candidate-heading"><span>${esc(label)} ${i+1}</span><button type="button" data-action="remove-value" ${base} data-value="${i}" aria-label="移除${esc(label)} ${i+1}">移除</button></div>
       ${parameterValue(node,value,i)}</div>`).join("") +
-      `<button type="button" class="pc-add-candidate" data-action="add-value" ${base}>＋ 添加${esc(label)}候选</button>`;
+      `<button type="button" class="pc-add-candidate" data-action="add-value" ${base}>＋ 添加${esc(label)}</button>`;
   }
 
   let activeFields = new Map();
   const touchNodes = new Set();
-  function parameterGroupHtml(node) {
+  function parameterGroupHtml(node,isGuided=false) {
     const fields = fieldList(node);
     const selected = fields.find(item=>item.parameter===activeFields.get(node.id)) || fields[0];
     const nav = fields.map(item=>{
@@ -472,8 +568,7 @@
     return `<div class="pc-field-tabs" aria-label="要编辑的出图参数">${nav}${more}</div>
       ${selected ? `<div class="pc-field-editor" data-field-editor="${selected.parameter}">${candidatesHtml({...selected,grouped:true})}
         ${fields.length > 1 ? `<button type="button" class="pc-remove-field" data-action="remove-field" data-node="${esc(node.id)}" data-parameter="${selected.parameter}">移除此参数</button>` : ""}</div>` : ""}
-      <label>多个候选怎样组合<select data-node="${esc(node.id)}" data-property="mode"><option value="cartesian" ${node.mode!=="zip"?"selected":""}>全部互相搭配</option><option value="zip" ${node.mode==="zip"?"selected":""}>按顺序一一搭配</option></select></label>
-      <small class="pc-group-summary" data-group-summary="${esc(node.id)}"></small>`;
+      ${isGuided?"":`<div class="pc-matching-preview" data-matching-node="${esc(node.id)}"></div>`}`;
   }
 
   function nodeHtml(node,index,isGuided=false) {
@@ -487,9 +582,9 @@
     return `<section class="pc-node ${isGuided?"pc-parameter":""} ${node.type==="parameters"?"pc-parameter-group":""}${touchNodes.has(node.id)?" is-touch-selected":""}" data-card="${esc(node.id)}" ${isGuided?"":`style="left:${Number(node.x??32)}px;top:${Number(node.y??32)}px"`}>
       ${ports}
       <header ${isGuided?"":`data-drag="${esc(node.id)}"`}><div><strong>${esc(name)}${isGuided?"":` ${index+1}`}</strong>${isGuided&&node.values?`<span class="pc-node-count">${node.values.length} 个候选</span>`:""}</div><button type="button" data-action="remove-node" data-node="${esc(node.id)}" aria-label="移除${esc(name)}">×</button></header>
-      <div class="pc-node-body">${node.type==="parameters"?parameterGroupHtml(node):node.type==="parameter"?candidatesHtml(node):
-        `<p>${node.type === "output" ? "接收左边的参数或组合，设置每组出几张。" : "把主题、画风等合成一组组出图方案。例如 2 个主题 × 3 种画风 = 6 组。"}</p>
-        ${node.type === "combine" || incoming.length > 1 ? `<label>怎样组合<select data-node="${esc(node.id)}" data-property="mode"><option value="cartesian" ${node.mode!=="zip"?"selected":""}>全部互相搭配</option><option value="zip" ${node.mode==="zip"?"selected":""}>按顺序一一搭配</option></select></label>` : ""}
+      <div class="pc-node-body">${node.type==="parameters"?parameterGroupHtml(node,isGuided):node.type==="parameter"?candidatesHtml(node):
+        `<p>${node.type === "output" ? "在这里设置每种结果画几张。" : "将连进来的内容搭配后出图。"}</p>
+        ${node.type === "combine" || incoming.length > 1 ? `<div class="pc-matching-preview" data-matching-node="${esc(node.id)}"></div>` : ""}
         ${node.type === "output" ? `<label>每组生成张数<input type="number" min="1" max="200" data-node="${esc(node.id)}" data-property="repeat" value="${node.repeat??1}"></label>` : ""}
         <div class="pc-links">${incoming.map(edge => {
           const source = graph.nodes.find(item => item.id === edge.from);
@@ -760,10 +855,12 @@
     const scrollTop = element.scrollTop;
     const active = document.activeElement;
     const ordinal = element.contains(active) ? active.dataset.select : null;
+    const mode = element.contains(active) ? active.dataset.matchMode : null;
     element.innerHTML = markup;
     element.dataset.rendered = markup;
     element.scrollTop = scrollTop;
     if (ordinal != null) element.querySelector(`[data-select="${Number(ordinal)}"]`)?.focus({preventScroll:true});
+    if (mode != null) element.querySelector(`[data-match-mode="${mode}"]`)?.focus({preventScroll:true});
   }
 
   function renderPanels() {
@@ -869,11 +966,11 @@
     const body=root.querySelector('.pc-guided-body');if(body) body.scrollTop=oldScroll;
   }
   function guidedHtml(flow) {
-    return `<div class="pc-guided-body"><main class="pc-parameters-area" aria-label="准备参数"><div class="pc-step-title"><span>1</span><div><h2>准备参数</h2><p>一个候选固定使用，多个候选参与搭配。</p></div></div>
+    return `<div class="pc-guided-body"><main class="pc-parameters-area" aria-label="准备参数"><div class="pc-step-title"><span>1</span><div><h2>准备参数</h2><p>填写想画的内容，画风和比例都可添加多项。</p></div></div>
       <div class="pc-parameter-tools" aria-label="添加参数">${["prompt","style1","layout","ratio","refImages"].map(field=>`<button type="button" data-action="guided-add" data-field="${field}">${flow.parameters.some(n=>n.parameter===field)?"编辑":"＋"} ${labels[field]}</button>`).join("")}<details><summary>更多参数</summary><div>${Object.entries(labels).filter(([key])=>!["prompt","style1","style2","layout","ratio","refImages"].includes(key)).map(([key,label])=>`<button type="button" data-action="guided-add" data-field="${key}">${label}</button>`).join("")}</div></details></div>
       <div class="pc-parameter-grid">${flow.group.type==="parameters" ? nodeHtml(flow.group,0,true) : flow.parameters.map((node,index)=>nodeHtml(node,index,true)).join("")}</div></main>
-      <aside class="pc-guide-sidebar"><section class="pc-matching" aria-label="选择搭配方式"><div class="pc-step-title"><span>2</span><div><h2>选择搭配方式</h2><p>这些参数怎么一起用？</p></div></div>
-        <div class="pc-match-options">${[["cartesian","全部互相搭配","2 个主题 × 3 种画风 → 6 组","每个主题都试一遍每种画风。"],["zip","按顺序一一搭配","主题 1 + 画风 1，主题 2 + 画风 2","只有一个候选的参数，每组都会使用。"]].map(([mode,title,example,description])=>`<button type="button" data-action="matching" data-mode="${mode}" aria-pressed="${(flow.group.mode||"cartesian")===mode}"><strong>${title}</strong><span>${example}</span><small>${description}</small></button>`).join("")}</div>
+      <aside class="pc-guide-sidebar"><section class="pc-matching" aria-label="这批怎么画"><div class="pc-step-title"><span>2</span><div><h2>这批怎么画</h2></div></div>
+        <div class="pc-matching-preview" data-matching-node="${esc(flow.group.id)}"></div>
         <label class="pc-repeat-label">每组生成<input type="number" min="1" max="200" aria-label="每组生成张数" data-node="${esc(flow.output.id)}" data-property="repeat" value="${flow.output.repeat??1}">张</label>
       </section><section class="pc-checkout" aria-label="预览与出图"><div class="pc-step-title"><span>3</span><div><h2>预览与出图</h2><p>先核对张数与费用，再开始。</p></div></div><div data-live-summary aria-live="polite"></div><button type="button" class="pc-primary pc-preview-button" data-action="preview">预览出图</button><div class="pc-output-results" data-output-results data-output-node="${esc(flow.output.id)}"></div></section></aside></div>`;
   }
@@ -1036,7 +1133,7 @@
         if(group?.type==="parameters") render();
         focusParameter(added);return;
       }
-      if(action==="matching") {const flow=simpleFlow(current.doc.graph);if(flow) {flow.group.mode=button.dataset.mode;current.edit(true);}return;}
+      if(action==="match-mode") {node.mode=button.dataset.matchMode;current.edit();return;}
       if(action==="undo-remove") {const graph=current.removal;if(graph) {current.doc.graph=graph;current.edit(true);}return;}
       if(action==="save") return void busy(()=>current.save());
       if(action==="more-canvases") return void busy(()=>current.loadMoreCanvases());
@@ -1248,5 +1345,5 @@
       else showPanel("output");
     }
   },importDocument:document=>current?.importDocument(document),reset:()=>{dismissInteractions();nodeResizeObserver?.disconnect();current?.close();current=null;root=null;panelCanvasId=null;}};
-  if(global.__HANDRAW_TESTING__) global.HandrawParameterCanvas.testing={CanvasStore,blank,selectedQuote,arrangeNodes,pickResourceCandidate,simpleFlow,combinationSummary,addGuidedParameter,connectionError,addCanvasNode,outputItems,groupExistingParameters};
+  if(global.__HANDRAW_TESTING__) global.HandrawParameterCanvas.testing={CanvasStore,blank,selectedQuote,arrangeNodes,pickResourceCandidate,simpleFlow,combinationSummary,addGuidedParameter,connectionError,addCanvasNode,outputItems,groupExistingParameters,matchingPreview,matchingSources};
 })(window);
