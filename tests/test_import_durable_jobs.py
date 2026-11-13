@@ -40,6 +40,41 @@ class DurableImportTests(unittest.TestCase):
             time.sleep(0.02)
         self.fail("Import did not reach a terminal state")
 
+    def test_slow_durable_input_read_uses_original_claim_deadline(self):
+        from backend import document_importer as importer
+
+        actual_read = importer.read_input
+        manager = ImportManager(self.db, num_workers=1)
+
+        def slow_read(job):
+            time.sleep(0.15)
+            return actual_read(job)
+
+        with (
+            patch.object(importer, "MAX_JOB_DURATION_SECONDS", 0.05),
+            patch.object(importer, "read_input", side_effect=slow_read),
+            patch("backend.ai_client.chat") as ai,
+        ):
+            jid = manager.submit_job(
+                self.user["id"], "slow-read.txt", b"# Original document"
+            )
+            manager.start()
+            try:
+                row = self.wait_terminal(jid)
+                self.assertEqual(row["status"], "failed")
+                self.assertIn("处理超时", row["error"])
+                ai.assert_not_called()
+            finally:
+                manager.stop()
+        self.assertEqual(
+            self.db.get_conn()
+            .execute(
+                "SELECT count(*) FROM user_uploads WHERE user_id=?", (self.user["id"],)
+            )
+            .fetchone()[0],
+            0,
+        )
+
     def test_new_process_recovers_committed_input_without_queue_hint(self):
         environment = {
             **os.environ,

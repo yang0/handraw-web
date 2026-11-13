@@ -675,6 +675,7 @@ class ImportManager:
                 with self._claims_lock:
                     if self._stop.is_set():
                         break
+                    claim_started=time.monotonic()
                     job=claim_input(self.db,MAX_JOB_DURATION_SECONDS)
                     if job:
                         self._claims[job["id"]]=job["lease_token"]
@@ -685,6 +686,7 @@ class ImportManager:
                 job_id=job["id"]
                 token=job["lease_token"]
                 self._local.claim=(job_id,token)
+                self._local.claim_deadline=claim_started+MAX_JOB_DURATION_SECONDS
                 self.db.release_request_connection()
                 content=read_input(job)
                 self._process_job(job_id,int(job["user_id"]),job["file_name"],content)
@@ -714,24 +716,29 @@ class ImportManager:
                         if self._claims.get(job["id"])==job["lease_token"]:
                             self._claims.pop(job["id"],None)
                     self._local.claim=None
+                    self._local.claim_deadline=None
                 self.db.close_thread_conn()
 
     def _process_job(self, job_id: str, user_id: int, file_name: str, file_bytes: bytes) -> None:
         claim=getattr(self._local,"claim",None)
         token=claim[1] if claim and claim[0]==job_id else None
         start_time = time.monotonic()
-        deadline = start_time + MAX_JOB_DURATION_SECONDS
+        deadline = (getattr(self._local,"claim_deadline",None) if token else None) or start_time + MAX_JOB_DURATION_SECONDS
 
         def _assert_not_timed_out() -> None:
             if self._stop.is_set():
                 raise DocumentImportError("导入工作进程已停止")
             if time.monotonic() > deadline:
                 raise DocumentImportError("处理超时")
-            if token is not None and not self.db.get_conn().execute(
-                "SELECT 1 FROM studio_import_jobs WHERE id=? AND status='running' AND lease_token=? AND lease_until>now()",
-                (job_id,token),
-            ).fetchone():
-                raise DocumentImportError("导入任务已由其他工作进程接管")
+            if token is not None:
+                owned=self.db.get_conn().execute(
+                    "SELECT lease_until>now() valid FROM studio_import_jobs WHERE id=? AND status='running' AND lease_token=?",
+                    (job_id,token),
+                ).fetchone()
+                if owned and not owned["valid"]:
+                    raise DocumentImportError("处理超时")
+                if not owned:
+                    raise DocumentImportError("导入任务已由其他工作进程接管")
 
         # 1. Update status to running in short transaction
         with self.db.transaction() as tx:
