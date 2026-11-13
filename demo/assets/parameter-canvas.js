@@ -13,6 +13,22 @@
   const defaultFields = () => ({prompt:[""],style1:["FA-001"],layout:[""],ratio:["3:4"]});
   const coordinate = value => Math.max(-50000, Math.min(50000, value));
   const panMargin = 320;
+  function sketchIcon(kind) {
+    const marks={
+      new:'<path d="M5.2 3.6 15.2 3.2 19.5 7.4 19.7 21 5 20.6Z"/><path d="m15.2 3.4-.2 4.3 4.6-.3"/><path d="M12.1 10.4v7.3M8.6 14.1l7.3-.2"/>',
+      save:'<path d="M4 3.5 18 3.1 20.6 5.7 20.2 20.7 4.2 21Z"/><path d="M7.4 3.6v6.4l9.1-.2V3.5"/><path d="M8 20.5v-7.4l8.5.1V21"/><path d="M13.8 5v3.1"/>',
+      export:'<path d="M4.1 15.9v4.7l15.9.2v-4.6"/><path d="M11.8 3.2v12.4"/><path d="m7.6 11.7 4.2 4.1 4.5-4.3"/>',
+      open:'<path d="M2.9 6.7 3.1 19.7l17.6.3 1-10.5-10.3-.3-2.5-3.1-6-.1Z"/><path d="M3 9.8 21.3 9.6"/>',
+      more:'<circle cx="6" cy="12" r="1.15"/><circle cx="12" cy="11.8" r="1.15"/><circle cx="18" cy="12.1" r="1.15"/>',
+      undo:'<path d="M9.3 6.5 4 11.2l5.4 4.5"/><path d="M4.6 11.2h9.1c4.2 0 6 2.1 6 5.2 0 2.1-1.6 3.5-3.3 4"/>'
+    };
+    return `<svg class="pc-sketch-icon" width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.65" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${marks[kind]||marks.more}</svg>`;
+  }
+  function recentCanvases(items) {
+    return [...new Map(items.filter(item=>item?.id && !item.isOfficialPreset && !String(item.id).startsWith("preset_")).map(item=>[item.id,item])).values()]
+      .sort((a,b)=>(Date.parse(b.updatedAt)||Number(b.updatedAtMs)||0)-(Date.parse(a.updatedAt)||Number(a.updatedAtMs)||0) || String(a.id).localeCompare(String(b.id)))
+      .slice(0,10);
+  }
   const nodeMenuEntries = [
     {type:"parameters",name:"出图参数",group:"生成流程",detail:"在一张卡里编辑主题、画风、图型和比例",out:true},
     {type:"output",name:"批量出图",group:"生成流程",detail:"接收参数，设置每组出几张",in:true},
@@ -285,15 +301,43 @@
       this.cacheKey="handraw.parameter-canvas:"+options.scope;
       try { const cached=JSON.parse(options.storage?.getItem(this.cacheKey)||"null");
         if(cached?.doc?.graph?.nodes) {this.doc=cached.doc;this.dirty=Boolean(cached.dirty);this.submission=cached.submission||null;this.preferredRunId=cached.runId||null;this.view=cached.view==="guided"?"guided":"free";} } catch(_) {}
+      this.localDocuments=[];
+      if(!options.loggedIn()) {
+        try {this.localDocuments=JSON.parse(options.storage?.getItem(this.cacheKey+":saved")||"[]").filter(item=>item?.graph?.nodes);} catch(_) {}
+        this.list=this.localDocuments.map(({graph,...item})=>item);
+      }
+      this.resetHistory();
     }
+    documentState() {return JSON.stringify({name:this.doc.name,graph:this.doc.graph});}
+    resetHistory() {this.undoStack=[];this.redoStack=[];this.lastState=this.documentState();this.editGroup="";}
     notify(reason="render") { if(!this.closed) this.onchange(reason); }
     persist() { try { this.options.storage?.setItem(this.cacheKey,JSON.stringify({doc:this.doc,dirty:this.dirty,submission:this.submission,runId:this.runId||null,view:this.view})); }
       catch(_) { this.error="本地保存空间不足，请保存到云端或导出画布"; } }
-    edit(render=false) {
-      this.dirty=true; this.preview=null; this.confirmation=null;this.removal=null;this.selected.clear(); this.error=""; this.persist();
+    edit(render=false,{record=true,group=""}={}) {
+      const state=this.documentState(),stamp=Date.now();
+      if(record && state!==this.lastState) {
+        if(!group || group!==this.editGroup || stamp-this.editStamp>750) {
+          this.undoStack.push(this.lastState);
+          if(this.undoStack.length>40) this.undoStack.shift();
+        } else if(this.undoStack[this.undoStack.length-1]===state) {
+          this.undoStack.pop();group="";
+        }
+        this.redoStack=[];
+      }
+      this.lastState=state;this.editGroup=group;this.editStamp=stamp;
+      this.dirty=true; this.preview=null; this.confirmation=null;this.selected.clear(); this.error=""; this.persist();
       clearTimeout(this.saveTimer);
       if(!this.conflict) this.saveTimer=setTimeout(()=>{void this.save().catch(error=>this.fail(error));},650);
       this.notify(render?"render":"status");
+    }
+    undo(redo=false) {
+      const source=redo?this.redoStack:this.undoStack,target=redo?this.undoStack:this.redoStack;
+      if(!source.length) return false;
+      target.push(this.documentState());
+      const previous=JSON.parse(source.pop());
+      this.doc.name=previous.name;this.doc.graph=previous.graph;
+      this.edit(true,{record:false});
+      return true;
     }
     fail(error) { this.error=error?.message||String(error); if(error?.code==="canvas_conflict") this.conflict=true; this.notify(); }
     async load() {
@@ -323,14 +367,17 @@
       } finally {this.listLoading=false;this.notify();}
     }
     async open(id,save=true) {
+      if(this.submission) throw new Error("请先确认上一次提交状态");
       const navigation=++this.navigation;
-      if(save && !(await this.save())) return;
+      if(save && this.dirty && !(await this.save())) return;
       if(this.closed||navigation!==this.navigation) return;
       this.runId=null;clearTimeout(this.pollTimer);
-      const result=await this.options.api("/api/studio/canvases/"+encodeURIComponent(id));
+      const result=this.options.loggedIn() ? await this.options.api("/api/studio/canvases/"+encodeURIComponent(id))
+        : {canvas:clone(this.localDocuments.find(item=>item.id===id)||{})};
+      if(!result.canvas?.graph) throw new Error("画布不存在");
       if(this.closed||navigation!==this.navigation) return;
-      this.doc=result.canvas;this.confirmation=null;this.removal=null;this.dirty=false; this.conflict=false; this.preview=null; this.run=null;this.recent=[];this.recentCursor="";
-      this.error=""; this.persist(); this.notify(); await this.loadRecent();
+      this.doc=result.canvas;this.confirmation=null;this.dirty=false; this.conflict=false; this.preview=null; this.run=null;this.recent=[];this.recentCursor="";
+      this.error="";this.resetHistory(); this.persist(); this.notify(); await this.loadRecent();
     }
     async create(copy=false) {
       if(this.submission) throw new Error("请先确认上一次提交状态");
@@ -338,21 +385,29 @@
       this.navigation++;
       this.doc=copy?{...clone(this.doc),id:uid("canvas"),writeSeq:0,name:this.doc.name+" 副本"}:blank();
       this.runId=null;clearTimeout(this.pollTimer);
-      this.preferredRunId=null;this.conflict=false;this.run=null;this.recent=[];this.recentCursor="";this.edit(true);
+      this.preferredRunId=null;this.conflict=false;this.run=null;this.recent=[];this.recentCursor="";this.resetHistory();this.edit(true);
     }
     async importDocument(document) {
       if(this.submission) throw new Error("请先确认上一次提交状态");
       if(this.dirty && !this.conflict && !(await this.save())) return false;
       this.navigation++;
       this.doc={id:uid("canvas"),name:document.name||"导入的参数画布",writeSeq:0,graph:clone(document.graph)};
-      this.preferredRunId=null;this.conflict=false;this.run=null;this.runId=null;this.recent=[];this.recentCursor="";clearTimeout(this.pollTimer);this.edit(true);
+      this.preferredRunId=null;this.conflict=false;this.run=null;this.runId=null;this.recent=[];this.recentCursor="";clearTimeout(this.pollTimer);this.resetHistory();this.edit(true);
       return this.save();
     }
     async save() {
       clearTimeout(this.saveTimer);
       if(this.closed) return false;
-      if(!this.options.loggedIn()) {this.persist();this.notify("status");return true;}
+      if(!this.options.loggedIn()) {
+        const saved={...clone(this.doc),updatedAt:new Date().toISOString()};
+        const documents=[saved,...this.localDocuments.filter(item=>item.id!==saved.id)].slice(0,10);
+        try {this.options.storage?.setItem(this.cacheKey+":saved",JSON.stringify(documents));}
+        catch(_) {this.fail(new Error("本地保存空间不足，请导出画布后再试"));return false;}
+        this.localDocuments=documents;this.list=documents.map(({graph,...item})=>item);this.dirty=false;
+        this.persist();this.notify("status");return true;
+      }
       if(this.conflict) return false;
+      if(!this.doc.writeSeq) this.dirty=true;
       if(this.savePromise) return this.savePromise;
       const operation=(async()=>{
         while(this.dirty && !this.closed) {
@@ -364,7 +419,7 @@
             this.dirty=content!==JSON.stringify({name:this.doc.name,graph:this.doc.graph});
             this.persist();
           }
-          const entry={id:sent.id,name:sent.name,writeSeq:result.writeSeq};
+          const entry={id:sent.id,name:sent.name,writeSeq:result.writeSeq,updatedAt:new Date().toISOString()};
           this.list=[entry,...this.list.filter(item=>item.id!==sent.id)];this.notify("status");
         }
         return !this.closed;
@@ -519,9 +574,27 @@
   function status() {
     const el=root?.querySelector("[data-pc-status]");if(!el||!current) return;
     el.textContent=current.conflict?"保存冲突，本地草稿已保留":!options.loggedIn()?"草稿保存在当前浏览器":current.savePromise?"正在保存…":current.dirty?"有未保存改动":"已保存";
-    const select=root.querySelector('[data-action="choose-canvas"]');
-    if(select) select.innerHTML='<option value="">已保存的画布</option>'+current.list.map(item=>`<option value="${esc(item.id)}" ${item.id===current.doc.id?"selected":""}>${esc(item.name)}</option>`).join("");
+    const recent=root.querySelector(".pc-recent-list");
+    if(recent) updateMarkup(recent,recentCanvasHtml());
+    const undo=root.querySelector('[data-action="undo"]');
+    if(undo) undo.disabled=!current.undoStack.length;
     updateSummary();renderPanels();
+  }
+  function recentCanvasHtml() {
+    const items=recentCanvases(current.list);
+    return `<p class="pc-recent-title">最近保存${options.loggedIn()?"":"在本机"} · 最多 10 个</p>${items.length
+      ? items.map(item=>`<button type="button" role="menuitem" data-action="open-canvas" data-canvas-id="${esc(item.id)}" ${current.submission?"disabled":""} title="${esc(item.name||"未命名画布")}"><strong>${esc(item.name||"未命名画布")}</strong><small>${item.updatedAt?esc(runDate(item.updatedAt)):"已保存"}</small></button>`).join("")
+      : '<p class="pc-recent-empty">暂无已保存的画布</p>'}`;
+  }
+  function closeDocumentMenu() {
+    const menu=root?.querySelector(".pc-document-menu");
+    menu?.removeAttribute("open");
+    menu?.querySelector(".pc-open-canvases")?.classList.remove("is-open");
+    menu?.querySelector('[data-action="open-canvases"]')?.setAttribute("aria-expanded","false");
+  }
+  function setRecentOpen(open) {
+    root.querySelector(".pc-open-canvases")?.classList.toggle("is-open",open);
+    root.querySelector('[data-action="open-canvases"]')?.setAttribute("aria-expanded",String(open));
   }
   function parameterValue(node,value,index) {
     const id=esc(node.id),field=node.parameter,base=`data-node="${id}" data-parameter="${esc(field)}" data-value="${index}"`;
@@ -652,12 +725,9 @@
     const {from,to} = selectedEdge, graph = current.doc.graph;
     const edges = graph.edges.filter(edge => edge.from !== from || edge.to !== to);
     if (edges.length === graph.edges.length) {clearEdgeSelection();return;}
-    const removal = clone(graph);
     selectedEdge = null;
     graph.edges = edges;
     current.edit(true);
-    current.removal = removal;
-    render();
     root.querySelector(".pc-scroll")?.focus({preventScroll:true});
   }
 
@@ -894,11 +964,13 @@
     const active = document.activeElement;
     const ordinal = element.contains(active) ? active.dataset.select : null;
     const mode = element.contains(active) ? active.dataset.matchMode : null;
+    const canvasId = element.contains(active) ? active.dataset.canvasId : null;
     element.innerHTML = markup;
     element.dataset.rendered = markup;
     element.scrollTop = scrollTop;
     if (ordinal != null) element.querySelector(`[data-select="${Number(ordinal)}"]`)?.focus({preventScroll:true});
     if (mode != null) element.querySelector(`[data-match-mode="${mode}"]`)?.focus({preventScroll:true});
+    if (canvasId != null) [...element.querySelectorAll('[data-canvas-id]')].find(item=>item.dataset.canvasId===canvasId)?.focus({preventScroll:true});
   }
 
   function renderPanels() {
@@ -964,23 +1036,18 @@
         ${isGuided ? "" : '<button type="button" data-action="add-node-menu" aria-haspopup="dialog">＋ 添加节点</button>'}
         <button type="button" data-action="toggle-history" aria-expanded="false" aria-controls="pc-drawer">出图历史</button>
         <button type="button" class="pc-primary" data-action="preview">预览出图</button>
-        <details class="pc-document-menu"><summary>更多</summary><div>
-          <label>打开画布<select aria-label="打开已保存画布" data-action="choose-canvas" ${current.submission?"disabled":""}></select></label>
-          ${current.listCursor ? `<button type="button" data-action="more-canvases" ${current.listLoading?"disabled":""}>${current.listLoading?"正在载入…":"加载更多画布"}</button>` : ""}
-          <button type="button" data-action="new" ${current.submission?"disabled":""}>新建画布</button>
-          <button type="button" data-action="save">保存画布</button>
-          <button type="button" data-action="copy" ${current.submission?"disabled":""}>另存副本</button>
-          <button type="button" data-action="export">导出画布</button>
-          ${flow?.group.type==="combine" && flow.parameters.length ? '<button type="button" data-action="group-parameters">合并参数节点</button>' : ""}
-          ${isGuided ? '<button type="button" data-action="free-view">切换到节点画布</button>' : `<button type="button" data-action="locate-nodes">回到节点</button>
-            <button type="button" data-action="arrange">整理节点位置</button>
-            <button type="button" data-action="guided-view" ${!flow?"disabled":""}>切换到搭配视图</button>`}
+        <details class="pc-document-menu"><summary aria-haspopup="menu">${sketchIcon("more")}<span>更多</span></summary><div class="pc-document-actions" role="menu" aria-label="画布操作">
+          <button type="button" role="menuitem" data-action="new" ${current.submission?"disabled":""}>${sketchIcon("new")}<span>新建画布</span></button>
+          <button type="button" role="menuitem" data-action="save">${sketchIcon("save")}<span>保存画布</span></button>
+          <button type="button" role="menuitem" data-action="export">${sketchIcon("export")}<span>导出画布</span></button>
+          <div class="pc-open-canvases"><button type="button" role="menuitem" data-action="open-canvases" aria-haspopup="menu" aria-expanded="false" aria-controls="pc-recent-canvases">${sketchIcon("open")}<span>打开画布</span><span aria-hidden="true">‹</span></button>
+            <div id="pc-recent-canvases" class="pc-recent-list" role="menu" aria-label="最近保存的画布"></div></div>
         </div></details>
       </div></div>
-      ${current.error?`<div class="pc-error" role="alert">${esc(current.error)}${current.conflict?'。可另存副本保留本地改动。':""}</div>`:""}
+      ${current.error?`<div class="pc-error" role="alert">${esc(current.error)}${current.conflict?'<button type="button" data-action="recover-copy">恢复为新画布</button>':""}</div>`:""}
       ${isGuided?'<nav class="pc-step-nav" aria-label="跳转画布步骤"><button type="button" data-action="step" data-step="parameters">1 准备参数</button><button type="button" data-action="step" data-step="matching">2 搭配方式</button><button type="button" data-action="step" data-step="checkout">3 预览出图</button></nav>':""}
-      ${current.removal?'<div class="pc-undo" role="status">已移除，尚可撤销 <button type="button" data-action="undo-remove">撤销移除</button></div>':""}
       <div class="pc-workspace">
+        <button type="button" class="pc-floating-undo" data-action="undo" aria-label="撤销" title="撤销 (Ctrl+Z)" ${current.undoStack.length?"":"disabled"}>${sketchIcon("undo")}</button>
         ${isGuided ? guidedHtml(flow) : `<div class="pc-scroll" tabindex="0" aria-label="参数节点画布" aria-describedby="pc-wire-hint"><div class="pc-board" style="--pc-left:${left}px;--pc-top:${top}px"><div class="pc-world" style="--pc-width:${width}px;--pc-height:${height}px"><svg class="pc-edges" aria-label="节点连线"></svg>${nodes.map((node,index)=>nodeHtml(node,index)).join("")}</div></div></div>
           <div class="pc-edge-actions" role="group" aria-label="已选中连线" hidden><span>已选中连线</span><button type="button" data-action="delete-edge">删除连线</button><button type="button" data-action="cancel-edge">取消</button></div>
           <p id="pc-wire-hint" data-wire-hint aria-live="polite"></p>`}
@@ -1004,6 +1071,7 @@
       for (const card of canvas.querySelectorAll("[data-card]")) nodeResizeObserver.observe(card);
     }
     const body=root.querySelector('.pc-guided-body');if(body) body.scrollTop=oldScroll;
+    bindDocumentMenu();
   }
   function guidedHtml(flow) {
     return `<div class="pc-guided-body"><main class="pc-parameters-area" aria-label="准备参数"><div class="pc-step-title"><span>1</span><div><h2>准备参数</h2><p>填写想画的内容，画风和比例都可添加多项。</p></div></div>
@@ -1016,7 +1084,7 @@
   }
   function valueChanged(target) {
     const node=current.doc.graph.nodes.find(n=>n.id===target.dataset.node);
-    if(target.hasAttribute("data-name")) {current.doc.name=target.value;current.edit();return;}
+    if(target.hasAttribute("data-name")) {current.doc.name=target.value;current.edit(false,{group:"name"});return;}
     if(!node) return;
     if(target.dataset.property) node[target.dataset.property]=target.dataset.property==="repeat"?Number(target.value):target.value;
     else if(target.dataset.value!=null) {
@@ -1024,7 +1092,7 @@
       const index=Number(target.dataset.value);
       values[index]=["colors","tones","moods"].includes(field)?target.value.split(/[,，\n]/).map(v=>v.trim()).filter(Boolean):target.value;
     }
-    current.edit();
+    current.edit(false,{group:`${target.dataset.node}:${target.dataset.parameter||target.dataset.property}:${target.dataset.value??""}`});
   }
   function focusParameter(node,last=false) {
     const card=Array.from(root.querySelectorAll('[data-card]')).find(el=>el.dataset.card===node?.id);
@@ -1037,7 +1105,7 @@
     activePanel = panel;
     outputPanelId = id;
     renderPanels();
-    if (panel) root.querySelector(".pc-document-menu")?.removeAttribute("open");
+    if (panel) closeDocumentMenu();
     if (focus && panel) root.querySelector(".pc-drawer:not([hidden]) [data-action='close-drawer']")?.focus({preventScroll:true});
   }
 
@@ -1050,6 +1118,7 @@
   }
 
   function beginPan(event, viewport) {
+    viewport.focus({preventScroll:true});
     const pointerId = event.pointerId;
     const {clientX, clientY} = event;
     let {scrollLeft, scrollTop} = viewport;
@@ -1095,12 +1164,24 @@
     }
     if (event.button===1) event.preventDefault();
   }
+  function bindDocumentMenu() {
+    const recentWrap=root.querySelector(".pc-open-canvases");
+    if(recentWrap) {
+      recentWrap.onpointerenter=event=>{if(event.pointerType!=="touch") setRecentOpen(true);};
+      recentWrap.onpointerleave=event=>{if(event.pointerType!=="touch" && !recentWrap.contains(document.activeElement)) setRecentOpen(false);};
+      recentWrap.onfocusout=event=>{if(!recentWrap.contains(event.relatedTarget)) setRecentOpen(false);};
+    }
+    const documentMenu=root.querySelector(".pc-document-menu");
+    if(documentMenu) {
+      documentMenu.ontoggle=()=>{if(!documentMenu.open) setRecentOpen(false);};
+      documentMenu.onfocusout=event=>{if(!documentMenu.contains(event.relatedTarget)) closeDocumentMenu();};
+    }
+  }
   function bind() {
     root.oninput=event=>{if(event.target.matches("input:not([type=checkbox]),textarea")) valueChanged(event.target);};
     root.onchange=event=>{
       const t=event.target;
       if(t.dataset.select!=null) {const n=Number(t.dataset.select);t.checked?current.selected.add(n):current.selected.delete(n);current.confirmation=null;renderPanels();return;}
-      if(t.dataset.action==="choose-canvas"&&t.value) {busy(()=>current.open(t.value));return;}
       if(t.matches("select[data-node]")) valueChanged(t);
     };
     root.onclick=event=>{
@@ -1108,6 +1189,9 @@
       if(edge) {selectEdge(edge);return;}
       const button=event.target.closest("button[data-action]");if(!button) return;
       const action=button.dataset.action,node=current.doc.graph.nodes.find(n=>n.id===button.dataset.node),index=Number(button.dataset.value);
+      if(action==="open-canvases") {setRecentOpen(event.pointerType==="touch"?!root.querySelector(".pc-open-canvases").classList.contains("is-open"):true);return;}
+      if(action==="open-canvas") {closeDocumentMenu();return void busy(()=>current.open(button.dataset.canvasId));}
+      if(action==="undo") {current.undo();root.querySelector('.pc-scroll')?.focus({preventScroll:true});return;}
       if(action==="delete-edge") {deleteSelectedEdge();return;}
       if(action==="cancel-edge") {clearEdgeSelection();root.querySelector(".pc-scroll")?.focus({preventScroll:true});return;}
       if(action==="toggle-history") {showPanel(activePanel==="history"?null:"history",null,false);return;}
@@ -1178,11 +1262,10 @@
         focusParameter(added);return;
       }
       if(action==="match-mode") {node.mode=button.dataset.matchMode;current.edit();return;}
-      if(action==="undo-remove") {const graph=current.removal;if(graph) {current.doc.graph=graph;current.edit(true);}return;}
-      if(action==="save") return void busy(()=>current.save());
+      if(action==="save") {closeDocumentMenu();if(!current.doc.writeSeq) current.dirty=true;return void busy(()=>current.save());}
       if(action==="more-canvases") return void busy(()=>current.loadMoreCanvases());
       if(action==="more-runs") return void busy(()=>current.loadMoreRuns());
-      if(action==="new"||action==="copy") return void busy(()=>current.create(action==="copy"));
+      if(action==="new"||action==="recover-copy") {closeDocumentMenu();return void busy(()=>current.create(action==="recover-copy"));}
       if(action==="preview") {
         showPanel("preview",null,false);
         if(current.submission||current.preview) {renderPanels();return;}
@@ -1199,7 +1282,13 @@
         if(current.submitting||current.confirmation!=="submit"||!current.preview) return;
         submitFromPreview();return;
       }
-      if(action==="export") {const url=URL.createObjectURL(new Blob([JSON.stringify(current.doc,null,2)],{type:"application/json"}));const a=document.createElement("a");a.href=url;a.download="参数画布.json";a.click();URL.revokeObjectURL(url);return;}
+      if(action==="export") {
+        closeDocumentMenu();
+        const url=URL.createObjectURL(new Blob([JSON.stringify(current.doc,null,2)],{type:"application/json"}));
+        const a=document.createElement("a");a.href=url;a.download="参数画布.json";
+        document.body.appendChild(a);a.click();a.remove();
+        setTimeout(()=>URL.revokeObjectURL(url),1000);return;
+      }
       if(action==="edit-field" || action==="add-field") {
         const field=button.dataset.parameter;
         activeFields.set(node.id,field);
@@ -1227,7 +1316,6 @@
         const resource=(options.resources?.(field==="layout"?"layout":"style")||[]).find(item=>(item.id||item.code)===code);
         if(resource?.image) options.openImage?.(resource.image,`${code} ${resource.name_zh||resource.name||""}`);return;
       }
-      const removal=["remove-node","remove-value","remove-field","group-parameters"].includes(action)?clone(current.doc.graph):null;
       if(action==="remove-node") {current.doc.graph.nodes=current.doc.graph.nodes.filter(n=>n!==node);current.doc.graph.edges=current.doc.graph.edges.filter(e=>e.from!==node.id&&e.to!==node.id);}
       else if(action==="remove-field") {
         delete node.fields[fieldNode.parameter];
@@ -1247,7 +1335,6 @@
       ));
       else return;
       current.edit(true);
-      if(removal) {current.removal=removal;render();}
       if(action==="add-value") focusParameter(node,true);
     };
     root.oncontextmenu=root.ondblclick=event=>{
@@ -1257,6 +1344,28 @@
     };
     root.onkeydown=event=>{
       const editing=event.target.closest("input,textarea,select,[contenteditable]");
+      if(!editing && (event.ctrlKey||event.metaKey) && !event.altKey && ["z","y"].includes(event.key.toLowerCase())) {
+        event.preventDefault();event.stopPropagation();current.undo(event.key.toLowerCase()==="y"||event.shiftKey);root.querySelector('.pc-scroll')?.focus({preventScroll:true});return;
+      }
+      const menu=event.target.closest(".pc-document-menu");
+      if(menu && ["ArrowDown","ArrowUp","ArrowLeft","ArrowRight","Escape"].includes(event.key)) {
+        event.preventDefault();event.stopPropagation();
+        const open=root.querySelector('[data-action="open-canvases"]'),summary=menu.querySelector("summary");
+        if(event.key==="Escape") {closeDocumentMenu();summary.focus();return;}
+        const inRecent=Boolean(event.target.closest(".pc-recent-list"));
+        if((event.key==="ArrowLeft"||event.key==="ArrowRight") && (event.target===open||inRecent)) {
+          if(inRecent) {setRecentOpen(false);open.focus();}
+          else {setRecentOpen(true);root.querySelector('.pc-recent-list button')?.focus();}
+          return;
+        }
+        if(!["ArrowUp","ArrowDown"].includes(event.key)) return;
+        menu.open=true;
+        const buttons=inRecent?[...root.querySelectorAll('.pc-recent-list button:not(:disabled)')]
+          :[...menu.querySelectorAll('.pc-document-actions>button:not(:disabled),.pc-open-canvases>button')];
+        const index=buttons.indexOf(event.target),next=index+(event.key==="ArrowDown"?1:-1);
+        (buttons[(next+buttons.length)%buttons.length]||summary).focus();
+        return;
+      }
       if(!editing && (event.key==="Enter" || event.key===" ") && event.target.closest("[data-edge-from]")) {
         event.preventDefault();selectEdge(event.target.closest("[data-edge-from]"));return;
       }
@@ -1270,7 +1379,7 @@
       }
     };
     root.onpointerdown=event=>{
-      if (!event.target.closest(".pc-document-menu")) root.querySelector(".pc-document-menu")?.removeAttribute("open");
+      if (!event.target.closest(".pc-document-menu")) closeDocumentMenu();
       const viewport=event.target.closest(".pc-scroll");
       if(viewport && event.button===1) {beginPan(event,viewport);return;}
       if(event.button!==0 || !event.isPrimary) return;
@@ -1294,6 +1403,7 @@
       }
       if(event.target.closest(".pc-board") && event.pointerType!=="touch") clearWire();
       const header=event.target.closest("[data-drag]");if(!header||event.target.closest("button")) return;
+      viewport.focus({preventScroll:true});
       const node=current.doc.graph.nodes.find(n=>n.id===header.dataset.drag),card=header.closest(".pc-node"),start={x:event.clientX,y:event.clientY,nx:Number(node.x)||0,ny:Number(node.y)||0};
       const pointerId=event.pointerId;
       const controller=new AbortController(),listener={signal:controller.signal};
@@ -1362,6 +1472,7 @@
     else if(changedRoot) {render();bind();}
   }
   function dismissInteractions() {
+    closeDocumentMenu();
     clearEdgeSelection();
     closeNodeMenu();
     cancelPointer?.();
@@ -1399,5 +1510,5 @@
       else showPanel("output");
     }
   },importDocument:document=>current?.importDocument(document),reset:()=>{dismissInteractions();nodeResizeObserver?.disconnect();current?.close();current=null;root=null;panelCanvasId=null;}};
-  if(global.__HANDRAW_TESTING__) global.HandrawParameterCanvas.testing={CanvasStore,blank,selectedQuote,arrangeNodes,pickResourceCandidate,simpleFlow,combinationSummary,addGuidedParameter,connectionError,addCanvasNode,outputItems,groupExistingParameters,matchingPreview,matchingSources};
+  if(global.__HANDRAW_TESTING__) global.HandrawParameterCanvas.testing={CanvasStore,blank,selectedQuote,arrangeNodes,pickResourceCandidate,simpleFlow,combinationSummary,addGuidedParameter,connectionError,addCanvasNode,outputItems,groupExistingParameters,matchingPreview,matchingSources,recentCanvases};
 })(window);

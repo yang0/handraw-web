@@ -2,7 +2,7 @@
 const test=require("node:test"),assert=require("node:assert/strict"),vm=require("node:vm"),fs=require("node:fs");
 const context={window:{__HANDRAW_TESTING__:true},setTimeout,clearTimeout,console};
 vm.createContext(context);vm.runInContext(fs.readFileSync("demo/assets/parameter-canvas.js","utf8"),context);
-const {CanvasStore,selectedQuote,arrangeNodes,pickResourceCandidate,simpleFlow,combinationSummary,addGuidedParameter,connectionError,addCanvasNode,outputItems,groupExistingParameters,matchingPreview,matchingSources}=context.window.HandrawParameterCanvas.testing;
+const {CanvasStore,selectedQuote,arrangeNodes,pickResourceCandidate,simpleFlow,combinationSummary,addGuidedParameter,connectionError,addCanvasNode,outputItems,groupExistingParameters,matchingPreview,matchingSources,recentCanvases}=context.window.HandrawParameterCanvas.testing;
 const storage=new Map();
 function store(t,api,scope="user:canvas") {
   const instance=new CanvasStore({api,scope,loggedIn:()=>true,storage:{getItem:key=>storage.get(key),setItem:(key,value)=>storage.set(key,value)}});
@@ -214,6 +214,13 @@ test("canvas saves serialize and include edits made while the first save is outs
   assert.equal(writes.length,2);assert.equal(writes[0].baseWriteSeq,0);assert.equal(writes[1].baseWriteSeq,1);
   assert.equal(writes[1].graph.nodes[0].fields.prompt[0],"Second");assert.equal(s.dirty,false);
 });
+test("explicit save persists a new untouched canvas once and repeated saves stay idempotent",async t=>{
+  storage.clear();let writes=0;
+  const s=store(t,async()=>{writes++;return {writeSeq:1};});
+  assert.equal(s.dirty,false);assert.equal(await s.save(),true);assert.equal(writes,1);
+  assert.equal(s.doc.writeSeq,1);assert.equal(s.list[0].id,s.doc.id);assert.ok(s.list[0].updatedAt);
+  assert.equal(await s.save(),true);assert.equal(writes,1);
+});
 test("save conflict retains the local document and can be recovered as an explicit copy",async t=>{
   storage.clear();const s=store(t,async()=>{const error=new Error("changed elsewhere");error.status=409;error.code="canvas_conflict";throw error;});
   s.doc.graph.nodes[0].fields.prompt=["Local work"];s.edit();const old=s.doc.id;
@@ -320,4 +327,92 @@ test("background canvas bootstrap cannot override an explicit history navigation
   });
   const loading=s.load();await s.openRun("wanted-run");releaseList();await loading;
   assert.equal(s.doc.id,"wanted-canvas");assert.equal(s.run.id,"wanted-run");
+});
+
+test("recent canvases use the latest ten real documents, never official presets",()=>{
+  const items=Array.from({length:15},(_,i)=>({id:"doc-"+i,name:i===14?'<img src=x onerror="bad">':"Canvas "+i,updatedAt:new Date(1800000000000+i*1000).toISOString()}));
+  items.push({id:"preset_private",updatedAt:"2099-01-01"},{id:"official",isOfficialPreset:true,updatedAt:"2099-01-01"});
+  const before=JSON.stringify(items),recent=recentCanvases(items.reverse());
+  assert.deepEqual(Array.from(recent,item=>item.id),Array.from({length:10},(_,i)=>"doc-"+(14-i)));
+  assert.equal(items.length,17);assert.equal(JSON.stringify(items.reverse()),before);
+});
+
+test("undo restores graph edits, movement and connections without reverting save receipts or accepted runs",t=>{
+  storage.clear();const s=store(t,async()=>({writeSeq:1}));
+  const initial=JSON.stringify(s.doc.graph),id=s.doc.id;
+  s.doc.graph.nodes[0].fields.prompt=["Forest"];s.edit();
+  s.doc.graph.nodes[0].x=180;s.edit();
+  s.doc.graph.edges=[];s.edit();s.doc.writeSeq=42;s.run=run("accepted");
+  assert.equal(s.undo(),true);assert.equal(s.doc.graph.edges.length,1);assert.equal(s.doc.graph.nodes[0].x,180);
+  assert.equal(s.undo(),true);assert.equal(s.doc.graph.nodes[0].x,32);
+  assert.equal(s.undo(),true);assert.equal(JSON.stringify(s.doc.graph),initial);
+  assert.equal(s.doc.id,id);assert.equal(s.doc.writeSeq,42);assert.equal(s.run.id,"accepted");
+  assert.equal(s.undo(),false);assert.equal(s.undo(true),true);assert.equal(s.doc.graph.nodes[0].fields.prompt[0],"Forest");
+  s.doc.graph.nodes[0].fields.prompt=["Another"];s.edit();assert.equal(s.redoStack.length,0);
+  assert.equal(s.dirty,true);assert.equal(s.preview,null);
+});
+
+test("typing groups into one undo step, unrelated fields separate and history stays bounded",t=>{
+  storage.clear();const s=store(t,async()=>({writeSeq:1}));
+  for(const value of ["F","Fo","Forest"]) {s.doc.graph.nodes[0].fields.prompt=[value];s.edit(false,{group:"prompt"});}
+  assert.equal(s.undoStack.length,1);
+  s.doc.name="New name";s.edit(false,{group:"name"});assert.equal(s.undoStack.length,2);
+  s.undo();assert.equal(s.doc.name,"参数组合画布");s.undo();assert.equal(s.doc.graph.nodes[0].fields.prompt[0],"");
+  for(let i=0;i<55;i++) {s.doc.name="Name "+i;s.edit();}
+  assert.equal(s.undoStack.length,40);
+});
+
+test("native input undo returning to a checkpoint does not leave an empty graph undo step",t=>{
+  storage.clear();const s=store(t,async()=>({writeSeq:1}));
+  s.doc.graph.nodes[0].x=180;s.edit();const original=s.doc.name;
+  s.doc.name="Typed title";s.edit(false,{group:"name"});
+  s.doc.name=original;s.edit(false,{group:"name"});
+  assert.equal(s.undoStack.length,1);s.undo();assert.equal(s.doc.graph.nodes[0].x,32);
+  s.doc.name="More typing";s.edit(false,{group:"name"});s.undo();assert.equal(s.doc.name,original);
+});
+
+test("saved local canvases reopen separately and remain isolated by account scope",async t=>{
+  storage.clear();const config=scope=>({scope,loggedIn:()=>false,storage:{getItem:key=>storage.get(key),setItem:(key,value)=>storage.set(key,value)}});
+  const s=new CanvasStore(config("guest-saved"));t.after(()=>s.close());
+  s.doc.name="First";s.doc.graph.nodes[0].fields.prompt=["Keep first"];s.edit();await s.save();const first=s.doc.id;
+  await s.create();s.doc.name="Second";s.edit();await s.save();const second=s.doc.id;
+  await s.open(first);assert.equal(s.doc.name,"First");assert.equal(s.doc.graph.nodes[0].fields.prompt[0],"Keep first");
+  assert.equal(s.undoStack.length,0);assert.equal(s.doc.writeSeq,0);
+  const restored=new CanvasStore(config("guest-saved"));t.after(()=>restored.close());
+  assert.equal(restored.list.length,2);await restored.open(second);assert.equal(restored.doc.name,"Second");
+  const other=new CanvasStore(config("guest-other"));t.after(()=>other.close());
+  assert.equal(other.list.length,0);await assert.rejects(other.open(first),/不存在/);
+});
+
+test("switching canvases saves pending edits and a rejected save keeps the current draft",async t=>{
+  storage.clear();let rejectSave=true,reads=0;
+  const s=store(t,async(url,options)=>{
+    if(options?.method==="POST") {if(rejectSave) throw new Error("Unavailable");return {writeSeq:2};}
+    reads++;if(url.endsWith("/runs")) return {items:[]};
+    return {canvas:{id:"another",name:"Another",writeSeq:1,graph:context.window.HandrawParameterCanvas.testing.blank().graph}};
+  });
+  s.doc.graph.nodes[0].fields.prompt=["Keep edits"];s.edit();const initial=s.doc.id;
+  await s.open("another");assert.equal(s.doc.id,initial);assert.equal(reads,0);assert.equal(s.undoStack.length,1);
+  rejectSave=false;await s.open("another");assert.equal(s.doc.id,"another");assert.equal(s.undoStack.length,0);
+});
+
+test("local archive quota failure preserves the current document and previous saved list",async t=>{
+  let fail=false;const memory=new Map();
+  const s=new CanvasStore({scope:"quota",loggedIn:()=>false,storage:{getItem:key=>memory.get(key),setItem:(key,value)=>{if(fail && key.endsWith(":saved")) throw Error("Quota");memory.set(key,value);}}});t.after(()=>s.close());
+  s.doc.name="Saved";s.edit();assert.equal(await s.save(),true);
+  s.doc.name="Unsaved";s.edit();fail=true;assert.equal(await s.save(),false);
+  assert.equal(s.doc.name,"Unsaved");assert.equal(s.dirty,true);assert.equal(s.list[0].name,"Saved");assert.match(s.error,/导出/);
+});
+
+test("current canvas renders four menu actions, safe recent titles and one standalone undo",t=>{
+  const canvas=context.window.HandrawParameterCanvas,doc=canvas.testing.blank();
+  context.window.localStorage={getItem:()=>JSON.stringify({doc}),setItem(){}};
+  const root={innerHTML:"",querySelector:()=>null,querySelectorAll:()=>[]};
+  canvas.mount(root,{scope:"four-action-render",loggedIn:()=>false,resources:()=>[]});
+  t.after(()=>{canvas.reset();delete context.window.localStorage;});
+  const menu=root.innerHTML.split('class="pc-document-actions"')[1].split('</details>')[0];
+  assert.deepEqual([...menu.matchAll(/data-action="([^"]+)"/g)].map(m=>m[1]),["new","save","export","open-canvases"]);
+  assert.equal([...root.innerHTML.matchAll(/data-action="undo"/g)].length,1);
+  assert.ok(!root.innerHTML.includes('class="pc-undo"'));assert.ok(!root.innerHTML.includes('data-action="choose-canvas"'));
+  assert.ok(root.innerHTML.includes('aria-label="最近保存的画布"'));
 });
