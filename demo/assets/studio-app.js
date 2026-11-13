@@ -53,7 +53,6 @@
   let _workspaceHydrationController = null;
   const _workspaceCollectionsReady=new Set();
   const _workspaceCollectionsLoading=new Map();
-  let _articleOpenSerial=0;
   const _generationControllers = new Set();
   let _articlesSyncTimer = null;
   let _articlesSyncVersion = 0;
@@ -206,7 +205,6 @@
     window.HandrawParameterCanvas?.reset();
     _workspaceCollectionsReady.clear();
     _workspaceCollectionsLoading.clear();
-    _articleOpenSerial+=1;
     const changed = activeCacheScope !== scope;
     if (!changed && CS.tabs.length) return false;
 
@@ -859,10 +857,10 @@
     }
   }
 
-  async function loadArticleDocument(id) {
+  async function loadArticleDocument(id, isCurrent = () => true) {
     const epoch=cacheScopeEpoch,scope=activeCacheScope;
     const result=await S.apiJson(`/api/studio/articles/${encodeURIComponent(id)}`);
-    if(isStaleScope(epoch,scope)) return false;
+    if(isStaleScope(epoch,scope) || !isCurrent()) return false;
     const previous=findArticleById(id),article=result.article;
     if(!article) throw new Error("文章不存在");
     const payload=articleCloudPayload(article);
@@ -11361,7 +11359,7 @@
 
   function buildDefaultCardPromptForPosition(planNode, cardRole, cardTitle, cardRatio, afterBlockIdx) {
     const ctrl = resolvePlanSourceControl(planNode);
-    const blocks = E.parseArticleReadonlyBlocks(planNode.data?.markdown || "");
+    const blocks = E.parseArticleReadonlyBlocks(planNode.data?.markdown || "", { noStarter: true });
     let contextSnippet = "";
     if (afterBlockIdx < 0) {
       contextSnippet = blocks
@@ -11561,6 +11559,7 @@
             }
             card.role = draftRole;
             card.title = nextTitle;
+            if (card.ratio !== draftRatio) card.ratioCustomized = true;
             card.ratio = draftRatio;
             card.prompt = nextPrompt;
             commitArticleTargetChanges(target, { bumpTime: true });
@@ -11597,14 +11596,14 @@
     const target = resolveArticleTarget(planNode);
     if (target?.isActiveCanvas) pushUndo();
     const ctrl = target?.isActiveCanvas ? resolvePlanSourceControl(planNode) : null;
-    const blocks = E.parseArticleReadonlyBlocks(planNode.data?.markdown || "");
+    const blocks = E.parseArticleReadonlyBlocks(planNode.data?.markdown || "", { noStarter: true });
     const clampedIdx = Math.max(-1, Math.min(blocks.length - 1, Math.round(Number(afterBlockIdx))));
     const hasCoverAlready = (planNode.data?.cards || []).some((c) => c.role === "cover");
     const role = clampedIdx === -1 && !hasCoverAlready ? "cover" : "inline";
     const ratio =
       role === "cover"
-        ? ctrl?.data?.coverRatio || "2.35:1"
-        : ctrl?.data?.inlineRatio || "4:3";
+        ? ctrl?.data?.coverRatio || target?.art?.coverRatio || "2.35:1"
+        : ctrl?.data?.inlineRatio || target?.art?.inlineRatio || "4:3";
 
     const anchorBlk = clampedIdx >= 0 ? blocks[clampedIdx] : null;
     const defaultTitle =
@@ -11639,6 +11638,8 @@
     }
     existing.splice(insertAt, 0, newCard);
     planNode.data.cards = sortPlanCardsInDocOrder(existing);
+    const draft = CS.articleEditorDraft;
+    if (draft && draft.id === target?.art?.id) draft.cards = planNode.data.cards;
 
     commitArticleTargetChanges(target, { bumpTime: true });
     renderFullPreviewStage();
@@ -11985,6 +11986,9 @@
       };
     });
 
+    // The editor resolves insertion against live text before adding a card.
+    if (isEditorPage) return;
+
     // 5. Insert card at exact gap position
     sheetEl.querySelectorAll("[data-plan-insert-at]").forEach((btn) => {
       btn.onclick = (e) => {
@@ -11994,11 +11998,8 @@
       };
     });
 
-    // Skip old drag for editor page (handled by new editor drag system)
-    if (isEditorPage) return;
-
     // 6. Notion-style Drag-and-Drop Reordering via ⋮⋮ handle
-    sheetEl.querySelectorAll("[data-plan-drag]").forEach((handleEl) => {
+    sheetEl.querySelectorAll(".ic-plan-drag-handle[data-plan-drag]").forEach((handleEl) => {
       handleEl.addEventListener("pointerdown", (e) => {
         if (e.button !== 0) return;
         e.preventDefault();
@@ -12166,48 +12167,54 @@
     }
   }
 
-  function deleteArticle(aid) {
-    const art = findArticleById(aid) || (CS.myArticles || []).find((x) => x.id === aid);
-    const title = art?.articleTitle || (CS.articleEditorDraft?.id === aid ? CS.articleEditorDraft.title : "") || "未命名文章";
-    if (S && typeof S.deleteArticle === "function") {
-      return S.deleteArticle(aid, {
-        articleTitle: title,
-        onSuccess() {
-          CS.myArticles = (CS.myArticles || []).filter((x) => x.id !== aid);
-          removeArticleFromWorkspace(aid);
-          clearUnifiedArticleEditorFlush();
-          persistMyArticles();
-          persistOpenTabs();
-
-          const wasActive = CS.activeArticleId === aid || CS.articleEditorDraft?.id === aid;
-          if (wasActive) {
-            CS.articleEditorDraft = null;
-            CS.activeArticleId = CS.myArticles[0]?.id || null;
-          }
-
-          if (CS.articleSubView === "editor" || wasActive) {
-            openMyArticlesPage({ subView: "all-list" });
-          } else {
-            renderFullPreviewStage();
-          }
-        }
-      });
+  function finishArticleDeletion(aid) {
+    const editing = CS.stageView === "preview" && CS.articleSubView === "editor";
+    const wasActive = CS.activeArticleId === aid || CS.articleEditorDraft?.id === aid;
+    const keepScroll = editing && !wasActive
+      ? DOM.previewStage?.querySelector("#wechat-scroll-container")?.scrollTop : null;
+    const sorted = getSortedMyArticles();
+    const index = sorted.findIndex(article => article.id === aid);
+    const next = index < 0 ? sorted[0] : sorted[index + 1] || sorted[index - 1];
+    if (wasActive) {
+      clearUnifiedArticleEditorFlush();
+      CS.articleEditorDraft = null;
+      CS.activeArticleId = null;
+      CS.activePlanNodeId = null;
+    } else if (editing) {
+      flushUnifiedArticleEditor();
     }
     CS.myArticles = (CS.myArticles || []).filter((x) => x.id !== aid);
     removeArticleFromWorkspace(aid);
-    clearUnifiedArticleEditorFlush();
+    _articleCloudBases.delete(aid);
+    _articleCloudSnapshots.delete(aid);
     persistMyArticles();
     persistOpenTabs();
-    const wasActive = CS.activeArticleId === aid || CS.articleEditorDraft?.id === aid;
-    if (wasActive) {
-      CS.articleEditorDraft = null;
-      CS.activeArticleId = CS.myArticles[0]?.id || null;
-    }
-    if (CS.articleSubView === "editor" || wasActive) {
+    if (editing && wasActive) {
+      CS.activeArticleId = next?.id || null;
+      replaceArticleEditorUrl(CS.activeArticleId);
+    } else if (CS.stageView === "preview" && CS.articleSubView === "reader" && wasActive) {
       openMyArticlesPage({ subView: "all-list" });
-    } else {
-      renderFullPreviewStage();
+      return;
     }
+    if (CS.stageView === "preview") renderFullPreviewStage();
+    if (keepScroll != null) {
+      const scroll = DOM.previewStage?.querySelector("#wechat-scroll-container");
+      if (scroll) scroll.scrollTop = keepScroll;
+    }
+  }
+
+  function deleteArticle(aid) {
+    const art = findArticleById(aid);
+    const title = art?.articleTitle || (CS.articleEditorDraft?.id === aid ? CS.articleEditorDraft.title : "") || "未命名文章";
+    const scope = activeCacheScope;
+    const epoch = cacheScopeEpoch;
+    const onSuccess = () => {
+      if (!isStaleScope(epoch, scope)) finishArticleDeletion(aid);
+    };
+    if (typeof S.deleteArticle === "function") {
+      return S.deleteArticle(aid, { articleTitle: title, onSuccess });
+    }
+    onSuccess();
   }
 
   function renderAllArticlesPaginatedPage(sortedArticles) {
@@ -12471,7 +12478,7 @@
       if(CS.articleLoadingId!==activeSummary.id) {
         CS.articleLoadingId=activeSummary.id;
         const epoch=cacheScopeEpoch,scope=activeCacheScope;
-        void loadArticleDocument(activeSummary.id).then(loaded=>{
+        void loadArticleDocument(activeSummary.id, () => CS.activeArticleId === activeSummary.id).then(loaded=>{
           if(loaded&&!isStaleScope(epoch,scope)&&CS.activeArticleId===activeSummary.id) renderFullPreviewStage();
         }).catch(error=>toast(error.message||"文章加载失败，请重试")).finally(()=>{
           if(!isStaleScope(epoch,scope)&&CS.articleLoadingId===activeSummary.id) CS.articleLoadingId=null;
@@ -12527,6 +12534,7 @@
         openImage:(url,title)=>openImageLightbox(url,title),
         pickReferences:settings=>openAssetPickerModal(settings)
       });
+      else window.HandrawParameterCanvas?.dismissInteractions?.();
     }
 
     renderCreationModeBar();
@@ -13900,7 +13908,18 @@
   }
 
   function clearUnifiedArticleEditorFlush() {
+    CS.articleEditorFlush?.(false);
     CS.articleEditorFlush = null;
+  }
+
+  function replaceArticleEditorUrl(articleId) {
+    const url = new URL(window.location.href);
+    url.searchParams.set("entry", "article");
+    if (articleId) url.searchParams.set("articleId", articleId);
+    else url.searchParams.delete("articleId");
+    url.searchParams.set("subview", "editor");
+    url.searchParams.delete("view");
+    window.history.replaceState(null, "", url.pathname + url.search);
   }
 
   function makeBlankArticleDraft() {
@@ -13935,7 +13954,6 @@
   }
 
   function openUnifiedArticleEditor(articleId = null, { createNew = false, renderNow = true } = {}) {
-    const openSerial=++_articleOpenSerial;
     flushUnifiedArticleEditor();
     if (!createNew) syncAllTabsArticlesIntoStore();
     ensureMyArticlesInitialized();
@@ -13962,16 +13980,18 @@
         art = sorted.length ? sorted[0] : null;
       }
       if (art) {
-        if(art._summary) {
-          const epoch=cacheScopeEpoch,scope=activeCacheScope;
-          void loadArticleDocument(art.id).then(loaded=>{
-            if(loaded&&!isStaleScope(epoch,scope)&&openSerial===_articleOpenSerial) openUnifiedArticleEditor(art.id,{createNew:false,renderNow});
-          }).catch(error=>toast(error.message||"文章加载失败，请重试"));
-          return;
-        }
-
         CS.activeArticleId = art.id;
         CS.activePlanNodeId = art.linkedPlanNodeId || null;
+        if (art._summary) {
+          clearUnifiedArticleEditorFlush();
+          CS.articleEditorDraft = null;
+          CS.previewTab = "article";
+          CS.stageView = "preview";
+          CS.articleSubView = "editor";
+          replaceArticleEditorUrl(art.id);
+          if (renderNow) renderFullPreviewStage();
+          return;
+        }
         draft = draftFromArticle(art);
       }
     }
@@ -13986,16 +14006,7 @@
     CS.stageView = "preview";
     CS.articleSubView = "editor";
 
-    const url = new URL(window.location.href);
-    url.searchParams.set("entry", "article");
-    if (draft.id && !draft.isNewDraft) {
-      url.searchParams.set("articleId", draft.id);
-    } else {
-      url.searchParams.delete("articleId");
-    }
-    url.searchParams.set("subview", "editor");
-    url.searchParams.delete("view");
-    window.history.replaceState(null, "", url.pathname + url.search);
+    replaceArticleEditorUrl(draft.isNewDraft ? null : draft.id);
 
     if (renderNow) renderFullPreviewStage();
     return draft;
@@ -14218,7 +14229,8 @@
     const isCover = role === "cover";
     const status = card.status || "idle";
     const isGenerating = Boolean(options.isGenerating);
-    const { rw, rh } = parseCardRatioNumbers(card.ratio || (isCover ? "2.35:1" : "4:3"));
+    const ratioText = card.ratio || (isCover ? options.coverRatio || "2.35:1" : options.inlineRatio || "4:3");
+    const { rw, rh } = parseCardRatioNumbers(ratioText);
 
     let layoutName = "";
     if (card.layoutId) {
@@ -14226,7 +14238,6 @@
       layoutName = (res && res.name) || "";
     }
 
-    const ratioText = card.ratio || (isCover ? "2.35:1" : "4:3");
     let specMeta = ratioText;
     if (card.layoutId) {
       specMeta += ` · ${card.layoutId}${layoutName ? ' ' + layoutName : ''}`;
@@ -14422,9 +14433,8 @@
     `;
   }
 
-  function openMoveCardPositionModal(planNode, card, inlineNo) {
+  function openMoveCardPositionModal(planNode, card, inlineNo, blocks) {
     if (!planNode || !card) return;
-    const blocks = E.parseArticleReadonlyBlocks(planNode.data?.markdown || "", { noStarter: true });
     if (!blocks.length) {
       toast("正文尚无段落，无法移动");
       return;
@@ -14486,249 +14496,202 @@
           btn.onclick = () => {
             const nextIdx = Number(btn.getAttribute("data-move-to-pos"));
             S.closeModal();
-            if (nextIdx === card.afterBlockIdx) return;
-            card.afterBlockIdx = nextIdx;
-            planNode.data.cards = sortPlanCardsInDocOrder(planNode.data.cards || []);
-            const target = resolveArticleTarget(planNode);
-            if (target?.art) target.art.cards = planNode.data.cards;
-            if (CS.articleEditorDraft?.cards) CS.articleEditorDraft.cards = planNode.data.cards;
-            commitArticleTargetChanges(target, { bumpTime: true });
-            renderFullPreviewStage();
-            const newHandle = DOM.previewStage?.querySelector(`.ic-art-card[data-plan-card-id="${card.id}"] [data-plan-drag]`);
-            if (newHandle) newHandle.focus();
-            const targetBlock = blocks.find((b) => b.idx === nextIdx);
-            const blockPreview = targetBlock ? targetBlock.text.slice(0, 16) : `第 ${nextIdx + 1} 段`;
-            speakArt(`插图 ${inlineNo} 已移到「${blockPreview}」之后`);
+            moveArticleIllustration(planNode, card, blocks.find(block => block.idx === nextIdx), inlineNo);
           };
         });
       }
     });
   }
 
-  function bindArticleEditorInteractions(planNode, flowEl) {
-    if (!planNode || !flowEl) return;
+  function moveArticleIllustration(planNode, card, block, inlineNo) {
     const target = resolveArticleTarget(planNode);
-    const cards = planNode.data?.cards || [];
-    const blocks = E.parseArticleReadonlyBlocks(planNode.data?.markdown || "", { noStarter: true });
+    if (!target || !block) return;
+    const draft = CS.articleEditorDraft?.id === target.art.id ? CS.articleEditorDraft : null;
+    if (draft) flushUnifiedArticleEditor();
+    const savedCard = target.art.cards?.find(item => item.id === card.id);
+    if (!savedCard) return;
+    if (savedCard.afterBlockIdx === block.idx && savedCard.anchorText === block.text) return;
+    savedCard.afterBlockIdx = block.idx;
+    savedCard.anchorText = block.text;
+    savedCard.anchorHeading = /^h[1-6]$/.test(block.kind) ? block.text : "";
+    target.art.cards = sortPlanCardsInDocOrder(target.art.cards);
+    if (draft) draft.cards = target.art.cards;
+    commitArticleTargetChanges(target, { bumpTime: true });
+    renderFullPreviewStage();
+    const handle = [...(DOM.previewStage?.querySelectorAll(".ic-art-handle[data-plan-drag]") || [])]
+      .find(element => element.dataset.planDrag === card.id);
+    handle?.focus();
+    speakArt(`插图 ${inlineNo} 已移到「${block.text.slice(0, 24)}」之后`);
+  }
 
-    // Handle keys and clicks on card handles
-    flowEl.querySelectorAll(".ic-art-handle[data-plan-drag]").forEach((handleEl) => {
-      const cid = handleEl.getAttribute("data-plan-drag");
-      const card = cards.find((c) => c.id === cid);
-      if (!card) return;
-
-      const inlineCards = cards.filter((c) => c.role !== "cover");
+  function bindArticleEditorInteractions(planNode, flowEl) {
+    const cards = planNode.data.cards || [];
+    const inlineCards = cards.filter(card => card.role !== "cover");
+    const scroll = flowEl.closest("#wechat-scroll-container");
+    const readBlocks = () => {
+      const segments = [...flowEl.querySelectorAll(".ic-art-seg-ta")];
+      const markdown = segments.map(textarea => textarea.value).join("\n");
+      return E.parseArticleReadonlyBlocks(markdown, { withLines: true, noStarter: true });
+    };
+    for (const handle of flowEl.querySelectorAll(".ic-art-handle[data-plan-drag]")) {
+      const card = inlineCards.find(item => item.id === handle.dataset.planDrag);
+      if (!card) continue;
       const inlineNo = inlineCards.indexOf(card) + 1;
-
-      // Click handle opens move modal
-      handleEl.onclick = (e) => {
-        e.stopPropagation();
-        openMoveCardPositionModal(planNode, card, inlineNo);
-      };
-
-      // Keyboard navigation
-      handleEl.onkeydown = (e) => {
-        if (e.key === "Enter" || e.key === " ") {
-          e.preventDefault();
-          openMoveCardPositionModal(planNode, card, inlineNo);
+      let suppressClick = false;
+      handle.onclick = event => {
+        event.stopPropagation();
+        if (suppressClick) {
+          suppressClick = false;
           return;
         }
-
-        const maxIdx = blocks.length > 0 ? blocks.length - 1 : 0;
-        let newIdx = null;
-
-        if (e.shiftKey && e.key === "ArrowDown") {
-          e.preventDefault();
-          const nextHeading = blocks.find((b) => b.idx > card.afterBlockIdx && (b.kind === "h1" || b.kind === "h2" || b.kind === "h3"));
-          if (nextHeading) newIdx = nextHeading.idx;
-          else speakArt("已在文章末尾");
-        } else if (e.shiftKey && e.key === "ArrowUp") {
-          e.preventDefault();
-          const prevHeadings = blocks.filter((b) => b.idx < card.afterBlockIdx && (b.kind === "h1" || b.kind === "h2" || b.kind === "h3"));
-          if (prevHeadings.length) newIdx = prevHeadings[prevHeadings.length - 1].idx;
-          else speakArt("已在文章开头");
-        } else if (e.key === "ArrowDown") {
-          e.preventDefault();
-          if (card.afterBlockIdx < maxIdx) newIdx = card.afterBlockIdx + 1;
-          else speakArt("已在文章末尾");
-        } else if (e.key === "ArrowUp") {
-          e.preventDefault();
-          if (card.afterBlockIdx > 0) newIdx = card.afterBlockIdx - 1;
-          else speakArt("已在文章开头");
-        }
-
-        if (newIdx !== null && newIdx !== card.afterBlockIdx) {
-          card.afterBlockIdx = newIdx;
-          planNode.data.cards = sortPlanCardsInDocOrder(planNode.data.cards);
-          if (target?.art) target.art.cards = planNode.data.cards;
-          if (CS.articleEditorDraft?.cards) CS.articleEditorDraft.cards = planNode.data.cards;
-          commitArticleTargetChanges(target, { bumpTime: true });
-          renderFullPreviewStage();
-          const refocused = DOM.previewStage?.querySelector(`.ic-art-card[data-plan-card-id="${card.id}"] [data-plan-drag]`);
-          if (refocused) refocused.focus();
-          const targetBlock = blocks.find((b) => b.idx === newIdx);
-          const blockPreview = targetBlock ? targetBlock.text.slice(0, 16) : `第 ${newIdx + 1} 段`;
-          speakArt(`插图 ${inlineNo} 已移到「${blockPreview}」之后`);
-        }
+        openMoveCardPositionModal(planNode, card, inlineNo, readBlocks());
       };
-    });
-
-    // Notion-style Drag and Drop on Handles
-    flowEl.querySelectorAll(".ic-art-handle[data-plan-drag]").forEach((handleEl) => {
-      handleEl.addEventListener("pointerdown", (e) => {
-        if (e.button !== 0) return;
-        const dragCardId = handleEl.getAttribute("data-plan-drag");
-        const dragCard = cards.find((c) => c.id === dragCardId);
-        const cardDom = flowEl.querySelector(`.ic-art-card[data-plan-card-id="${dragCardId}"]`);
-        if (!dragCard || !cardDom) return;
-
-        const scrollContainer = DOM.previewStage?.querySelector("#wechat-scroll-container");
-        const startX = e.clientX;
-        const startY = e.clientY;
+      handle.onkeydown = event => {
+        if (!["ArrowUp", "ArrowDown"].includes(event.key)) return;
+        event.preventDefault();
+        const direction = event.key === "ArrowDown" ? 1 : -1;
+        const blocks = readBlocks();
+        const ordered = direction > 0 ? blocks : [...blocks].reverse();
+        const block = ordered.find(item => direction * (item.idx - card.afterBlockIdx) > 0 &&
+          (!event.shiftKey || /^h[1-6]$/.test(item.kind)));
+        if (block) moveArticleIllustration(planNode, card, block, inlineNo);
+        else speakArt(direction > 0 ? "已在文章末尾" : "已在文章开头");
+      };
+      handle.onpointerdown = event => {
+        if (event.button !== 0 || !scroll) return;
+        suppressClick = false;
+        const pointerId = event.pointerId;
+        const startX = event.clientX;
+        const startY = event.clientY;
+        let x = startX;
+        let y = startY;
         let moved = false;
-        let ghostEl = null;
-        let dropLineEl = null;
-        let bestTarget = null;
-        let autoScrollTimer = null;
+        let frame = 0;
+        let active = null;
+        let ghost = null;
+        const blocks = readBlocks();
+        const inserted = [];
+        const cardElement = handle.closest(".ic-art-card");
+        if (!blocks.length || !cardElement) return;
+        handle.setPointerCapture(pointerId);
 
-        const inlineCards = cards.filter((c) => c.role !== "cover");
-        const inlineNo = inlineCards.indexOf(dragCard) + 1;
-
-        const cleanupDrag = () => {
-          window.removeEventListener("pointermove", onPointerMove);
-          window.removeEventListener("pointerup", onPointerUp);
-          window.removeEventListener("keydown", onKeyDown);
-          if (autoScrollTimer) clearInterval(autoScrollTimer);
-          flowEl.classList.remove("is-dragging");
-          if (cardDom) {
-            cardDom.style.opacity = "";
-            cardDom.style.borderStyle = "";
+        function showDropPositions() {
+          const sourceTop = cardElement.getBoundingClientRect().top;
+          let lastLine = -1;
+          let blockIndex = 0;
+          for (const segment of flowEl.querySelectorAll(".ic-art-seg")) {
+            const textarea = segment.querySelector("textarea");
+            lastLine += textarea.value.split(/\r?\n/).length;
+            const preview = document.createElement("div");
+            preview.className = "ic-art-drop-preview";
+            while (blockIndex < blocks.length && blocks[blockIndex].endLine <= lastLine) {
+              const block = blocks[blockIndex++];
+              const row = document.createElement("div");
+              row.className = "ic-art-drop-row";
+              row.dataset.articleDropAfter = block.idx;
+              const text = document.createElement("div");
+              text.className = /^h[1-6]$/.test(block.kind) ? "ic-art-drop-heading" : "";
+              text.textContent = block.text;
+              const line = document.createElement("div");
+              line.className = "ic-art-drop-target";
+              line.textContent = "放在这段之后";
+              row.append(text, line);
+              preview.append(row);
+            }
+            segment.append(preview);
+            inserted.push(preview);
           }
-          if (ghostEl && ghostEl.parentNode) ghostEl.parentNode.removeChild(ghostEl);
-          if (dropLineEl && dropLineEl.parentNode) dropLineEl.parentNode.removeChild(dropLineEl);
-        };
-
-        const onKeyDown = (ke) => {
-          if (ke.key === "Escape") {
-            ke.preventDefault();
-            cleanupDrag();
-          }
-        };
-
-        const computeCandidates = () => {
-          const cands = [];
-          const segEls = flowEl.querySelectorAll(".ic-art-seg");
-          segEls.forEach((segEl) => {
-            const sIdx = Number(segEl.getAttribute("data-seg-idx") || 0);
-            const ta = segEl.querySelector(".ic-art-seg-ta");
-            if (!ta) return;
-            const taRect = ta.getBoundingClientRect();
-            const segAfterBlock = Number(segEl.nextElementSibling?.getAttribute("data-gap-after") ?? sIdx);
-            cands.push({
-              afterBlockIdx: Math.max(0, segAfterBlock),
-              y: taRect.bottom,
-              text: ta.value.slice(0, 16)
-            });
-          });
-          flowEl.querySelectorAll(".ic-art-card[data-role='inline']").forEach((cEl) => {
-            const cid = cEl.getAttribute("data-plan-card-id");
-            if (cid === dragCardId) return;
-            const r = cEl.getBoundingClientRect();
-            const blk = Number(cEl.getAttribute("data-after-block") || 0);
-            cands.push({
-              afterBlockIdx: Math.max(0, blk),
-              y: r.bottom,
-              text: cEl.querySelector(".ic-art-subject")?.textContent?.slice(0, 16) || ""
-            });
-          });
-          return cands;
-        };
-
-        let dropCandidates = [];
-
-        const ensureDragVisuals = () => {
-          if (ghostEl) return;
           flowEl.classList.add("is-dragging");
-          cardDom.style.opacity = "0.4";
-          cardDom.style.borderStyle = "dashed";
+          cardElement.classList.add("is-drag-source");
+          scroll.scrollTop += cardElement.getBoundingClientRect().top - sourceTop;
+          ghost = document.createElement("div");
+          ghost.className = "ic-notion-drag-ghost";
+          ghost.textContent = `移动插图 ${inlineNo}`;
+          document.body.append(ghost);
+        }
 
-          ghostEl = document.createElement("div");
-          ghostEl.className = "ic-notion-drag-ghost";
-          ghostEl.textContent = `⋮⋮ 移动插图 ${inlineNo}：${dragCard.title || "配图卡片"}`;
-          document.body.appendChild(ghostEl);
+        function updateTarget() {
+          if (ghost) {
+            ghost.style.left = `${Math.min(x + 12, window.innerWidth - 112)}px`;
+            ghost.style.top = `${Math.max(0, y - 34)}px`;
+          }
+          const hit = document.elementFromPoint(x, y)?.closest("[data-article-drop-after]");
+          const next = hit && flowEl.contains(hit) ? hit : null;
+          if (next === active) return;
+          active?.classList.remove("is-target");
+          active = next;
+          active?.classList.add("is-target");
+        }
 
-          dropLineEl = document.createElement("div");
-          dropLineEl.className = "ic-art-drop-line";
-          dropLineEl.innerHTML = `<span class="ic-art-drop-label"></span>`;
-          flowEl.appendChild(dropLineEl);
+        function autoScroll() {
+          if (!flowEl.isConnected) {
+            cleanup();
+            return;
+          }
+          const bounds = scroll.getBoundingClientRect();
+          if (x >= bounds.left && x <= bounds.right && y >= bounds.top - 20 && y <= bounds.bottom + 20) {
+            if (y < bounds.top + 56) scroll.scrollTop -= Math.min(20, (bounds.top + 56 - y) / 3);
+            else if (y > bounds.bottom - 56) scroll.scrollTop += Math.min(20, (y - bounds.bottom + 56) / 3);
+          }
+          updateTarget();
+          frame = requestAnimationFrame(autoScroll);
+        }
 
-          dropCandidates = computeCandidates();
-        };
+        function cleanup() {
+          cancelAnimationFrame(frame);
+          handle.removeEventListener("pointermove", move);
+          handle.removeEventListener("pointerup", drop);
+          handle.removeEventListener("pointercancel", cancel);
+          handle.removeEventListener("lostpointercapture", cancel);
+          window.removeEventListener("keydown", escape);
+          if (handle.hasPointerCapture(pointerId)) handle.releasePointerCapture(pointerId);
+          flowEl.classList.remove("is-dragging");
+          cardElement.classList.remove("is-drag-source");
+          inserted.forEach(preview => preview.remove());
+          ghost?.remove();
+        }
 
-        const onPointerMove = (ev) => {
-          if (!moved && Math.hypot(ev.clientX - startX, ev.clientY - startY) < 4) return;
+        function move(next) {
+          if (next.pointerId !== pointerId) return;
+          x = next.clientX;
+          y = next.clientY;
+          if (!moved && Math.hypot(x - startX, y - startY) < 5) return;
           if (!moved) {
             moved = true;
-            ensureDragVisuals();
+            suppressClick = true;
+            showDropPositions();
+            frame = requestAnimationFrame(autoScroll);
           }
+          updateTarget();
+        }
 
-          ghostEl.style.left = `${ev.clientX + 14}px`;
-          ghostEl.style.top = `${ev.clientY + 12}px`;
+        function drop(next) {
+          if (next.pointerId !== pointerId) return;
+          x = next.clientX;
+          y = next.clientY;
+          if (moved) updateTarget();
+          const block = active && blocks.find(item => item.idx === Number(active.dataset.articleDropAfter));
+          cleanup();
+          if (moved && block) moveArticleIllustration(planNode, card, block, inlineNo);
+        }
 
-          if (scrollContainer) {
-            const scRect = scrollContainer.getBoundingClientRect();
-            if (ev.clientY < scRect.top + 56) {
-              scrollContainer.scrollTop -= 14;
-            } else if (ev.clientY > scRect.bottom - 56) {
-              scrollContainer.scrollTop += 14;
-            }
-          }
+        function cancel() {
+          cleanup();
+        }
 
-          let minDist = Infinity;
-          bestTarget = null;
-          dropCandidates.forEach((cand) => {
-            const dist = Math.abs(ev.clientY - cand.y);
-            if (dist < minDist) {
-              minDist = dist;
-              bestTarget = cand;
-            }
-          });
+        function escape(key) {
+          if (key.key !== "Escape") return;
+          key.preventDefault();
+          cleanup();
+        }
 
-          if (bestTarget && dropLineEl) {
-            const flowRect = flowEl.getBoundingClientRect();
-            dropLineEl.style.top = `${bestTarget.y - flowRect.top}px`;
-            const lbl = dropLineEl.querySelector(".ic-art-drop-label");
-            const targetBlock = blocks.find((b) => b.idx === bestTarget.afterBlockIdx);
-            const previewText = targetBlock ? targetBlock.text.slice(0, 16) : (bestTarget.text || "");
-            if (lbl) lbl.textContent = `放在「${previewText}」之后`;
-          }
-        };
-
-        const onPointerUp = () => {
-          const wasMoved = moved;
-          const targetCand = bestTarget;
-          cleanupDrag();
-
-          if (wasMoved && targetCand && targetCand.afterBlockIdx !== dragCard.afterBlockIdx) {
-            dragCard.afterBlockIdx = targetCand.afterBlockIdx;
-            planNode.data.cards = sortPlanCardsInDocOrder(planNode.data.cards);
-            if (target?.art) target.art.cards = planNode.data.cards;
-            if (CS.articleEditorDraft?.cards) CS.articleEditorDraft.cards = planNode.data.cards;
-            commitArticleTargetChanges(target, { bumpTime: true });
-            renderFullPreviewStage();
-            const refocused = DOM.previewStage?.querySelector(`.ic-art-card[data-plan-card-id="${dragCard.id}"] [data-plan-drag]`);
-            if (refocused) refocused.focus();
-            const targetBlock = blocks.find((b) => b.idx === targetCand.afterBlockIdx);
-            const previewText = targetBlock ? targetBlock.text.slice(0, 16) : (targetCand.text || "");
-            speakArt(`插图 ${inlineNo} 已移到「${previewText}」之后`);
-          }
-        };
-
-        window.addEventListener("pointermove", onPointerMove);
-        window.addEventListener("pointerup", onPointerUp);
-        window.addEventListener("keydown", onKeyDown);
-      });
-    });
+        handle.addEventListener("pointermove", move);
+        handle.addEventListener("pointerup", drop);
+        handle.addEventListener("pointercancel", cancel);
+        handle.addEventListener("lostpointercapture", cancel);
+        window.addEventListener("keydown", escape);
+      };
+    }
   }
 
   function reanchorCardsFromSegments(target, segTexts) {
@@ -14782,6 +14745,34 @@
       target.art.cards = cards;
     }
     commitArticleTargetChanges(target, { bumpTime: false });
+  }
+
+  const ARTICLE_RATIO_OPTIONS = ["1:1", "3:4", "4:3", "2:3", "3:2", "9:16", "16:9", "2.35:1"];
+
+  function articleRatioValue(raw) {
+    const ratio = normalizeRatioInput(raw);
+    if (!isValidRatioInput(ratio) || ratio.length > 24) return "";
+    const [width, height] = ratio.split(":").map(Number);
+    return width / height >= 0.25 && width / height <= 4 ? ratio : "";
+  }
+
+  function setArticleRatio(draft, key, ratio) {
+    const previous = draft[key];
+    if (ratio === previous) return;
+    draft[key] = ratio;
+    const cover = key === "coverRatio";
+    for (const card of draft.cards || []) {
+      if ((card.role === "cover") !== cover || card.ratioCustomized) continue;
+      if (!card.ratio || card.ratio === previous) card.ratio = ratio;
+    }
+  }
+
+  function articleRatioField(id, label, value) {
+    return `<div class="ic-art-ratio-field">
+      <label for="${id}">${label}</label>
+      <input type="text" class="hw-input" id="${id}" value="${esc(value)}" placeholder="宽:高" maxlength="24" autocomplete="off" spellcheck="false">
+      <button type="button" class="btn btn-sm" data-article-ratio-picker="${id}" aria-label="选择${label}" aria-haspopup="dialog">▾</button>
+    </div>`;
   }
 
   function renderArticleEditorPage(sortedArticles) {
@@ -14934,6 +14925,8 @@
     const renderCardHtml = (card, inlineNo, anchorHtml, plainAnchor, extraOpts = {}) => {
       return renderArticleEditorCardHtml(card, inlineNo, anchorHtml, plainAnchor, Object.assign({
         isGenerating,
+        coverRatio: draft.coverRatio,
+        inlineRatio: draft.inlineRatio,
         catalog: Catalog
       }, extraOpts));
     };
@@ -15183,27 +15176,8 @@
                 </button>
               </div>
 
-              <!-- Cover Aspect Ratio Selector -->
-              <div style="display:flex;align-items:center;gap:6px;">
-                <span style="font-size:12px;color:var(--ic-muted);font-weight:750;">封面画幅:</span>
-                <select class="hw-select" id="editor-cover-ratio" style="padding:4px 8px;font-size:12px;">
-                  <option value="2.35:1" ${draft.coverRatio === "2.35:1" ? "selected" : ""}>2.35:1（微信公众号超宽封面）</option>
-                  <option value="16:9" ${draft.coverRatio === "16:9" ? "selected" : ""}>16:9（B站 / 视频横版封面）</option>
-                  <option value="3:4" ${draft.coverRatio === "3:4" ? "selected" : ""}>3:4（小红书竖版封面）</option>
-                  <option value="1:1" ${draft.coverRatio === "1:1" ? "selected" : ""}>1:1（方形封面）</option>
-                </select>
-              </div>
-
-              <!-- Inline Illustration Ratio Selector -->
-              <div style="display:flex;align-items:center;gap:6px;">
-                <span style="font-size:12px;color:var(--ic-muted);font-weight:750;">章节插图:</span>
-                <select class="hw-select" id="editor-inline-ratio" style="padding:4px 8px;font-size:12px;">
-                  <option value="4:3" ${draft.inlineRatio === "4:3" ? "selected" : ""}>4:3（经典阅读插图）</option>
-                  <option value="16:9" ${draft.inlineRatio === "16:9" ? "selected" : ""}>16:9（宽屏图表插图）</option>
-                  <option value="3:4" ${draft.inlineRatio === "3:4" ? "selected" : ""}>3:4（竖版信息卡）</option>
-                  <option value="1:1" ${draft.inlineRatio === "1:1" ? "selected" : ""}>1:1（方形插图）</option>
-                </select>
-              </div>
+              ${articleRatioField("editor-cover-ratio", "封面比例", draft.coverRatio)}
+              ${articleRatioField("editor-inline-ratio", "章节插图比例", draft.inlineRatio)}
             </div>
           </div>
 
@@ -15284,11 +15258,17 @@
       });
     };
 
+    const collectArticleRatios = (d) => {
+      for (const [input, key] of [[coverSel, "coverRatio"], [inlineSel, "inlineRatio"]]) {
+        const ratio = articleRatioValue(input?.value);
+        if (ratio) setArticleRatio(d, key, ratio);
+      }
+    };
+
     const saveCurrentDraftFromInputs = () => {
       if (titleInp) draft.title = titleInp.value;
       draft.markdown = readMarkdown();
-      if (coverSel) draft.coverRatio = coverSel.value;
-      if (inlineSel) draft.inlineRatio = inlineSel.value;
+      collectArticleRatios(draft);
     };
 
     const autosaveScope = currentCacheScopeKey();
@@ -15309,8 +15289,7 @@
         if (titleInp.value.trim()) d.titleSource = "manual";
       }
       d.markdown = readMarkdown();
-      if (coverSel) d.coverRatio = coverSel.value;
-      if (inlineSel) d.inlineRatio = inlineSel.value;
+      collectArticleRatios(d);
       return d;
     };
 
@@ -15351,7 +15330,13 @@
       // A caller that just wrote the draft itself must not have it read back from
       // inputs that have not been re-rendered yet -- an import would be erased.
       if (collect) collectDraftFromInputs(draft);
+      const wasNew = draft.isNewDraft;
       const saved = syncArticleEditorDraftToHistory(draft, { bumpTime });
+      const sidebar = wasNew && saved ? DOM.previewStage.querySelector(".ic-pv-outline") : null;
+      if (sidebar) {
+        sidebar.outerHTML = renderArticleSidebarHtml(getSortedMyArticles(), CS.activeArticleId);
+        bindArticleSidebar(DOM.previewStage, CS.activeArticleId);
+      }
       if (markSaved) {
         if (saved && draft.id) {
           try {
@@ -15368,6 +15353,21 @@
       }
       return saved;
     };
+
+    const insertEditorCard = (afterBlockIdx) => {
+      if (!commitSync()) return;
+      const updated = resolveArticleTarget(draft.id);
+      if (updated?.planNode) insertNewPlanCard(updated.planNode, afterBlockIdx, { openModal: true });
+    };
+
+    flowEl?.querySelectorAll("[data-plan-insert-at]").forEach(button => {
+      button.onclick = () => {
+        const after = button.closest(".ic-art-end-gap")
+          ? Math.max(0, E.parseArticleReadonlyBlocks(readMarkdown(), { noStarter: true }).length - 1)
+          : Number(button.dataset.planInsertAt);
+        insertEditorCard(after);
+      };
+    });
 
     const hasEditorContent = () =>
       Boolean((draft.title || "").trim() || (draft.markdown || "").trim());
@@ -15393,8 +15393,8 @@
     };
     window.addEventListener("beforeunload", handleBeforeUnload);
 
-    CS.articleEditorFlush = () => {
-      if (autosaveActive && isCurrentEditor()) {
+    CS.articleEditorFlush = (save = true) => {
+      if (save && autosaveActive && isCurrentEditor()) {
         collectDraftFromInputs(draft);
         syncArticleEditorDraftToHistory(draft, { bumpTime: false });
       }
@@ -15482,17 +15482,57 @@
     }
     setTimeout(adjustSegHeights, 50);
 
-    if (coverSel) {
-      coverSel.onchange = () => {
-        draft.coverRatio = coverSel.value;
-        syncArticleEditorDraftToHistory(draft);
+    for (const [input, key, label] of [
+      [coverSel, "coverRatio", "封面比例"], [inlineSel, "inlineRatio", "章节插图比例"]
+    ]) {
+      if (!input) continue;
+      const commitRatio = (value) => {
+        const ratio = articleRatioValue(value);
+        if (!ratio) {
+          input.value = draft[key];
+          toast("请输入 1:4 到 4:1 之间的宽高比，例如 5:2");
+          return;
+        }
+        input.value = ratio;
+        setArticleRatio(draft, key, ratio);
+        commitSync();
+        // Update the visible ratios in place so a blur cannot swallow the next click.
+        flowEl?.querySelectorAll(".ic-art-card[data-plan-card-id]").forEach(element => {
+          const card = draft.cards?.find(item => item.id === element.dataset.planCardId);
+          if (!card || (card.role === "cover") !== (key === "coverRatio")) return;
+          const ratioText = card.ratio || ratio;
+          const { rw, rh } = parseCardRatioNumbers(ratioText);
+          const box = element.querySelector(".ic-art-cover-box, .ic-art-thumb");
+          box?.style.setProperty("--r-w", rw);
+          box?.style.setProperty("--r-h", rh);
+          const meta = element.querySelector(".ic-art-spec-meta");
+          if (meta) meta.textContent = ratioText + meta.textContent.replace(/^[^·]*/, "").replace(/^·/, " ·");
+          const placeholder = element.querySelector(".ic-art-thumb-ratio");
+          if (placeholder) placeholder.textContent = ratioText;
+        });
       };
-    }
-    if (inlineSel) {
-      inlineSel.onchange = () => {
-        draft.inlineRatio = inlineSel.value;
-        syncArticleEditorDraftToHistory(draft);
+      input.onchange = () => commitRatio(input.value);
+      input.onkeydown = event => {
+        if (event.key === "Enter") {
+          event.preventDefault();
+          input.blur();
+        }
       };
+      const picker = input.parentElement?.querySelector("[data-article-ratio-picker]");
+      if (picker) picker.onclick = () => S.openModal({
+        title: label,
+        sizeClass: "modal-narrow",
+        html: `<div class="ic-art-ratio-options">${ARTICLE_RATIO_OPTIONS.map(ratio =>
+          `<button type="button" class="btn ${draft[key] === ratio ? "btn-primary" : ""}" data-ratio-value="${ratio}">${ratio}</button>`).join("")}</div>`,
+        onMount(modal) {
+          modal.querySelectorAll("[data-ratio-value]").forEach(button => {
+            button.onclick = () => {
+              S.closeModal();
+              if (isCurrentEditor()) commitRatio(button.dataset.ratioValue);
+            };
+          });
+        }
+      });
     }
 
     // Format toolbar button handlers
@@ -15546,20 +15586,7 @@
             const blocksBefore = E.parseArticleReadonlyBlocks(textBeforeCursor, { noStarter: true });
             targetBlockIdx = Math.max(0, blocksBefore.length - 1);
           }
-          if (!target?.planNode) {
-            createNewArticlePlan({
-              title: draft.title,
-              markdown: draft.markdown,
-              styleId: draft.styleId,
-              coverRatio: draft.coverRatio,
-              inlineRatio: draft.inlineRatio,
-              articleId: draft.id
-            });
-          }
-          const updatedTarget = resolveArticleTarget(draft.id);
-          if (updatedTarget?.planNode) {
-            insertNewPlanCard(updatedTarget.planNode, targetBlockIdx, { openModal: true });
-          }
+          insertEditorCard(targetBlockIdx);
         }
       };
     });

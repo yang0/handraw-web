@@ -8,6 +8,51 @@
   const esc=value=>String(value??"").replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
   const resourceCode=(value,field)=>typeof value==="object"&&value!==null?String(value[field]||""):field==="style2"?"":String(value||"");
   const runDate=value=>Number.isNaN(new Date(value).getTime())?String(value||"已保存批次"):new Date(value).toLocaleString("zh-CN",{month:"2-digit",day:"2-digit",hour:"2-digit",minute:"2-digit"});
+  const nodeName = node => node.type === "parameter" ? labels[node.parameter] : node.type === "combine" ? "参数组合" : "批量出图";
+
+  function connectionError(graph, from, to) {
+    const source = graph.nodes.find(node => node.id === from);
+    const target = graph.nodes.find(node => node.id === to);
+    if (!source || !target || source === target) return "请连接两个不同节点";
+    if (source.type === "output" || target.type === "parameter") return "请从右侧输出连接到左侧输入";
+    if (graph.edges.some(edge => edge.from === from && edge.to === to)) return "这两个锚点已经连接";
+    if (graph.edges.length >= 400) return "画布最多可添加 400 条连线";
+    const pending = [to];
+    const visited = new Set();
+    while (pending.length) {
+      const id = pending.pop();
+      if (id === from) return "这条线会形成循环，请选择其他锚点";
+      if (visited.has(id)) continue;
+      visited.add(id);
+      for (const edge of graph.edges) if (edge.from === id) pending.push(edge.to);
+    }
+    return "";
+  }
+
+  function addCanvasNode(graph, type, field, position) {
+    if (graph.nodes.length >= 200) return null;
+    const node = {
+      id: uid("node"), type,
+      x: Math.max(16, Math.min(50000, position.x)),
+      y: Math.max(16, Math.min(50000, position.y))
+    };
+    if (type === "parameter") {
+      node.parameter = field;
+      node.values = [initialCandidate(field)];
+    } else {
+      node.mode = "cartesian";
+      if (type === "output") node.repeat = 1;
+    }
+    graph.nodes.push(node);
+    return node;
+  }
+
+  function initialCandidate(field) {
+    if (["refImages", "colors", "tones", "moods"].includes(field)) return [];
+    if (field === "ratio") return "3:4";
+    if (field === "mode") return "graphic-text";
+    return "";
+  }
   function pickResourceCandidate(store,node,index,field,openPicker) {
     const doc=store.doc,values=node.values,previous=values[index];
     openPicker({field,current:resourceCode(previous,field),onPick:code=>{
@@ -69,10 +114,13 @@
   function addGuidedParameter(store,field) {
     const flow=simpleFlow(store.doc.graph);if(!flow) return null;
     const existing=flow.parameters.find(n=>n.parameter===field);if(existing) return existing;
-    const value=["refImages","colors","tones","moods"].includes(field)?[]:field==="ratio"?"3:4":field==="mode"?"graphic-text":"";
-    const node={id:uid("node"),type:"parameter",parameter:field,values:[value],x:32,
-      y:Math.min(49000,Math.max(32,...store.doc.graph.nodes.map(n=>Number(n.y)||0))+600)};
-    store.doc.graph.nodes.push(node);store.doc.graph.edges.push({from:node.id,to:flow.group.id});store.edit(true);return node;
+    const y = Math.max(32, ...store.doc.graph.nodes.map(n => Number(n.y) || 0)) + 600;
+    const node = addCanvasNode(store.doc.graph, "parameter", field, { x: 32, y });
+    if (node) {
+      store.doc.graph.edges.push({ from: node.id, to: flow.group.id });
+      store.edit(true);
+    }
+    return node;
   }
   function selectedQuote(preview,count) {
     const q=preview.quote,free=Math.min(count,q.freeRemaining),total=(count-free)*q.unitPrice;
@@ -83,14 +131,15 @@
       this.options=options; this.doc=blank(); this.list=[]; this.recent=[]; this.run=null;
       this.listCursor="";this.recentCursor="";
       this.navigation=0;
+      this.view="free";
       this.dirty=false; this.error=""; this.closed=false; this.loading=false; this.conflict=false;
       this.preview=null; this.selected=new Set(); this.submission=null; this.onchange=()=>{};
       this.cacheKey="handraw.parameter-canvas:"+options.scope;
       try { const cached=JSON.parse(options.storage?.getItem(this.cacheKey)||"null");
-        if(cached?.doc?.graph?.nodes) {this.doc=cached.doc;this.dirty=Boolean(cached.dirty);this.submission=cached.submission||null;this.preferredRunId=cached.runId||null;} } catch(_) {}
+        if(cached?.doc?.graph?.nodes) {this.doc=cached.doc;this.dirty=Boolean(cached.dirty);this.submission=cached.submission||null;this.preferredRunId=cached.runId||null;this.view=cached.view==="guided"?"guided":"free";} } catch(_) {}
     }
     notify(reason="render") { if(!this.closed) this.onchange(reason); }
-    persist() { try { this.options.storage?.setItem(this.cacheKey,JSON.stringify({doc:this.doc,dirty:this.dirty,submission:this.submission,runId:this.runId||null})); }
+    persist() { try { this.options.storage?.setItem(this.cacheKey,JSON.stringify({doc:this.doc,dirty:this.dirty,submission:this.submission,runId:this.runId||null,view:this.view})); }
       catch(_) { this.error="本地保存空间不足，请保存到云端或导出画布"; } }
     edit(render=false) {
       this.dirty=true; this.preview=null; this.confirmation=null;this.removal=null;this.selected.clear(); this.error=""; this.persist();
@@ -132,14 +181,13 @@
       this.runId=null;clearTimeout(this.pollTimer);
       const result=await this.options.api("/api/studio/canvases/"+encodeURIComponent(id));
       if(this.closed||navigation!==this.navigation) return;
-      this.doc=result.canvas; this.view=null;this.confirmation=null;this.removal=null;this.dirty=false; this.conflict=false; this.preview=null; this.run=null;this.recent=[];this.recentCursor="";
+      this.doc=result.canvas;this.confirmation=null;this.removal=null;this.dirty=false; this.conflict=false; this.preview=null; this.run=null;this.recent=[];this.recentCursor="";
       this.error=""; this.persist(); this.notify(); await this.loadRecent();
     }
     async create(copy=false) {
       if(this.submission) throw new Error("请先确认上一次提交状态");
       if(!copy && this.dirty && !(await this.save())) return;
       this.navigation++;
-      this.view=null;
       this.doc=copy?{...clone(this.doc),id:uid("canvas"),writeSeq:0,name:this.doc.name+" 副本"}:blank();
       this.runId=null;clearTimeout(this.pollTimer);
       this.preferredRunId=null;this.conflict=false;this.run=null;this.recent=[];this.recentCursor="";this.edit(true);
@@ -148,7 +196,6 @@
       if(this.submission) throw new Error("请先确认上一次提交状态");
       if(this.dirty && !this.conflict && !(await this.save())) return false;
       this.navigation++;
-      this.view=null;
       this.doc={id:uid("canvas"),name:document.name||"导入的参数画布",writeSeq:0,graph:clone(document.graph)};
       this.preferredRunId=null;this.conflict=false;this.run=null;this.runId=null;this.recent=[];this.recentCursor="";clearTimeout(this.pollTimer);this.edit(true);
       return this.save();
@@ -215,7 +262,7 @@
       if(!this.doc.writeSeq||!this.options.loggedIn()) return;
       const navigation=this.navigation,id=this.doc.id,result=await this.options.api(`/api/studio/canvases/${encodeURIComponent(id)}/runs`);
       if(this.closed||navigation!==this.navigation||id!==this.doc.id) return;
-      this.recent=result.items||[];this.recentCursor=result.nextCursor||"";this.notify();
+      this.recent=result.items||[];this.recentCursor=result.nextCursor||"";this.notify("panel");
       const preferred=this.preferredRunId;this.preferredRunId=null;
       if(open && (preferred||this.recent[0])) await this.watch(preferred||this.recent[0].id);
     }
@@ -257,7 +304,7 @@
         this.run=result.run;
         if(this.run.canvasId===this.doc.id && !this.recent.some(item=>item.id===id))
           this.recent.push({id,count:this.run.count,createdAt:this.run.createdAt||"已保存批次"});
-        this.notify();
+        this.notify("panel");
       } catch(error) {this.fail(error);}
       if(!this.closed && id===this.runId && (!this.run||["running","pending"].includes(this.run.status)))
         this.pollTimer=setTimeout(()=>{void this.refreshRun();},2000);
@@ -278,8 +325,12 @@
     close() {this.closed=true;clearTimeout(this.saveTimer);clearTimeout(this.pollTimer);this.persist();}
   }
   let current=null,root=null,options=null;
+  let selectedPort = null;
+  let nodeMenu = null;
+  let cancelPointer = null;
+  let suppressPortClick = false;
   const busy=action=>Promise.resolve().then(action).catch(error=>current?.fail(error));
-  const guided=()=>current?.view!=="free"&&Boolean(simpleFlow(current.doc.graph));
+  const guided=()=>current?.view==="guided"&&Boolean(simpleFlow(current.doc.graph));
   function updateSummary() {
     for(const card of root?.querySelectorAll('[data-card]')||[]) {
       const node=current.doc.graph.nodes.find(n=>n.id===card.dataset.card),count=card.querySelector('.pc-node-count');
@@ -326,33 +377,231 @@
       ${code?`<div class="pc-resource-actions">${image?`<button type="button" data-action="zoom-resource" ${base} aria-label="放大${label}候选 ${index+1}">放大</button>`:""}<button type="button" data-action="clear-resource" ${base} aria-label="清空${label}候选 ${index+1}">清空</button></div>`:""}</div>`;
   }
   function nodeHtml(node,index,isGuided=false) {
-    const graph=current.doc.graph,incoming=graph.edges.filter(edge=>edge.to===node.id),name=node.type==="parameter"?labels[node.parameter]:node.type==="combine"?"搭配规则":"出图设置";
+    const graph = current.doc.graph;
+    const incoming = graph.edges.filter(edge => edge.to === node.id);
+    const name = nodeName(node);
     const addLabel=node.parameter==="prompt"?"主题":node.parameter==="style1"?"画风方案":labels[node.parameter]+"候选";
-    return `<section class="pc-node ${isGuided?"pc-parameter":""}" data-card="${esc(node.id)}" ${isGuided?"":`style="left:${Number(node.x)||32}px;top:${Number(node.y)||32}px"`}>
+    const ports = isGuided ? "" : [
+      node.type !== "parameter" ? portButton(node, "in", incoming.length > 0) : "",
+      node.type !== "output" ? portButton(node, "out", graph.edges.some(edge => edge.from === node.id)) : ""
+    ].join("");
+    return `<section class="pc-node ${isGuided?"pc-parameter":""}" data-card="${esc(node.id)}" ${isGuided?"":`style="left:${Number(node.x??32)}px;top:${Number(node.y??32)}px"`}>
+      ${ports}
       <header ${isGuided?"":`data-drag="${esc(node.id)}"`}><div><strong>${esc(name)}${isGuided?"":` ${index+1}`}</strong>${isGuided?`<span class="pc-node-count">${node.values.length} 个候选</span>`:""}</div><button type="button" data-action="remove-node" data-node="${esc(node.id)}" aria-label="移除${esc(name)}">×</button></header>
       <div class="pc-node-body">${node.type==="parameter"?
         `<p>${node.parameter==="prompt"?"一条主题描述一幅画面。想换内容，就添加主题。":node.parameter==="style1"?"每个方案可选一种画风，也可搭配主副两种画风。":"只选一个时，每组都使用它；添加多个可参与搭配。"}</p>${node.values.map((value,i)=>`<div class="pc-candidate"><div class="pc-candidate-heading"><span>${esc(addLabel)} ${i+1}</span><button type="button" data-action="remove-value" data-node="${esc(node.id)}" data-value="${i}" aria-label="移除${esc(addLabel)} ${i+1}">移除</button></div>${parameterValue(node,value,i)}</div>`).join("")}<button type="button" class="pc-add-candidate" data-action="add-value" data-node="${esc(node.id)}">＋ 添加${esc(addLabel)}</button>`:
-        `<p>${node.type==="output"?"接收搭配结果，设置每组要生成几张。":"添加参与搭配的参数或上一层搭配结果。"}</p><label>搭配方式<select data-node="${esc(node.id)}" data-property="mode"><option value="cartesian" ${node.mode!=="zip"?"selected":""}>全部互相搭配</option><option value="zip" ${node.mode==="zip"?"selected":""}>按顺序一一搭配</option></select></label>
-        ${node.type==="output"?`<label>每组生成张数<input type="number" min="1" max="200" data-node="${esc(node.id)}" data-property="repeat" value="${node.repeat||1}"></label>`:""}
-        <div class="pc-links">${incoming.map(edge=>`<span>${esc(graph.nodes.find(n=>n.id===edge.from)?.type==="parameter"?labels[graph.nodes.find(n=>n.id===edge.from).parameter]:"组合节点")}<button type="button" data-action="disconnect" data-node="${esc(node.id)}" data-from="${esc(edge.from)}" aria-label="断开输入">×</button></span>`).join("")}</div>
-        <label>${node.type==="output"?"接收哪组搭配":"添加参与搭配的参数"}<select data-connect="${esc(node.id)}"><option value="">选择参数或搭配</option>${graph.nodes.filter(n=>n.type!=="output"&&n.id!==node.id&&!incoming.some(e=>e.from===n.id)).map(n=>`<option value="${esc(n.id)}">${esc(n.type==="parameter"?labels[n.parameter]:"搭配规则")} ${graph.nodes.indexOf(n)+1}</option>`).join("")}</select></label>`}</div></section>`;
+        `<p>${node.type === "output" ? "接收左边的参数或组合，设置每组出几张。" : "把主题、画风等合成一组组出图方案。例如 2 个主题 × 3 种画风 = 6 组。"}</p>
+        ${node.type === "combine" || incoming.length > 1 ? `<label>怎样组合<select data-node="${esc(node.id)}" data-property="mode"><option value="cartesian" ${node.mode!=="zip"?"selected":""}>全部互相搭配</option><option value="zip" ${node.mode==="zip"?"selected":""}>按顺序一一搭配</option></select></label>` : ""}
+        ${node.type === "output" ? `<label>每组生成张数<input type="number" min="1" max="200" data-node="${esc(node.id)}" data-property="repeat" value="${node.repeat??1}"></label>` : ""}
+        <div class="pc-links">${incoming.map(edge => {
+          const source = graph.nodes.find(item => item.id === edge.from);
+          const label = source ? `${nodeName(source)} ${graph.nodes.indexOf(source) + 1}` : "参数";
+          return `<span>${esc(label)}<button type="button" data-action="disconnect" data-node="${esc(node.id)}" data-from="${esc(edge.from)}" aria-label="断开${esc(label)}">×</button></span>`;
+        }).join("") || '<small>从其他节点的右侧圆点连到这里的左侧圆点</small>'}</div>`}</div></section>`;
   }
+
+  function portButton(node, direction, connected) {
+    const name = direction === "in" ? "输入" : "输出";
+    return `<button type="button" class="pc-port pc-port-${direction}${connected ? " is-linked" : ""}" data-action="port" data-port="${direction}" data-node="${esc(node.id)}" aria-label="${esc(nodeName(node))}的${name}锚点" aria-pressed="false" title="${name}锚点，拖动或点击连线"><span aria-hidden="true"></span></button>`;
+  }
+
+  function curve(from, to) {
+    const bend = Math.max(40, Math.abs(to.x - from.x) * .45);
+    return `M${from.x},${from.y} C${from.x + bend},${from.y} ${to.x - bend},${to.y} ${to.x},${to.y}`;
+  }
+
+  function portPoint(port, world) {
+    const bounds = port.getBoundingClientRect();
+    const origin = world.getBoundingClientRect();
+    return { x: bounds.left + bounds.width / 2 - origin.left, y: bounds.top + bounds.height / 2 - origin.top };
+  }
+
   function drawEdges() {
-    const svg=root.querySelector(".pc-edges");if(!svg) return;
-    const cards=new Map(Array.from(root.querySelectorAll("[data-card]")).map(card=>[card.dataset.card,card]));
-    svg.innerHTML=current.doc.graph.edges.map(edge=>{
-      const a=cards.get(edge.from),b=cards.get(edge.to);
-      if(!a||!b) return "";
-      const x=a.offsetLeft+a.offsetWidth,y=a.offsetTop+35,u=b.offsetLeft,v=b.offsetTop+35;
-      return `<path d="M${x},${y} C${x+80},${y} ${u-80},${v} ${u},${v}"/>`;
-    }).join("");
+    const svg = root.querySelector(".pc-edges");
+    if (!svg) return;
+    const points = new Map([...root.querySelectorAll("[data-port]")].map(port => [
+      `${port.dataset.port}:${port.dataset.node}`, portPoint(port, svg.parentElement)
+    ]));
+    svg.innerHTML = current.doc.graph.edges.map(edge => {
+      const from = points.get(`out:${edge.from}`);
+      const to = points.get(`in:${edge.to}`);
+      return from && to ? `<path d="${curve(from, to)}"/>` : "";
+    }).join("") + '<path class="pc-wire-preview" d=""/>';
+  }
+
+  function closeNodeMenu() {
+    nodeMenu?.controller.abort();
+    nodeMenu?.element.remove();
+    nodeMenu = null;
+  }
+
+  function worldPosition(x, y) {
+    const bounds = root.querySelector(".pc-world").getBoundingClientRect();
+    return { x: Math.round(x - bounds.left), y: Math.round(y - bounds.top) };
+  }
+
+  function openNodeMenu(x, y, port = null, position = worldPosition(x, y)) {
+    closeNodeMenu();
+    clearWire();
+    const choices = [];
+    if (!port || port.direction === "in") {
+      for (const [field, name] of Object.entries(labels)) {
+        if (field !== "style2") choices.push({ type: "parameter", field, name, group: "参数" });
+      }
+    }
+    choices.push({ type: "combine", name: "参数组合", group: "生成流程", detail: "把主题、画风等搭配成多组方案" });
+    if (!port || port.direction === "out") {
+      choices.push({ type: "output", name: "批量出图", group: "生成流程", detail: "接收参数，设置每组出几张" });
+    }
+    const element = document.createElement("div");
+    element.className = "pc-node-menu";
+    element.setAttribute("role", "dialog");
+    element.setAttribute("aria-label", "添加节点");
+    element.innerHTML = `<div class="pc-node-menu-title"><strong>添加节点</strong><button type="button" data-action="close-node-menu" aria-label="关闭添加节点">×</button></div>
+      <input type="search" aria-label="搜索节点" placeholder="搜索主题、画风、参数组合…" autocomplete="off">
+      <div class="pc-node-menu-list"></div>`;
+    const controller = new AbortController();
+    nodeMenu = { element, position, port, controller };
+    root.append(element);
+    const input = element.querySelector("input");
+    const list = element.querySelector(".pc-node-menu-list");
+    const renderChoices = () => {
+      const query = input.value.trim().toLowerCase();
+      const filtered = choices.filter(item => `${item.name} ${item.detail || ""} ${item.field || ""}`.toLowerCase().includes(query));
+      list.innerHTML = ["参数", "生成流程"].map(group => {
+        const items = filtered.filter(item => item.group === group);
+        if (!items.length) return "";
+        return `<p>${group}</p>${items.map(item => `<button type="button" data-action="create-node" data-type="${item.type}" data-field="${item.field || ""}"><strong>${item.name}</strong>${item.detail ? `<small>${item.detail}</small>` : ""}</button>`).join("")}`;
+      }).join("") || '<p>没有匹配的节点</p>';
+    };
+    input.oninput = renderChoices;
+    renderChoices();
+    const bounds = element.getBoundingClientRect();
+    element.style.left = `${Math.max(8, Math.min(x, window.innerWidth - bounds.width - 8))}px`;
+    element.style.top = `${Math.max(8, Math.min(y, window.innerHeight - bounds.height - 8))}px`;
+    input.focus({ preventScroll: true });
+    document.addEventListener("pointerdown", event => {
+      if (!element.contains(event.target) && !event.target.closest('[data-action="add-node-menu"]')) closeNodeMenu();
+    }, { capture: true, signal: controller.signal });
+    element.onkeydown = event => {
+      if (event.key === "Escape") {
+        event.stopPropagation();
+        closeNodeMenu();
+        root.querySelector('[data-action="add-node-menu"]')?.focus();
+        return;
+      }
+      const buttons = [...list.querySelectorAll("button")];
+      if (event.key === "Enter" && event.target === input) {
+        event.preventDefault();
+        buttons[0]?.click();
+      }
+      if (event.key === "ArrowDown" || event.key === "ArrowUp") {
+        event.preventDefault();
+        const index = buttons.indexOf(event.target);
+        const next = event.key === "ArrowDown" ? index + 1 : index < 0 ? buttons.length - 1 : index - 1;
+        (buttons[next] || input).focus();
+      }
+    };
+  }
+
+  function wireHint(message = "") {
+    const hint = root?.querySelector("[data-wire-hint]");
+    if (hint) hint.textContent = message || "右键或双击空白处添加节点。从右侧圆点拖到左侧圆点，也可依次点击两个圆点。";
+  }
+
+  function clearWire() {
+    selectedPort = null;
+    root?.querySelectorAll("[data-port]").forEach(port => {
+      port.classList.remove("is-available", "is-wire-target");
+      port.setAttribute("aria-pressed", "false");
+    });
+    root?.querySelector(".pc-wire-preview")?.setAttribute("d", "");
+    wireHint();
+  }
+
+  function portRef(port) {
+    return { node: port.dataset.node, direction: port.dataset.port };
+  }
+
+  function portConnection(start, end) {
+    if (start.direction === end.direction) return null;
+    return start.direction === "out" ? { from: start.node, to: end.node } : { from: end.node, to: start.node };
+  }
+
+  function selectPort(port) {
+    clearWire();
+    selectedPort = portRef(port);
+    port.setAttribute("aria-pressed", "true");
+    root.querySelectorAll("[data-port]").forEach(candidate => {
+      const edge = portConnection(selectedPort, portRef(candidate));
+      if (edge && !connectionError(current.doc.graph, edge.from, edge.to)) candidate.classList.add("is-available");
+    });
+    wireHint(selectedPort.direction === "out" ? "选择要接收参数的左侧圆点。" : "选择提供参数的右侧圆点。");
+  }
+
+  function connectPorts(start, end) {
+    const edge = portConnection(start, end);
+    const error = edge ? connectionError(current.doc.graph, edge.from, edge.to) : "请连接一个右侧圆点和一个左侧圆点";
+    clearWire();
+    if (error) {
+      wireHint(error);
+      return;
+    }
+    current.doc.graph.edges.push(edge);
+    current.edit(true);
+  }
+
+  function beginWire(event, port) {
+    const start = portRef(port);
+    const world = root.querySelector(".pc-world");
+    const initialX = event.clientX;
+    const initialY = event.clientY;
+    const pointerId = event.pointerId;
+    let moved = false;
+    port.setPointerCapture(pointerId);
+    const controller = new AbortController();
+    const listener = { signal: controller.signal };
+    cancelPointer = () => {
+      controller.abort();
+      if (port.hasPointerCapture(pointerId)) port.releasePointerCapture(pointerId);
+      cancelPointer = null;
+      if (moved) clearWire();
+    };
+    port.addEventListener("pointermove", next => {
+      if (next.pointerId !== pointerId) return;
+      if (!moved && Math.hypot(next.clientX - initialX, next.clientY - initialY) < 5) return;
+      if (!moved) {
+        moved = true;
+        selectPort(port);
+      }
+      const hit = document.elementFromPoint(next.clientX, next.clientY)?.closest("[data-port]");
+      const candidate = hit?.classList.contains("is-available") ? hit : null;
+      root.querySelector(".is-wire-target")?.classList.remove("is-wire-target");
+      candidate?.classList.add("is-wire-target");
+      const a = portPoint(port, world);
+      const b = candidate ? portPoint(candidate, world) : worldPosition(next.clientX, next.clientY);
+      root.querySelector(".pc-wire-preview")?.setAttribute("d", start.direction === "out" ? curve(a, b) : curve(b, a));
+    }, listener);
+    port.addEventListener("pointerup", next => {
+      if (next.pointerId !== pointerId) return;
+      const hit = document.elementFromPoint(next.clientX, next.clientY);
+      const target = hit?.closest("[data-port]");
+      cancelPointer?.();
+      if (!moved) return;
+      suppressPortClick = true;
+      if (target && target !== port && root.contains(target)) connectPorts(start, portRef(target));
+      else if (hit?.closest(".pc-world") === world && !hit.closest(".pc-node")) openNodeMenu(next.clientX, next.clientY, start);
+      else wireHint("把连线放到另一侧的圆点上");
+    }, listener);
+    port.addEventListener("pointercancel", () => cancelPointer?.(), listener);
+    port.addEventListener("lostpointercapture", () => cancelPointer?.(), listener);
   }
   function renderPanel() {
     const panel=root?.querySelector(".pc-results");if(!panel||!current) return;
     const preview=current.preview,run=current.run,q=preview?selectedQuote(preview,current.selected.size):null;
     panel.innerHTML=`${current.submission?'<p role="status">正在确认上一批提交状态，重试确认不会重复创建批次。</p><button type="button" data-action="submit">确认提交状态</button>':""}
       ${preview?`<h3>确认出图 · ${preview.count} 张可选</h3><p>已选 ${q.count} 张 · 免费 ${q.freeUsed} 张 · 预计 ${q.total} 积分</p><p class="pc-muted">勾选要生成的图片。额度以提交时为准，积分不会超过本次确认上限。</p>
-      ${current.confirmation==="submit"?`<div class="pc-confirm" role="group" aria-label="确认本次生成"><strong>确认生成 ${q.count} 张？</strong><p>免费 ${q.freeUsed} 张，积分上限 ${q.total}。开始后关闭页面，后台仍会继续生成。</p><div><button type="button" data-action="cancel-confirm">返回检查</button><button type="button" class="pc-primary" data-action="confirm-submit" ${current.submitting?"disabled":""}>${current.submitting?"正在提交…":"确认并开始生成"}</button></div></div>`:`<button type="button" class="pc-primary" data-action="submit" ${!q.count||!q.affordable||current.submission?"disabled":""}>生成选中的 ${q.count} 张</button>`}${!q.affordable?'<p class="pc-next-action">积分不足，请减少勾选数量。</p>':""}<div class="pc-plan-list">${preview.items.map(item=>`<label><input type="checkbox" data-select="${item.ordinal}" ${current.selected.has(item.ordinal)?"checked":""} ${current.submission||current.submitting?"disabled":""}><span><b>${item.ordinal+1}.</b> ${esc(item.spec.prompt.slice(0,100))}<small>${esc([item.spec.style1,item.spec.style2,item.spec.layout,item.spec.ratio].filter(Boolean).join(" · "))}</small></span></label>`).join("")}</div>`:guided()?'<p class="pc-muted">预览后可逐项勾选，确认费用再开始。此步骤不会扣费。</p>':"<h3>预览出图</h3><p class='pc-muted'>把参数连接到搭配节点，再将搭配节点连接到输出。多级搭配和多个输出可独立设置。</p>"}
+      ${current.confirmation==="submit"?`<div class="pc-confirm" role="group" aria-label="确认本次生成"><strong>确认生成 ${q.count} 张？</strong><p>免费 ${q.freeUsed} 张，积分上限 ${q.total}。开始后关闭页面，后台仍会继续生成。</p><div><button type="button" data-action="cancel-confirm">返回检查</button><button type="button" class="pc-primary" data-action="confirm-submit" ${current.submitting?"disabled":""}>${current.submitting?"正在提交…":"确认并开始生成"}</button></div></div>`:`<button type="button" class="pc-primary" data-action="submit" ${!q.count||!q.affordable||current.submission?"disabled":""}>生成选中的 ${q.count} 张</button>`}${!q.affordable?'<p class="pc-next-action">积分不足，请减少勾选数量。</p>':""}<div class="pc-plan-list">${preview.items.map(item=>`<label><input type="checkbox" data-select="${item.ordinal}" ${current.selected.has(item.ordinal)?"checked":""} ${current.submission||current.submitting?"disabled":""}><span><b>${item.ordinal+1}.</b> ${esc(item.spec.prompt.slice(0,100))}<small>${esc([item.spec.style1,item.spec.style2,item.spec.layout,item.spec.ratio].filter(Boolean).join(" · "))}</small></span></label>`).join("")}</div>`:guided()?'<p class="pc-muted">预览后可逐项勾选，确认费用再开始。此步骤不会扣费。</p>':"<h3>预览出图</h3><p class='pc-muted'>把主题、画风等参数连到「参数组合」，再接到「批量出图」。只有一项参数时，可以直接接到「批量出图」。</p>"}
       ${current.recent.length?`<hr class="pc-history-divider"><h3>已提交的批次</h3><label>查看生成记录<select data-action="choose-run"><option value="">选择批次</option>${current.recent.map(r=>`<option value="${esc(r.id)}" ${r.id===current.runId?"selected":""}>${esc(runDate(r.createdAt))} · ${r.count} 张</option>`).join("")}</select></label>`:""}
       ${current.recentCursor?`<button type="button" data-action="more-runs" ${current.recentLoading?"disabled":""}>${current.recentLoading?"正在载入…":"加载更早的批次"}</button>`:""}
       ${run?`<h3>批次进度</h3><p role="status">已完成 ${run.items.filter(item=>item.status==="success").length} / ${run.count} 张 · 已用 ${run.spentCredits} 积分</p><div class="pc-run-actions"><button type="button" data-action="refresh">刷新</button>${run.items.some(i=>i.status==="pending")?'<button type="button" data-action="stop">停止未提交任务</button>':""}${run.items.some(i=>["failed","cancelled"].includes(i.status))?`<button type="button" data-action="retry">重试未成功项（预计 ${run.retryQuote.total} 积分）</button>`:""}</div><p class="pc-muted">关闭页面后仍会继续出图。已提交上游的任务按实际结果结算。</p>
@@ -360,17 +609,23 @@
   }
   function render() {
     if(!root||!current||current.closed) return;
+    closeNodeMenu();
+    cancelPointer?.();
+    selectedPort = null;
     const doc=current.doc,isGuided=guided(),flow=simpleFlow(doc.graph);
     const oldScroll=root.querySelector('.pc-guided-body')?.scrollTop||0;
+    const oldCanvas=root.querySelector(".pc-scroll");
     root.innerHTML=`<div class="pc-header"><div><p class="pc-kicker">参数画布</p><input class="pc-name" aria-label="画布名称" data-name value="${esc(doc.name)}"><span data-pc-status></span></div><div class="pc-actions"><select aria-label="打开已保存画布" data-action="choose-canvas" ${current.submission?"disabled":""}><option value="">已保存的画布</option>${current.list.map(item=>`<option value="${esc(item.id)}" ${item.id===doc.id?"selected":""}>${esc(item.name)}</option>`).join("")}</select>${current.listCursor?`<button type="button" data-action="more-canvases" ${current.listLoading?"disabled":""}>${current.listLoading?"正在载入…":"更多画布"}</button>`:""}<button type="button" data-action="new" ${current.submission?"disabled":""}>新建</button><details class="pc-document-menu"><summary>更多</summary><div><button type="button" data-action="copy">另存副本</button><button type="button" data-action="save">立即保存</button><button type="button" data-action="export">导出画布</button></div></details></div></div>
       ${current.error?`<div class="pc-error" role="alert">${esc(current.error)}${current.conflict?'。可另存副本保留本地改动。':""}</div>`:""}
-      <div class="pc-viewbar"><div role="group" aria-label="画布操作视图"><button type="button" data-action="guided-view" aria-pressed="${isGuided}" ${!flow?"disabled":""}>搭配视图</button><button type="button" data-action="free-view" aria-pressed="${!isGuided}">自由连线</button></div><p>${isGuided?"添加候选，选择搭配方式，再预览要生成的图片。":flow?"拖动标题移动节点。自由连线适合多级搭配、多个输出。":"此画布包含独立连线或多级搭配，已保留原结构。"}</p></div>
+      <div class="pc-viewbar"><div role="group" aria-label="画布操作视图"><button type="button" data-action="guided-view" aria-pressed="${isGuided}" ${!flow?"disabled":""}>搭配视图</button><button type="button" data-action="free-view" aria-pressed="${!isGuided}">节点画布</button></div><p>${isGuided?"添加候选，选择搭配方式，再预览要生成的图片。":flow?"拖动标题移动节点。":"此画布包含独立连线或多级搭配，已保留原结构。"}</p></div>
       ${isGuided?'<nav class="pc-step-nav" aria-label="跳转画布步骤"><button type="button" data-action="step" data-step="parameters">1 准备参数</button><button type="button" data-action="step" data-step="matching">2 搭配方式</button><button type="button" data-action="step" data-step="checkout">3 预览出图</button></nav>':""}
       ${current.removal?'<div class="pc-undo" role="status">已移除，尚可撤销 <button type="button" data-action="undo-remove">撤销移除</button></div>':""}
-      ${isGuided?guidedHtml(flow):`<div class="pc-toolbar"><label>添加什么<select id="pc-add-parameter">${Object.entries(labels).filter(([k])=>k!=="style2").map(([key,name])=>`<option value="${key}">${name}</option>`).join("")}</select></label><button type="button" data-action="parameter">＋ 参数</button><button type="button" data-action="combine">＋ 搭配节点</button><button type="button" data-action="output">＋ 输出节点</button><button type="button" data-action="arrange">整理位置</button><button type="button" class="pc-primary" data-action="preview">预览组合与费用</button></div>
-      <div class="pc-layout"><div class="pc-scroll" aria-label="参数节点画布"><div class="pc-world" style="width:${Math.max(1050,...doc.graph.nodes.map(n=>(Number(n.x)||0)+320))}px;height:${Math.max(760,...doc.graph.nodes.map(n=>(Number(n.y)||0)+500))}px"><svg class="pc-edges" aria-hidden="true"></svg>${doc.graph.nodes.map((node,index)=>nodeHtml(node,index)).join("")}</div></div><aside class="pc-results" aria-label="组合预览和批次结果"></aside></div>
+      ${isGuided?guidedHtml(flow):`<div class="pc-toolbar"><button type="button" data-action="add-node-menu" aria-haspopup="dialog">＋ 添加节点</button><button type="button" data-action="arrange">整理位置</button><button type="button" class="pc-primary" data-action="preview">预览组合与费用</button><p data-wire-hint aria-live="polite"></p></div>
+      <div class="pc-layout"><div class="pc-scroll" tabindex="0" aria-label="参数节点画布"><div class="pc-world" style="width:${Math.max(1050,...doc.graph.nodes.map(n=>(Number(n.x)||0)+320))}px;height:${Math.max(760,...doc.graph.nodes.map(n=>(Number(n.y)||0)+500))}px"><svg class="pc-edges" aria-hidden="true"></svg>${doc.graph.nodes.map((node,index)=>nodeHtml(node,index)).join("")}</div></div><aside class="pc-results" aria-label="组合预览和批次结果"></aside></div>
       `}`;
-    status();drawEdges();
+    const canvas=root.querySelector(".pc-scroll");
+    if(canvas && oldCanvas) {canvas.scrollLeft=oldCanvas.scrollLeft;canvas.scrollTop=oldCanvas.scrollTop;}
+    status();wireHint();drawEdges();
     const body=root.querySelector('.pc-guided-body');if(body) body.scrollTop=oldScroll;
   }
   function guidedHtml(flow) {
@@ -408,13 +663,40 @@
       if(t.dataset.select!=null) {const n=Number(t.dataset.select);t.checked?current.selected.add(n):current.selected.delete(n);current.confirmation=null;renderPanel();return;}
       if(t.dataset.action==="choose-canvas"&&t.value) {busy(()=>current.open(t.value));return;}
       if(t.dataset.action==="choose-run"&&t.value) {busy(()=>current.watch(t.value));return;}
-      if(t.dataset.connect) {if(t.value) {current.doc.graph.edges.push({from:t.value,to:t.dataset.connect});current.edit(true);}return;}
       if(t.matches("select[data-node]")) valueChanged(t);
     };
     root.onclick=event=>{
       const button=event.target.closest("button[data-action]");if(!button) return;
       const action=button.dataset.action,node=current.doc.graph.nodes.find(n=>n.id===button.dataset.node),index=Number(button.dataset.value);
-      if(action==="guided-view"||action==="free-view") {current.view=action==="free-view"?"free":"guided";render();return;}
+      if(action==="guided-view"||action==="free-view") {current.view=action==="free-view"?"free":"guided";current.persist();render();return;}
+      if(action==="port") {
+        if(suppressPortClick) {suppressPortClick=false;return;}
+        const next=portRef(button);
+        if(selectedPort?.node===next.node && selectedPort.direction===next.direction) clearWire();
+        else if(selectedPort && selectedPort.direction!==next.direction) connectPorts(selectedPort,next);
+        else selectPort(button);
+        return;
+      }
+      if(action==="add-node-menu") {
+        if(nodeMenu) {closeNodeMenu();return;}
+        const bounds=button.getBoundingClientRect();
+        const bottom=Math.max(0,...[...root.querySelectorAll(".pc-node")].map(card=>card.offsetTop+card.offsetHeight));
+        openNodeMenu(bounds.left,bounds.bottom+6,null,{x:32,y:bottom+40});
+        return;
+      }
+      if(action==="close-node-menu") {closeNodeMenu();root.querySelector('[data-action="add-node-menu"]')?.focus();return;}
+      if(action==="create-node" && nodeMenu) {
+        const {position,port}=nodeMenu;
+        closeNodeMenu();
+        const graph=current.doc.graph;
+        if(port && graph.edges.length>=400) {wireHint("画布最多可添加 400 条连线");return;}
+        const added=addCanvasNode(graph,button.dataset.type,button.dataset.field,position);
+        if(!added) {wireHint("画布最多可添加 200 个节点");return;}
+        if(port) graph.edges.push(portConnection(port,{node:added.id,direction:port.direction==="out"?"in":"out"}));
+        current.edit(true);
+        focusParameter(added);
+        return;
+      }
       if(action==="step") {
         const section=root.querySelector(button.dataset.step==="parameters"?'.pc-parameters-area':button.dataset.step==="matching"?'.pc-matching':'.pc-checkout');
         const body=root.querySelector('.pc-guided-body');
@@ -449,12 +731,11 @@
         const resource=(options.resources?.(field==="layout"?"layout":"style")||[]).find(item=>(item.id||item.code)===code);
         if(resource?.image) options.openImage?.(resource.image,`${code} ${resource.name_zh||resource.name||""}`);return;
       }
-      const removal=["remove-node","remove-value"].includes(action)?clone(current.doc.graph):null;
+      const removal=["remove-node","remove-value","disconnect"].includes(action)?clone(current.doc.graph):null;
       if(action==="remove-node") {current.doc.graph.nodes=current.doc.graph.nodes.filter(n=>n!==node);current.doc.graph.edges=current.doc.graph.edges.filter(e=>e.from!==node.id&&e.to!==node.id);}
       else if(action==="remove-value") node.values.splice(index,1);
-      else if(action==="add-value") node.values.push(["refImages","colors","tones","moods"].includes(node.parameter)?[]:node.parameter==="ratio"?"3:4":node.parameter==="mode"?"graphic-text":"");
+      else if(action==="add-value") node.values.push(initialCandidate(node.parameter));
       else if(action==="disconnect") current.doc.graph.edges=current.doc.graph.edges.filter(e=>!(e.from===button.dataset.from&&e.to===node.id));
-      else if(["parameter","combine","output"].includes(action)) {const field=root.querySelector("#pc-add-parameter").value;current.doc.graph.nodes.push({id:uid("node"),type:action,parameter:field,values:[["refImages","colors","tones","moods"].includes(field)?[]:field==="ratio"?"3:4":field==="mode"?"graphic-text":""],mode:"cartesian",repeat:1,x:40+(current.doc.graph.nodes.length%3)*335,y:40+Math.floor(current.doc.graph.nodes.length/3)*330});}
       else if(action==="arrange") arrangeNodes(current.doc.graph.nodes,new Map(
         Array.from(root.querySelectorAll("[data-card]")).map(card=>[card.dataset.card,{width:card.offsetWidth,height:card.offsetHeight}])
       ));
@@ -463,21 +744,69 @@
       if(removal) {current.removal=removal;render();}
       if(action==="add-value") focusParameter(node,true);
     };
+    root.oncontextmenu=root.ondblclick=event=>{
+      if(!event.target.closest(".pc-world") || event.target.closest(".pc-node")) return;
+      event.preventDefault();
+      openNodeMenu(event.clientX,event.clientY);
+    };
+    root.onkeydown=event=>{
+      if(event.key==="Escape" && (selectedPort||cancelPointer)) {cancelPointer?.();clearWire();}
+    };
     root.onpointerdown=event=>{
+      if(event.button!==0 || !event.isPrimary) return;
+      suppressPortClick=false;
+      const port=event.target.closest("[data-port]");
+      if(port) {beginWire(event,port);return;}
+      if(event.target.closest(".pc-world")) clearWire();
       const header=event.target.closest("[data-drag]");if(!header||event.target.closest("button")) return;
       const node=current.doc.graph.nodes.find(n=>n.id===header.dataset.drag),card=header.closest(".pc-node"),start={x:event.clientX,y:event.clientY,nx:Number(node.x)||0,ny:Number(node.y)||0};
-      header.setPointerCapture(event.pointerId);
-      header.onpointermove=e=>{node.x=Math.max(0,start.nx+e.clientX-start.x);node.y=Math.max(0,start.ny+e.clientY-start.y);card.style.left=node.x+"px";card.style.top=node.y+"px";drawEdges();};
-      header.onpointerup=()=>{header.onpointermove=null;header.onpointerup=null;current.edit();};
+      const pointerId=event.pointerId;
+      const controller=new AbortController(),listener={signal:controller.signal};
+      const world=card.parentElement;
+      const syncPosition=()=>{
+        card.style.left=node.x+"px";card.style.top=node.y+"px";
+        world.style.width=Math.max(world.offsetWidth,node.x+card.offsetWidth+32)+"px";
+        world.style.height=Math.max(world.offsetHeight,node.y+card.offsetHeight+32)+"px";
+        drawEdges();
+      };
+      header.setPointerCapture(pointerId);
+      cancelPointer=()=>{
+        controller.abort();
+        if(header.hasPointerCapture(pointerId)) header.releasePointerCapture(pointerId);
+        cancelPointer=null;
+        node.x=start.nx;node.y=start.ny;syncPosition();
+      };
+      header.addEventListener("pointermove",e=>{
+        if(e.pointerId!==pointerId) return;
+        node.x=Math.max(16,Math.min(50000,start.nx+e.clientX-start.x));
+        node.y=Math.max(16,Math.min(50000,start.ny+e.clientY-start.y));
+        syncPosition();
+      },listener);
+      header.addEventListener("pointerup",e=>{
+        if(e.pointerId!==pointerId) return;
+        controller.abort();cancelPointer=null;
+        if(node.x!==start.nx||node.y!==start.ny) current.edit();
+      },listener);
+      header.addEventListener("pointercancel",()=>cancelPointer?.(),listener);
+      header.addEventListener("lostpointercapture",()=>cancelPointer?.(),listener);
       event.preventDefault();
     };
   }
   function mount(element,configuration) {
+    if(root!==element || (current && options.scope!==configuration.scope)) dismissInteractions();
     if(current && (current.closed||options.scope!==configuration.scope)) {current.close();current=null;}
     const changedRoot=root!==element;root=element;options=configuration;
-    if(!current) {current=new CanvasStore({...configuration,storage:global.localStorage});current.onchange=reason=>reason==="status"?status():render();render();bind();void current.load();}
+    if(!current) {current=new CanvasStore({...configuration,storage:global.localStorage});current.onchange=reason=>reason==="status"?status():reason==="panel"?renderPanel():render();render();bind();void current.load();}
     else if(changedRoot) {render();bind();}
   }
-  global.HandrawParameterCanvas={mount,saveCurrent:()=>current?.save(),openRun:id=>current?.openRun(id),importDocument:document=>current?.importDocument(document),reset:()=>{current?.close();current=null;root=null;}};
-  if(global.__HANDRAW_TESTING__) global.HandrawParameterCanvas.testing={CanvasStore,blank,selectedQuote,arrangeNodes,pickResourceCandidate,simpleFlow,combinationSummary,addGuidedParameter};
+  function dismissInteractions() {
+    closeNodeMenu();
+    cancelPointer?.();
+    clearWire();
+  }
+  global.addEventListener?.("resize", () => {
+    if (root?.offsetWidth && current && !cancelPointer) drawEdges();
+  });
+  global.HandrawParameterCanvas={mount,dismissInteractions,saveCurrent:()=>current?.save(),openRun:id=>current?.openRun(id),importDocument:document=>current?.importDocument(document),reset:()=>{dismissInteractions();current?.close();current=null;root=null;}};
+  if(global.__HANDRAW_TESTING__) global.HandrawParameterCanvas.testing={CanvasStore,blank,selectedQuote,arrangeNodes,pickResourceCandidate,simpleFlow,combinationSummary,addGuidedParameter,connectionError,addCanvasNode};
 })(window);

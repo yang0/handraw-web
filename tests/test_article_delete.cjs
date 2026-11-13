@@ -4,6 +4,7 @@ const test = require("node:test");
 const assert = require("node:assert/strict");
 const fs = require("node:fs");
 const path = require("node:path");
+const vm = require("node:vm");
 
 const ROOT = path.resolve(__dirname, "..");
 const sharedSource = fs.readFileSync(path.join(ROOT, "demo", "assets", "shared.js"), "utf8");
@@ -84,17 +85,38 @@ test("Issue #62: Article Deletion in Editor, Profile, and History Pagination", a
     );
   });
 
-  await t.test("5. Studio app: Deletion navigates away if active/editing article", () => {
-    const studioDeleteFn = studioAppSource.match(/function deleteArticle\(aid\)[\s\S]*?^  \}/m);
-    assert.ok(studioDeleteFn, "studio-app.js deleteArticle found");
-    assert.ok(
-      studioDeleteFn[0].includes("openMyArticlesPage"),
-      "studio-app.js deleteArticle must navigate away via openMyArticlesPage if editor or active article was deleted"
-    );
-    assert.ok(
-      studioDeleteFn[0].includes("removeArticleFromWorkspace"),
-      "studio-app.js must clean up workspace nodes for the deleted article"
-    );
+  await t.test("5. Studio editor stays open when deleting another, the current or the last article", () => {
+    const source = studioAppSource.match(/function finishArticleDeletion\(aid\)[\s\S]*?^  \}/m)[0];
+    const scroll = {scrollTop: 150};
+    const CS = {
+      stageView: "preview", articleSubView: "editor", activeArticleId: "a",
+      articleEditorDraft: {id: "a", markdown: "Unsaved text"}, myArticles: [{id: "a"}, {id: "b"}, {id: "c"}]
+    };
+    const calls = [];
+    const context = {
+      CS, DOM: {previewStage: {querySelector: () => scroll}},
+      getSortedMyArticles: () => CS.myArticles,
+      clearUnifiedArticleEditorFlush: () => calls.push("cancel"),
+      flushUnifiedArticleEditor: () => calls.push("flush"),
+      removeArticleFromWorkspace: id => calls.push("remove:" + id),
+      _articleCloudBases: new Map(), _articleCloudSnapshots: new Map(),
+      persistMyArticles() {}, persistOpenTabs() {},
+      replaceArticleEditorUrl: id => calls.push("url:" + id),
+      openMyArticlesPage: () => assert.fail("Deletion opened the list"),
+      renderFullPreviewStage: () => {scroll.scrollTop = 0;}
+    };
+    vm.runInNewContext(source + "\nthis.finish = finishArticleDeletion;", context);
+    context.finish("c");
+    assert.equal(CS.articleEditorDraft.markdown, "Unsaved text");
+    assert.equal(scroll.scrollTop, 150);
+    context.finish("a");
+    assert.equal(CS.activeArticleId, "b");
+    assert.equal(CS.articleEditorDraft, null);
+    context.finish("b");
+    assert.equal(CS.activeArticleId, null);
+    assert.equal(CS.articleSubView, "editor");
+    assert.deepEqual(CS.myArticles, []);
+    assert.deepEqual(calls, ["flush","remove:c","cancel","remove:a","url:b","cancel","remove:b","url:null"]);
   });
 
   await t.test("6. Behavioral test: Modal confirm calls DELETE API and executes callback", async () => {

@@ -2,7 +2,7 @@
 const test=require("node:test"),assert=require("node:assert/strict"),vm=require("node:vm"),fs=require("node:fs");
 const context={window:{__HANDRAW_TESTING__:true},setTimeout,clearTimeout,console};
 vm.createContext(context);vm.runInContext(fs.readFileSync("demo/assets/parameter-canvas.js","utf8"),context);
-const {CanvasStore,selectedQuote,arrangeNodes,pickResourceCandidate,simpleFlow,combinationSummary,addGuidedParameter}=context.window.HandrawParameterCanvas.testing;
+const {CanvasStore,selectedQuote,arrangeNodes,pickResourceCandidate,simpleFlow,combinationSummary,addGuidedParameter,connectionError,addCanvasNode}=context.window.HandrawParameterCanvas.testing;
 const storage=new Map();
 function store(t,api,scope="user:canvas") {
   const instance=new CanvasStore({api,scope,loggedIn:()=>true,storage:{getItem:key=>storage.get(key),setItem:(key,value)=>storage.set(key,value)}});
@@ -44,9 +44,9 @@ test("editing invalidates the fee confirmation and preview while preserving acce
   s.edit();assert.equal(s.confirmation,null);assert.equal(s.preview,null);assert.equal(s.selected.size,0);assert.equal(s.run.id,"accepted");
 });
 
-test("new canvas starts with three steps, pictures and automatic parameter inclusion",t=>{
+test("the optional guided view keeps the three steps and automatic parameter inclusion",t=>{
   const canvas=context.window.HandrawParameterCanvas,doc=canvas.testing.blank();
-  context.window.localStorage={getItem:()=>JSON.stringify({doc}),setItem(){}};
+  context.window.localStorage={getItem:()=>JSON.stringify({doc,view:"guided"}),setItem(){}};
   const root={innerHTML:"",querySelector:()=>null,querySelectorAll:()=>[]};
   canvas.mount(root,{scope:"guided-render",loggedIn:()=>false,resources:()=>[]});
   t.after(()=>{canvas.reset();delete context.window.localStorage;});
@@ -54,6 +54,32 @@ test("new canvas starts with three steps, pictures and automatic parameter inclu
   assert.ok(root.innerHTML.includes('data-action="guided-add"'));
   assert.ok(!root.innerHTML.includes('class="pc-world"'));
   assert.ok(!root.innerHTML.includes('data-drag='));
+});
+
+test("node view opens by default and exposes one anchor for each usable direction",t=>{
+  const canvas=context.window.HandrawParameterCanvas,doc=canvas.testing.blank();
+  context.window.localStorage={getItem:()=>JSON.stringify({doc}),setItem(){}};
+  const root={innerHTML:"",querySelector:()=>null,querySelectorAll:()=>[]};
+  canvas.mount(root,{scope:"node-render",loggedIn:()=>false,resources:()=>[]});
+  t.after(()=>{canvas.reset();delete context.window.localStorage;});
+  assert.deepEqual([...root.innerHTML.matchAll(/data-port="(in|out)" data-node="([^"]+)"/g)].map(m=>m.slice(1)),[
+    ["out","theme"],["out","style"],["in","combine"],["out","combine"],["in","output"]
+  ]);
+  assert.match(root.innerHTML,/data-action="add-node-menu"/);
+});
+
+test("wiring accepts nested combinations and rejects duplicates, cycles and terminal outputs",t=>{
+  storage.clear();const s=store(t,async()=>({writeSeq:1}));
+  const graph=s.doc.graph;
+  const nested=addCanvasNode(graph,"combine","",{x:400,y:480});
+  assert.equal(connectionError(graph,"combine",nested.id),"");
+  graph.edges.push({from:"combine",to:nested.id});
+  assert.equal(connectionError(graph,nested.id,"output"),"");
+  assert.match(connectionError(graph,nested.id,"combine"),/循环/);
+  assert.match(connectionError(graph,"theme","combine"),/已经连接/);
+  assert.match(connectionError(graph,"output",nested.id),/右侧输出/);
+  assert.match(connectionError(graph,nested.id,"style"),/右侧输出/);
+  assert.equal(graph.edges.length,4);
 });
 
 test("visual resource picks change only the chosen candidate and preserve atomic fusion pairs",t=>{
