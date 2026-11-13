@@ -11,6 +11,74 @@ const sharedSource = fs.readFileSync(path.join(ROOT, "demo", "assets", "shared.j
 const mainAppSource = fs.readFileSync(path.join(ROOT, "demo", "assets", "main-app.js"), "utf8");
 const studioAppSource = fs.readFileSync(path.join(ROOT, "demo", "assets", "studio-app.js"), "utf8");
 
+function articleDeletionContext(events) {
+  const context = {
+    CS: {articleEditorFlush: (save, dispose) => {assert.equal(save,true);assert.equal(dispose,false);events.push("collect");}},
+    App: {state:{serverBacked:true,loggedIn:true}},
+    activeCacheScope:"user:1",cacheScopeEpoch:1,
+    _articleCloudBases:new Map(),_articleCloudSnapshots:new Map(),_articlesDeleting:new Set(),
+    _articlesSyncPromise:null,
+    findArticleById: () => ({articleTitle:"Draft"}),
+    isStaleScope: () => false,
+    finishArticleDeletion: () => events.push("remove"),
+    scheduleCloudArticlesSync: () => events.push("resume"),
+    flushCloudArticlesSync: async () => true,
+    S: {
+      apiJson: async () => {events.push("delete");return {ok:true};},
+      deleteArticle: async (id,options) => {
+        const result=await options.deleteRequest(id);
+        options.onSuccess(result);
+        return result;
+      }
+    }
+  };
+  const source=studioAppSource.match(/function deleteArticle\(aid\)[\s\S]*?^  \}/m)[0];
+  vm.runInNewContext(source+"\nthis.removeArticle=deleteArticle;",context);
+  return context;
+}
+
+test("deleting a new article waits for its first save and keeps the editor live",async()=>{
+  const events=[],context=articleDeletionContext(events);
+  let release;
+  context.flushCloudArticlesSync=()=>new Promise(resolve=>{events.push("save");release=resolve;});
+  const operation=context.removeArticle("new-draft");
+  await Promise.resolve();
+  assert.deepEqual(events,["collect","save"]);
+  release(true);
+  await operation;
+  assert.deepEqual(events,["collect","save","delete","remove"]);
+  assert.equal(context._articlesDeleting.size,0);
+});
+
+test("existing articles wait for accepted saves and deletion errors remain recoverable",async()=>{
+  const events=[],context=articleDeletionContext(events);
+  context._articleCloudBases.set("known",1);
+  let release;
+  context._articlesSyncPromise=new Promise(resolve=>{release=resolve;});
+  context.flushCloudArticlesSync=()=>assert.fail("An unrelated conflict must not block deleting a saved article");
+  context.S.apiJson=async()=>{events.push("delete");throw Object.assign(new Error("Unavailable"),{status:503});};
+  const operation=context.removeArticle("known");
+  await Promise.resolve();
+  assert.equal(context._articlesDeleting.has("known"),true);
+  assert.deepEqual(events,["collect"]);
+  release(false);
+  assert.equal((await operation).ok,false);
+  assert.equal(context._articlesDeleting.size,0);
+  assert.deepEqual(events,["collect","delete","resume"]);
+});
+
+test("local drafts and articles already absent remotely can be removed",async()=>{
+  const events=[],context=articleDeletionContext(events);
+  context.App.state.loggedIn=false;
+  assert.equal((await context.removeArticle("offline")).deleted,true);
+  assert.deepEqual(events,["collect","remove"]);
+  context.App.state.loggedIn=true;
+  context._articleCloudBases.set("removed-elsewhere",1);
+  context.S.apiJson=async()=>{throw Object.assign(new Error("Missing"),{status:404});};
+  assert.equal((await context.removeArticle("removed-elsewhere")).deleted,true);
+  assert.equal(context._articlesDeleting.size,0);
+});
+
 test("Issue #62: Article Deletion in Editor, Profile, and History Pagination", async (t) => {
   await t.test("1. Shared deleteArticle implementation contract", () => {
     // Must be exported in shared.js

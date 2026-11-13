@@ -3294,9 +3294,9 @@
               confirmBtn.disabled = true;
               confirmBtn.textContent = "正在删除…";
               try {
-                const res = await apiJson(`/api/studio/articles/${encodeURIComponent(aid)}`, {
-                  method: "DELETE"
-                });
+                const res = typeof opts.deleteRequest === "function"
+                  ? await opts.deleteRequest(aid)
+                  : await apiJson(`/api/studio/articles/${encodeURIComponent(aid)}`, { method: "DELETE" });
                 closeModal();
                 toast("🗑️ 文章已删除");
                 if (typeof onSuccess === "function") {

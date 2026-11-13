@@ -55,6 +55,7 @@
   const _workspaceCollectionsLoading=new Map();
   const _generationControllers = new Set();
   let _articlesSyncTimer = null;
+  const _articlesDeleting = new Set();
   let _articleLocalSaveFailed = false;
   let _articlesSyncVersion = 0;
   const _articleCloudBases = new Map();
@@ -214,6 +215,7 @@
     _articlesSyncVersion = 0;
     _articleCloudBases.clear();
     _articleCloudSnapshots.clear();
+    _articlesDeleting.clear();
     _articlesSyncPromise = null;
     _articlesCloudConflict = false;
     _articlesSyncedVersion = 0;
@@ -752,7 +754,7 @@
     const operation = (async () => {
       try {
         while (sameScope()) {
-          const changed = (CS.myArticles || []).filter(article=>!article._summary).map(articleCloudPayload)
+          const changed = (CS.myArticles || []).filter(article=>!article._summary && !_articlesDeleting.has(article.id)).map(articleCloudPayload)
             .filter(article => _articleCloudSnapshots.get(String(article.id)) !== JSON.stringify(article))
             .slice(0, 50);
           if (!changed.length) {
@@ -12211,10 +12213,41 @@
     const scope = activeCacheScope;
     const epoch = cacheScopeEpoch;
     const onSuccess = () => {
-      if (!isStaleScope(epoch, scope)) finishArticleDeletion(aid);
+      if (!isStaleScope(epoch, scope)) {
+        try {finishArticleDeletion(aid);}
+        finally {_articlesDeleting.delete(aid);}
+      }
     };
     if (typeof S.deleteArticle === "function") {
-      return S.deleteArticle(aid, { articleTitle: title, onSuccess });
+      return S.deleteArticle(aid, {
+        articleTitle: title, onSuccess,
+        deleteRequest: async () => {
+          if (isStaleScope(epoch, scope)) throw new Error("账号已切换，请重新打开文章");
+          // Collect the current editor without detaching its input handlers.
+          CS.articleEditorFlush?.(true, false);
+          if (!App.state?.serverBacked || !App.state?.loggedIn)
+            return {ok:true,id:aid,deleted:true};
+          // A new local article needs its first server receipt before DELETE.
+          if (!_articleCloudBases.has(aid) && !(await flushCloudArticlesSync()))
+            throw new Error("文章尚未同步成功，请重试删除。本地稿已保留");
+          if (isStaleScope(epoch, scope)) throw new Error("账号已切换，请重新打开文章");
+          _articlesDeleting.add(aid);
+          // Let an accepted save settle before deleting, and keep subsequent
+          // workspace saves from including this article.
+          if (_articlesSyncPromise) await _articlesSyncPromise;
+          if (isStaleScope(epoch, scope)) throw new Error("账号已切换，请重新打开文章");
+          try {
+            return await S.apiJson(`/api/studio/articles/${encodeURIComponent(aid)}`, {method:"DELETE"});
+          } catch (error) {
+            if (error.status===404) return {ok:true,id:aid,deleted:true};
+            throw error;
+          }
+        }
+      }).catch(() => {
+        if (!isStaleScope(epoch, scope) && _articlesDeleting.delete(aid)) scheduleCloudArticlesSync();
+        // The confirmation modal already displays the recoverable error.
+        return {ok:false};
+      });
     }
     onSuccess();
   }
@@ -13098,7 +13131,7 @@
                             : `<div class="ic-hist-art-placeholder">📄</div>`
                         }
                         <div style="min-width:0;flex:1;">
-                          <div style="font-size:12.2px;font-weight:800;color:var(--ic-ink);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">
+                          <div data-sidebar-article-title style="font-size:12.2px;font-weight:800;color:var(--ic-ink);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">
                             ${esc(a.articleTitle || "未命名文章")}
                           </div>
                           <div style="font-size:10.6px;margin-top:2px;display:flex;align-items:center;gap:5px;color:var(--ic-muted);">
@@ -13106,7 +13139,7 @@
                               genNow
                                 ? `<span style="color:var(--vermilion);font-weight:800;">⏳ 正在生图…</span>`
                                 : `
-                                  <span>${esc(a.timeLabel || formatArticleTimeLabel(a.updatedAtMs))}</span>
+                                  <span data-sidebar-article-time>${esc(a.timeLabel || formatArticleTimeLabel(a.updatedAtMs))}</span>
                                   <span>·</span>
                                   <span style="color:${readyCnt > 0 ? "#1f6f4a" : "var(--ic-muted)"};font-weight:750;">配图 ${readyCnt}/${progress.total}</span>
                                 `
@@ -15276,6 +15309,7 @@
     const autosaveScope = currentCacheScopeKey();
     let autosaveActive = true;
     let autoSyncTimer = null;
+    let editorInputVersion = 0;
 
     const isCurrentEditor = () => {
       if (!autosaveActive || autosaveScope !== currentCacheScopeKey()) return false;
@@ -15338,6 +15372,17 @@
       if (sidebar) {
         sidebar.outerHTML = renderArticleSidebarHtml(getSortedMyArticles(), CS.activeArticleId);
         bindArticleSidebar(DOM.previewStage, CS.activeArticleId);
+      } else if (saved) {
+        const row = [...DOM.previewStage.querySelectorAll("[data-hist-art-id]")]
+          .find(element => element.dataset.histArtId === saved.id);
+        if (row) {
+          row.title = saved.articleTitle;
+          const label = row.querySelector("[data-sidebar-article-title]");
+          if (label) label.textContent = saved.articleTitle;
+          const time = row.querySelector("[data-sidebar-article-time]");
+          if (time) time.textContent = saved.timeLabel || formatArticleTimeLabel(saved.updatedAtMs);
+          row.querySelector("[data-sidebar-del-art-id]")?.setAttribute("aria-label", `删除文章：${saved.articleTitle}`);
+        }
       }
       if (markSaved) {
         if (saved && draft.id) {
@@ -15379,20 +15424,26 @@
       if (!isCurrentEditor() || saveButton.disabled) return;
       if (autoSyncTimer) clearTimeout(autoSyncTimer);
       autoSyncTimer = null;
-      if (!commitSync({bumpTime:false})) {
+      if (!commitSync({bumpTime:true})) {
         updateSavedState("empty");
         toast("请先填写标题或正文");
         return;
       }
       const remote = Boolean(App.state?.serverBacked && App.state?.loggedIn);
-      if (remote) {
-        saveButton.disabled = true;
-        saveButton.textContent = "保存中…";
-      }
+      saveButton.disabled = true;
+      saveButton.textContent = "保存中…";
+      saveButton.setAttribute("aria-busy", "true");
+      const savedInputVersion = editorInputVersion;
       const synced = remote && await flushCloudArticlesSync();
       if (!isCurrentEditor()) return;
       saveButton.disabled = false;
-      saveButton.textContent = "保存文章";
+      saveButton.removeAttribute("aria-busy");
+      if (savedInputVersion !== editorInputVersion && autoSyncTimer) {
+        saveButton.textContent = "保存文章";
+        updateSavedState("dirty");
+        return;
+      }
+      saveButton.textContent = synced || (!remote && !_articleLocalSaveFailed) ? "已保存" : "重试保存";
       updateSavedState("saved");
       if (synced) toast("文章已保存到云端");
       else if (_articlesCloudConflict) toast(_articleLocalSaveFailed ? "文章保存冲突，本地保存也未成功" : "文章已保留在本机，请处理云端冲突");
@@ -15402,6 +15453,8 @@
 
     const triggerDebouncedSync = () => {
       if (!isCurrentEditor()) return;
+      editorInputVersion += 1;
+      if (saveButton && !saveButton.disabled) saveButton.textContent = "保存文章";
       updateSavedState(hasEditorContent() ? "dirty" : "empty");
       if (autoSyncTimer) clearTimeout(autoSyncTimer);
       autoSyncTimer = setTimeout(() => {
@@ -15421,11 +15474,12 @@
     };
     window.addEventListener("beforeunload", handleBeforeUnload);
 
-    CS.articleEditorFlush = (save = true) => {
+    CS.articleEditorFlush = (save = true, dispose = true) => {
       if (save && autosaveActive && isCurrentEditor()) {
         collectDraftFromInputs(draft);
         syncArticleEditorDraftToHistory(draft, { bumpTime: false });
       }
+      if (!dispose) return;
       autosaveActive = false;
       if (autoSyncTimer) {
         clearTimeout(autoSyncTimer);
