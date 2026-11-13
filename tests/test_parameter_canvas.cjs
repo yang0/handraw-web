@@ -2,7 +2,7 @@
 const test=require("node:test"),assert=require("node:assert/strict"),vm=require("node:vm"),fs=require("node:fs");
 const context={window:{__HANDRAW_TESTING__:true},setTimeout,clearTimeout,console};
 vm.createContext(context);vm.runInContext(fs.readFileSync("demo/assets/parameter-canvas.js","utf8"),context);
-const {CanvasStore,selectedQuote,arrangeNodes,pickResourceCandidate}=context.window.HandrawParameterCanvas.testing;
+const {CanvasStore,selectedQuote,arrangeNodes,pickResourceCandidate,simpleFlow,combinationSummary,addGuidedParameter}=context.window.HandrawParameterCanvas.testing;
 const storage=new Map();
 function store(t,api,scope="user:canvas") {
   const instance=new CanvasStore({api,scope,loggedIn:()=>true,storage:{getItem:key=>storage.get(key),setItem:(key,value)=>storage.set(key,value)}});
@@ -10,6 +10,51 @@ function store(t,api,scope="user:canvas") {
 }
 function preview() {return {planHash:"hash",quote:{freeRemaining:1,unitPrice:2,balance:10},items:[{ordinal:0,spec:{prompt:"A"}},{ordinal:1,spec:{prompt:"B"}}]};}
 function run(id="run") {return {id,status:"success",items:[],count:0,retryQuote:{total:0,unitPrice:2},spentCredits:0,maxCredits:0};}
+
+test("guided combinations explain cross products, sequential pairs and shared singleton values",t=>{
+  storage.clear();const s=store(t,async()=>({writeSeq:1}));
+  const flow=simpleFlow(s.doc.graph);flow.parameters[0].values=["Forest","Ocean"];flow.parameters[1].values=["FA-001","FA-002","FA-003"];
+  const ratio=addGuidedParameter(s,"ratio");assert.equal(ratio.values[0],"3:4");
+  assert.ok(ratio.y>flow.parameters[0].y,"New parameters get a separate position in the free view");
+  assert.equal(s.doc.graph.edges.filter(e=>e.from===ratio.id&&e.to===flow.group.id).length,1);
+  const count=s.doc.graph.nodes.length;assert.equal(addGuidedParameter(s,"ratio"),ratio);assert.equal(s.doc.graph.nodes.length,count);
+  assert.equal(combinationSummary(s.doc.graph).count,6);
+  flow.output.repeat=2;assert.equal(combinationSummary(s.doc.graph).count,12);
+  flow.group.mode="zip";assert.match(combinationSummary(s.doc.graph).problem,/数量需相同/);
+  flow.parameters[1].values.pop();assert.equal(combinationSummary(s.doc.graph).count,4);
+  flow.parameters[1].values.pop();assert.equal(combinationSummary(s.doc.graph).count,4,"A single style is reused for both themes");
+  flow.parameters[0].values[1]="";assert.match(combinationSummary(s.doc.graph).problem,/填写每个主题/);
+  flow.parameters[0].values=["Filled"];flow.output.repeat=0;assert.match(combinationSummary(s.doc.graph).problem,/1–200/);
+  flow.output.repeat=201;assert.match(combinationSummary(s.doc.graph).problem,/1–200/);
+  flow.output.repeat=100;flow.group.mode="cartesian";flow.parameters[0].values=["A","B","C"];
+  assert.match(combinationSummary(s.doc.graph).problem,/300 张/);assert.equal(combinationSummary(s.doc.graph).count,null);
+});
+
+test("complex or partially disconnected graphs cannot silently become a guided combination",t=>{
+  storage.clear();const s=store(t,async()=>({writeSeq:1}));
+  s.doc.graph.nodes.push({id:"nested",type:"combine",mode:"zip"});
+  const before=JSON.stringify(s.doc.graph);assert.equal(simpleFlow(s.doc.graph),null);
+  assert.equal(addGuidedParameter(s,"layout"),null);assert.equal(JSON.stringify(s.doc.graph),before);
+  s.doc.graph.nodes.pop();s.doc.graph.edges.pop();assert.equal(simpleFlow(s.doc.graph),null);
+});
+
+test("editing invalidates the fee confirmation and preview while preserving accepted runs",t=>{
+  storage.clear();const s=store(t,async()=>({writeSeq:1}));
+  s.preview=preview();s.confirmation="submit";s.run=run("accepted");s.selected=new Set([0]);
+  s.edit();assert.equal(s.confirmation,null);assert.equal(s.preview,null);assert.equal(s.selected.size,0);assert.equal(s.run.id,"accepted");
+});
+
+test("new canvas starts with three steps, pictures and automatic parameter inclusion",t=>{
+  const canvas=context.window.HandrawParameterCanvas,doc=canvas.testing.blank();
+  context.window.localStorage={getItem:()=>JSON.stringify({doc}),setItem(){}};
+  const root={innerHTML:"",querySelector:()=>null,querySelectorAll:()=>[]};
+  canvas.mount(root,{scope:"guided-render",loggedIn:()=>false,resources:()=>[]});
+  t.after(()=>{canvas.reset();delete context.window.localStorage;});
+  for(const text of ["准备参数","选择搭配方式","预览与出图","2 个主题 × 3 种画风 → 6 组","按顺序一一搭配"]) assert.ok(root.innerHTML.includes(text));
+  assert.ok(root.innerHTML.includes('data-action="guided-add"'));
+  assert.ok(!root.innerHTML.includes('class="pc-world"'));
+  assert.ok(!root.innerHTML.includes('data-drag='));
+});
 
 test("visual resource picks change only the chosen candidate and preserve atomic fusion pairs",t=>{
   storage.clear();const s=store(t,async()=>({writeSeq:1}));
