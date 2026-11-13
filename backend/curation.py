@@ -846,6 +846,7 @@ def _assign_slot(tx, submission_id, revision, reviewer, seq):
 def review_queue(db, user):
     reviewer=_username(user)
     with db.transaction() as tx:
+        tx.execute("SELECT pg_advisory_xact_lock(191,hashtext(?))",(reviewer.lower(),))
         _release_invalid_assignments(tx)
         eligible=[e['kind'] for e in _review_access_for(tx,user) if e['eligible']]
         active=tx.execute("SELECT status FROM users WHERE id=? AND username=?",(_user_id(user),reviewer)).fetchone()
@@ -858,7 +859,10 @@ def review_queue(db, user):
             return {'ok':True,'access':eligible,'assignment':_assignment_view(tx,dict(old),_submission_row(tx,old['submission_id']))}
         pending=tx.execute("SELECT * FROM curation_submissions WHERE status='pending' AND LOWER(owner_username) <> LOWER(?) ORDER BY created_at,id",(reviewer,)).fetchall()
         for r in pending:
-            sub=dict(r)
+            current=tx.execute("SELECT * FROM curation_submissions WHERE id=? AND status='pending' FOR UPDATE",(r['id'],)).fetchone()
+            if not current:
+                continue
+            sub=dict(current)
             if sub['kind'] not in eligible:
                 continue
             rev=int(sub['current_revision'])
@@ -907,6 +911,7 @@ def vote(db: Database, user: dict[str, Any], body: dict[str, Any]) -> dict[str, 
         raise ServiceError("退回修改必须说明理由", status=400, code="reason_required")
 
     with db.transaction() as tx:
+        tx.execute("SELECT pg_advisory_xact_lock(191,hashtext(?))",(reviewer.lower(),))
         _release_invalid_assignments(tx)
         arow = tx.execute("SELECT * FROM curation_assignments WHERE id = ?", (assignment_id,)).fetchone()
         if not arow:
@@ -914,6 +919,7 @@ def vote(db: Database, user: dict[str, Any], body: dict[str, Any]) -> dict[str, 
         a = _row_to_dict(arow) or {}
         if str(a["reviewer_username"]).lower() != reviewer.lower():
             raise ServiceError("无权处理该分配", status=403, code="not_assigned")
+        tx.execute("SELECT id FROM curation_submissions WHERE id=? FOR UPDATE",(a["submission_id"],)).fetchone()
         sub = _submission_row(tx, str(a["submission_id"]))
         if sub["owner_username"].lower() == reviewer.lower():
             raise ServiceError("不能审核自己的投稿", status=403, code="self_review")
