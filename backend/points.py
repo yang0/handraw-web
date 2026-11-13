@@ -13,10 +13,17 @@ def track_delta(tx, uid, ledger_id, delta, kind, ref_type, ref_id):
         ).fetchone()[0]
         available = max(0, balance) - max(0, balance - delta)
         # Refund restores consumed lots rather than turning gifts into bought points.
-        if kind in ("unlock_refund", "refund") and ref_type in ("asset", "topic"):
+        original_kind = (
+            "bounty_escrow"
+            if kind == "bounty_admin_refund" and ref_type == "topic"
+            else "unlock_spend"
+            if kind in ("unlock_refund", "refund") and ref_type in ("asset", "topic")
+            else None
+        )
+        if original_kind:
             original = tx.execute(
-                "SELECT id FROM ledgers WHERE user_id=? AND kind='unlock_spend' AND ref_type=? AND ref_id=? ORDER BY id DESC LIMIT 1",
-                (uid, ref_type, ref_id),
+                "SELECT id FROM ledgers WHERE user_id=? AND kind=? AND ref_type=? AND ref_id=? ORDER BY id DESC LIMIT 1",
+                (uid, original_kind, ref_type, ref_id),
             ).fetchone()
             if original:
                 cutover = tx.execute(

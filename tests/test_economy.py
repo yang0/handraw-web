@@ -746,6 +746,60 @@ class PointsAndPaymentsTests(unittest.TestCase):
         )
         self.assertEqual({r[0]: r[1] for r in lots}, {"earned": 20, "purchased": 100})
 
+    def test_closed_bounty_restores_earned_and_purchased_point_sources(self):
+        self.paid_order("points")
+        with self.db.transaction() as tx:
+            apply_wallet_delta(tx, self.uid, 20, "admin_adjust", "contribution")
+            apply_wallet_delta(
+                tx,
+                self.uid,
+                -30,
+                "bounty_escrow",
+                "bounty",
+                event_key="bounty-hold",
+                ref_type="topic",
+                ref_id="bounty-source",
+            )
+            self.assertEqual(
+                tx.execute(
+                    "SELECT remaining_units FROM point_lots WHERE user_id=? AND source_kind='purchased'",
+                    (self.uid,),
+                ).fetchone()[0],
+                90,
+            )
+            apply_wallet_delta(
+                tx,
+                self.uid,
+                30,
+                "bounty_admin_refund",
+                "bounty closed",
+                event_key="bounty-return",
+                ref_type="topic",
+                ref_id="bounty-source",
+            )
+            self.assertFalse(
+                apply_wallet_delta(
+                    tx,
+                    self.uid,
+                    30,
+                    "bounty_admin_refund",
+                    "duplicate",
+                    event_key="bounty-return",
+                    ref_type="topic",
+                    ref_id="bounty-source",
+                )[1]
+            )
+        rows = (
+            self.db.get_conn()
+            .execute(
+                "SELECT source_kind,sum(remaining_units) FROM point_lots WHERE user_id=? GROUP BY source_kind",
+                (self.uid,),
+            )
+            .fetchall()
+        )
+        self.assertEqual({r[0]: r[1] for r in rows}, {"earned": 20, "purchased": 100})
+        self.assertTrue(economy.reconcile(self.db.get_conn())["ok"])
+
     def test_reward_caps_and_no_engagement_mint(self):
         from backend.points import reward
 
