@@ -2,7 +2,7 @@
 const test=require("node:test"),assert=require("node:assert/strict"),vm=require("node:vm"),fs=require("node:fs");
 const context={window:{__HANDRAW_TESTING__:true},setTimeout,clearTimeout,console};
 vm.createContext(context);vm.runInContext(fs.readFileSync("demo/assets/parameter-canvas.js","utf8"),context);
-const {CanvasStore,selectedQuote,arrangeNodes}=context.window.HandrawParameterCanvas.testing;
+const {CanvasStore,selectedQuote,arrangeNodes,pickResourceCandidate}=context.window.HandrawParameterCanvas.testing;
 const storage=new Map();
 function store(t,api,scope="user:canvas") {
   const instance=new CanvasStore({api,scope,loggedIn:()=>true,storage:{getItem:key=>storage.get(key),setItem:(key,value)=>storage.set(key,value)}});
@@ -10,6 +10,47 @@ function store(t,api,scope="user:canvas") {
 }
 function preview() {return {planHash:"hash",quote:{freeRemaining:1,unitPrice:2,balance:10},items:[{ordinal:0,spec:{prompt:"A"}},{ordinal:1,spec:{prompt:"B"}}]};}
 function run(id="run") {return {id,status:"success",items:[],count:0,retryQuote:{total:0,unitPrice:2},spentCredits:0,maxCredits:0};}
+
+test("visual resource picks change only the chosen candidate and preserve atomic fusion pairs",t=>{
+  storage.clear();const s=store(t,async()=>({writeSeq:1}));
+  const node=s.doc.graph.nodes.find(n=>n.id==="style");node.values=[{style1:"FA-001",style2:"FA-002"},"FA-003"];
+  const other=JSON.stringify(s.doc.graph.nodes.filter(n=>n!==node));let picker;
+  const choose=(field,code)=>{pickResourceCandidate(s,node,0,field,settings=>picker=settings);picker.onPick(code);};
+  choose("style1","FA-004");assert.equal(node.values[0].style2,"FA-002");assert.equal(node.values[0].style1,"FA-004");
+  choose("style2","");assert.equal(node.values[0],"FA-004");
+  choose("style2","FA-005");choose("style1","");assert.equal(node.values[0],"");
+  assert.equal(node.values[1],"FA-003");assert.equal(JSON.stringify(s.doc.graph.nodes.filter(n=>n!==node)),other);
+  assert.equal(s.dirty,true);
+});
+
+test("cancelled or late visual picker results never modify another canvas, removed node or account",t=>{
+  storage.clear();const s=store(t,async()=>({writeSeq:1}));
+  let node=s.doc.graph.nodes.find(n=>n.id==="style"),picker;
+  pickResourceCandidate(s,node,0,"style1",settings=>picker=settings);
+  assert.equal(s.dirty,false,"Opening and cancelling a picker does not edit the document");
+  s.doc={...s.doc,id:"another",graph:{nodes:[],edges:[]}};picker.onPick("FA-002");assert.equal(node.values[0],"FA-001");
+  s.doc.graph.nodes=[node];pickResourceCandidate(s,node,0,"style1",settings=>picker=settings);
+  s.doc.graph.nodes=[];picker.onPick("FA-003");assert.equal(node.values[0],"FA-001");
+  s.doc.graph.nodes=[node];pickResourceCandidate(s,node,0,"style1",settings=>picker=settings);
+  s.close();picker.onPick("FA-004");assert.equal(node.values[0],"FA-001");
+});
+
+test("canvas renders actual thumbnails and names for both fusion styles and layouts with empty states",t=>{
+  const canvas=context.window.HandrawParameterCanvas,doc=canvas.testing.blank();
+  doc.graph.nodes.find(n=>n.id==="style").values=[{style1:"FA-001",style2:"FA-002"},"missing"];
+  doc.graph.nodes.push({id:"layout",type:"parameter",parameter:"layout",values:["SC-001",""]});
+  context.window.localStorage={getItem:()=>JSON.stringify({doc}),setItem(){}};
+  const root={innerHTML:"",querySelector:()=>null,querySelectorAll:()=>[]};
+  canvas.mount(root,{scope:"visual-render",loggedIn:()=>false,resources:kind=>kind==="style"
+    ? [{id:"FA-001",name:"Primary drawing",image:"/primary.webp"},{id:"FA-002",name:"Second drawing",image:"/second.webp"}]
+    : [{id:"SC-001",name:"Selected layout",image:"/layout.webp"}]});
+  t.after(()=>{canvas.reset();delete context.window.localStorage;});
+  for(const path of ["/primary.webp","/second.webp","/layout.webp"]) assert.ok(root.innerHTML.includes(`src="${path}"`));
+  for(const name of ["Primary drawing","Second drawing","Selected layout"]) assert.ok(root.innerHTML.includes(name));
+  assert.ok(root.innerHTML.includes("资源信息暂不可用"));assert.ok(root.innerHTML.includes("点击图片选择"));
+  assert.ok(root.innerHTML.includes('aria-label="放大融合副画风候选 1"'));
+  assert.ok(root.innerHTML.includes('aria-label="清空图型候选 1"'));
+});
 
 test("arranging tall candidate nodes preserves specs and keeps every pair separate",()=>{
   const nodes=Array.from({length:7},(_,n)=>({id:"n"+n,type:n%2?"output":"parameter",values:["keep"],x:0,y:0}));

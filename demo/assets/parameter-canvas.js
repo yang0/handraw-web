@@ -6,6 +6,20 @@
   const uid=prefix=>prefix+"_"+(global.crypto?.randomUUID?.().replace(/-/g,"") || Date.now().toString(36)+Math.random().toString(36).slice(2));
   const clone=value=>JSON.parse(JSON.stringify(value));
   const esc=value=>String(value??"").replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+  const resourceCode=(value,field)=>typeof value==="object"&&value!==null?String(value[field]||""):field==="style2"?"":String(value||"");
+  function pickResourceCandidate(store,node,index,field,openPicker) {
+    const doc=store.doc,values=node.values,previous=values[index];
+    openPicker({field,current:resourceCode(previous,field),onPick:code=>{
+      if(store.closed||store.doc!==doc||!doc.graph.nodes.includes(node)||node.values!==values||values[index]!==previous) return;
+      code=String(code||"").trim();
+      if(node.parameter==="style1") {
+        const pair={style1:resourceCode(previous,"style1"),style2:resourceCode(previous,"style2")};
+        pair[field]=code;
+        values[index]=!pair.style1?"":pair.style2?pair:pair.style1;
+      } else values[index]=code;
+      store.edit(true);
+    }});
+  }
   function blank() {
     return {id:uid("canvas"),name:"参数组合画布",writeSeq:0,graph:{format:1,nodes:[
       {id:"theme",type:"parameter",parameter:"prompt",values:[""],x:32,y:32},
@@ -236,8 +250,21 @@
     if(field==="prompt") return `<textarea aria-label="主题候选 ${index+1}" ${base}>${esc(value)}</textarea>`;
     if(field==="ratio") return `<select aria-label="比例候选 ${index+1}" ${base}>${ratios.map(r=>`<option ${r===value?"selected":""}>${r}</option>`).join("")}</select>`;
     if(field==="mode") return `<select aria-label="创作模式候选 ${index+1}" ${base}><option value="graphic-text" ${value!=="image-only"?"selected":""}>图文</option><option value="image-only" ${value==="image-only"?"selected":""}>纯图</option></select>`;
-    if(field==="style1") return `<input aria-label="主画风候选 ${index+1}" list="pc-style-codes" placeholder="主画风编号，如 FA-001" ${base} data-fusion="style1" value="${esc(typeof value==="object"?value.style1:value)}"><input aria-label="融合副画风 ${index+1}" list="pc-style-codes" placeholder="副画风，可留空" ${base} data-fusion="style2" value="${esc(value?.style2||"")}">`;
+    if(field==="style1") return resourceValue(node,value,index,"style1")+resourceValue(node,value,index,"style2");
+    if(field==="layout") return resourceValue(node,value,index,"layout");
     return `<input aria-label="${labels[field]||field}候选 ${index+1}" ${base} ${field==="layout"?'list="pc-layout-codes"':''} placeholder="${["colors","tones","moods"].includes(field)?"同一方案中的值用逗号分隔":"填写参数值"}" value="${esc(Array.isArray(value)?value.join("，"):value)}">`;
+  }
+  function resourceValue(node,value,index,field) {
+    const code=resourceCode(value,field),kind=field==="layout"?"layout":"style";
+    const resource=(options.resources?.(kind)||[]).find(item=>(item.id||item.code)===code);
+    const label=field==="style1"?"主画风":field==="style2"?"融合副画风":"图型";
+    const name=resource?.name_zh||resource?.name||resource?.title||(code?"资源信息暂不可用":field==="style2"?"可选，搭配双画风":"点击图片选择");
+    const image=resource?.image||"",base=`data-node="${esc(node.id)}" data-value="${index}" data-field="${field}"`;
+    const disabled=field==="style2"&&!resourceCode(value,"style1");
+    return `<div class="pc-resource-control"><button type="button" class="pc-resource-picker ${code?"is-selected":""}" data-action="resource" ${base} aria-label="选择${label}候选 ${index+1}${code?`：${esc(code)} ${esc(name)}`:""}" ${disabled?"disabled":""}>
+      <span class="pc-resource-thumb">${image?`<img src="${esc(image)}" alt="${esc(code)} ${esc(name)}" loading="lazy">`:'<span aria-hidden="true">＋</span>'}</span>
+      <span class="pc-resource-info"><small>${label}${code?` · ${esc(code)}`:""}</small><strong>${esc(name)}</strong><span>${disabled?"先选择主画风":code?"点击更换":"按编号、名称或图片挑选"}</span></span></button>
+      ${code?`<div class="pc-resource-actions">${image?`<button type="button" data-action="zoom-resource" ${base} aria-label="放大${label}候选 ${index+1}">放大</button>`:""}<button type="button" data-action="clear-resource" ${base} aria-label="清空${label}候选 ${index+1}">清空</button></div>`:""}</div>`;
   }
   function nodeHtml(node,index) {
     const graph=current.doc.graph,incoming=graph.edges.filter(edge=>edge.to===node.id),name=node.type==="parameter"?labels[node.parameter]:node.type==="combine"?"组合方式":"输出";
@@ -278,7 +305,7 @@
       ${current.error?`<div class="pc-error" role="alert">${esc(current.error)}${current.conflict?'。可另存副本保留本地改动。':""}</div>`:""}
       <div class="pc-toolbar"><label>参数类型<select id="pc-add-parameter">${Object.entries(labels).filter(([k])=>k!=="style2").map(([key,name])=>`<option value="${key}">${name}</option>`).join("")}</select></label><button type="button" data-action="parameter">＋ 参数</button><button type="button" data-action="combine">＋ 组合</button><button type="button" data-action="output">＋ 输出</button><button type="button" data-action="arrange">整理位置</button><button type="button" class="pc-primary" data-action="preview" ${current.loading||current.submission?"disabled":""}>预览组合与费用</button></div>
       <div class="pc-layout"><div class="pc-scroll" aria-label="参数节点画布"><div class="pc-world" style="width:${Math.max(1050,...doc.graph.nodes.map(n=>(Number(n.x)||0)+320))}px;height:${Math.max(760,...doc.graph.nodes.map(n=>(Number(n.y)||0)+500))}px"><svg class="pc-edges" aria-hidden="true"></svg>${doc.graph.nodes.map(nodeHtml).join("")}</div></div><aside class="pc-results" aria-label="组合预览和批次结果"></aside></div>
-      ${["style","layout"].map(kind=>`<datalist id="pc-${kind}-codes">${(options.resources?.(kind)||[]).map(r=>`<option value="${esc(r.id||r.code)}">${esc(r.name||r.name_zh||r.title||"")}</option>`).join("")}</datalist>`).join("")}`;
+      `;
     status();renderPanel();drawEdges();
   }
   function valueChanged(target) {
@@ -317,6 +344,15 @@
       if(action==="submit") {if(current.submission||global.confirm(`本次生成 ${current.selected.size} 张，积分上限 ${selectedQuote(current.preview,current.selected.size).total}。额度变化后，达到上限的任务将停止提交。是否开始？`)) busy(()=>current.submit());return;}
       if(action==="export") {const url=URL.createObjectURL(new Blob([JSON.stringify(current.doc,null,2)],{type:"application/json"}));const a=document.createElement("a");a.href=url;a.download="参数画布.json";a.click();URL.revokeObjectURL(url);return;}
       if(action==="refs") {options.pickReferences?.({currentRefs:node.values[index],onConfirm:items=>{node.values[index]=items.map(item=>item.image).filter(Boolean);current.edit(true);}});return;}
+      if(action==="resource"||action==="clear-resource") {
+        const field=button.dataset.field;
+        pickResourceCandidate(current,node,index,field,settings=>action==="clear-resource"?settings.onPick(""):options.pickResource?.(settings));return;
+      }
+      if(action==="zoom-resource") {
+        const field=button.dataset.field,code=resourceCode(node.values[index],field);
+        const resource=(options.resources?.(field==="layout"?"layout":"style")||[]).find(item=>(item.id||item.code)===code);
+        if(resource?.image) options.openImage?.(resource.image,`${code} ${resource.name_zh||resource.name||""}`);return;
+      }
       if(action==="remove-node") {current.doc.graph.nodes=current.doc.graph.nodes.filter(n=>n!==node);current.doc.graph.edges=current.doc.graph.edges.filter(e=>e.from!==node.id&&e.to!==node.id);}
       else if(action==="remove-value") node.values.splice(index,1);
       else if(action==="add-value") node.values.push(["refImages","colors","tones","moods"].includes(node.parameter)?[]:node.parameter==="ratio"?"3:4":node.parameter==="mode"?"graphic-text":"");
@@ -344,5 +380,5 @@
     else if(changedRoot) {render();bind();}
   }
   global.HandrawParameterCanvas={mount,saveCurrent:()=>current?.save(),openRun:id=>current?.openRun(id),importDocument:document=>current?.importDocument(document),reset:()=>{current?.close();current=null;root=null;}};
-  if(global.__HANDRAW_TESTING__) global.HandrawParameterCanvas.testing={CanvasStore,blank,selectedQuote,arrangeNodes};
+  if(global.__HANDRAW_TESTING__) global.HandrawParameterCanvas.testing={CanvasStore,blank,selectedQuote,arrangeNodes,pickResourceCandidate};
 })(window);

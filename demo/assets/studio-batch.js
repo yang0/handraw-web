@@ -249,18 +249,20 @@
       const rMap = (catalog && catalog.resourceMap) || new Map();
       const hasSpecific = Boolean(row && row.layout && String(row.layout).trim());
       const specificId = hasSpecific ? String(row.layout).trim() : "";
-      const effectiveId = specificId || globalLayoutId || "SC-021";
+      const effectiveId = specificId || String(globalLayoutId || "").trim();
       const res = effectiveId ? (rMap.get(effectiveId) || catalog?.layouts?.find((l) => l.id === effectiveId)) : null;
-      const thumbUrl = res?.image || "/images/layouts/social-cards/SC-021.webp";
-      const codeText = effectiveId;
-      const nameText = res ? (res.name_zh || res.name || effectiveId) : (hasSpecific ? specificId : "默认图型");
-      const btnTitle = hasSpecific ? `图型版式：${effectiveId} ${nameText}（点击更换）` : `跟随全局图型 ${effectiveId}（点击更换）`;
-      const ariaLabel = hasSpecific ? `图型版式：${effectiveId} ${nameText}` : `跟随全局图型 ${effectiveId} ${nameText}`;
+      const thumbUrl = res?.image || "";
+      const codeText = effectiveId || "图型";
+      const nameText = res ? (res.name_zh || res.name || effectiveId) : (effectiveId || "未指定图型");
+      const description = hasSpecific ? `图型版式：${effectiveId} ${nameText}`
+        : effectiveId ? `跟随全局图型 ${effectiveId} ${nameText}` : "未指定图型";
+      const btnTitle = `${description}（点击选择）`;
+      const previewAttrs = thumbUrl ? `data-hover-src="${esc(thumbUrl)}" data-hover-code="${esc(codeText)}" data-hover-name="${esc(nameText)}" data-zoom-src="${esc(thumbUrl)}" data-zoom-title="${esc(codeText)} ${esc(nameText)}"` : "";
 
       return `
-        <button type="button" class="btn batch-row-layout-btn make-image-picker-card ${hasSpecific ? "is-selected" : ""}" data-pick-layout-idx="${idx}" data-hover-src="${esc(thumbUrl)}" data-hover-code="${esc(codeText)}" data-hover-name="${esc(nameText)}" data-zoom-src="${esc(thumbUrl)}" data-zoom-title="${esc(codeText)} ${esc(nameText)}" title="${esc(btnTitle)}" aria-label="${esc(ariaLabel)}">
-          <span class="batch-row-layout-thumb-wrap make-image-picker-thumb" data-zoom-src="${esc(thumbUrl)}" data-zoom-title="${esc(codeText)} ${esc(nameText)}">
-            <img data-hw-src="${esc(thumbUrl)}" alt="${esc(nameText)}" class="batch-row-layout-thumb" loading="lazy" />
+        <button type="button" class="btn batch-row-layout-btn make-image-picker-card ${hasSpecific ? "is-selected" : ""}" data-pick-layout-idx="${idx}" ${previewAttrs} title="${esc(btnTitle)}" aria-label="${esc(description)}">
+          <span class="batch-row-layout-thumb-wrap make-image-picker-thumb">
+            ${thumbUrl ? `<img data-hw-src="${esc(thumbUrl)}" alt="${esc(nameText)}" class="batch-row-layout-thumb" loading="lazy" />` : '<span aria-hidden="true">＋</span>'}
           </span>
           <span class="batch-row-layout-info make-image-picker-info">
             <span class="batch-row-layout-code make-image-picker-badge">${esc(codeText)}</span>

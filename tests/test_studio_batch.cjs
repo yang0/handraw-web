@@ -1646,6 +1646,22 @@ console.log("Starting Studio Batch Test Suite (Phase 3b-4 Redesign)...\n");
   console.log("✓ Requirement 19 Passed: One focused preview and a separate multi-picture thumbnail navigator");
 }
 
+// Unspecified layouts stay unspecified; previews never invent a sample asset.
+{
+  const previousContext=HandrawBatchCreate.context;
+  HandrawBatchCreate.context={catalog:sharedCatalog};
+  const row={theme:"No layout",layout:""},before=JSON.stringify(row);
+  const empty=HandrawBatchCreate.renderRowLayoutButtonHtml(row,0,"");
+  assert.ok(empty.includes("未指定图型"));assert.ok(!empty.includes("SC-021"));
+  assert.ok(!empty.includes("<img"));assert.ok(!empty.includes("data-zoom-src"));
+  assert.equal(JSON.stringify(row),before);
+  const inherited=HandrawBatchCreate.renderRowLayoutButtonHtml(row,0,"SC-001");
+  assert.ok(inherited.includes("跟随全局图型 SC-001"));assert.ok(inherited.includes("/images/sc-001.webp"));
+  const unknown=HandrawBatchCreate.renderRowLayoutButtonHtml({layout:"CUSTOM-001"},0,"");
+  assert.ok(unknown.includes("CUSTOM-001"));assert.ok(!unknown.includes("SC-021"));assert.ok(!unknown.includes("<img"));
+  HandrawBatchCreate.context=previousContext;
+  console.log("✓ Requirement 20 Passed: no hardcoded layout or unrelated thumbnail for empty selections");
+}
 console.log("\n==========================================");
-console.log("All 19 Studio Batch tests passed successfully!");
+console.log("All 20 Studio Batch tests passed successfully!");
 console.log("==========================================");

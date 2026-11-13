@@ -12523,6 +12523,8 @@
         scope:activeCacheScope,api:S.apiJson,
         loggedIn:()=>Boolean(App.state?.loggedIn && App.state?.serverBacked),
         resources:kind=>kind==="style"?Catalog.styles:Catalog.layouts,
+        pickResource:settings=>openSkillFieldPickerModal(null,settings.field,settings),
+        openImage:(url,title)=>openImageLightbox(url,title),
         pickReferences:settings=>openAssetPickerModal(settings)
       });
     }
