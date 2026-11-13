@@ -4077,3 +4077,153 @@ a.ic-hist-cover-button { cursor: pointer; }
   .ic-wf-card-grid .ic-wf-entry-card { min-height: 0; padding: 14px; }
   .ic-workflows-stage .ic-wf-minimal-tools #wf-search-inp { flex: 1 1 auto; min-width: 0; }
 }
+
+
+/* Canvas actions: one floating undo mark and a paper/ink More menu. */
+.ic-canvas-toolstrip .ic-canvas-undo-btn {
+  pointer-events: auto;
+  width: 36px;
+  height: 36px;
+  padding: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 11px 10px 12px 10px;
+  border: 1px solid var(--ic-border-strong);
+  color: var(--ic-text);
+  background: var(--ic-panel-solid);
+  box-shadow: 0 3px 10px rgba(36, 28, 20, .08);
+  cursor: pointer;
+  transition: background .14s ease, border-color .14s ease, transform .14s ease;
+}
+.ic-canvas-toolstrip .ic-canvas-undo-btn:hover {
+  color: var(--vermilion);
+  border-color: var(--vermilion);
+  background: var(--ic-surface);
+  transform: translateY(-1px);
+}
+.ic-canvas-toolstrip .ic-canvas-shelf-btn {
+  width: auto;
+  padding: 0 10px;
+  font-size: 12px;
+  font-weight: 750;
+}
+.ic-canvas-sketch-icon {
+  flex: none;
+  stroke-width: 1.7;
+  transform: rotate(-1deg);
+}
+.ic-canvas-more { position: relative; flex: none; }
+.ic-canvas-more-trigger { gap: 5px; }
+.ic-canvas-more-trigger .ic-canvas-sketch-icon { width: 17px; height: 17px; }
+.ic-canvas-more-menu {
+  display: none;
+  position: absolute;
+  right: 0;
+  top: 100%;
+  z-index: 90;
+  width: 186px;
+  padding: 7px;
+  border-radius: 13px 12px 14px 12px;
+  border: 1px solid var(--ic-border-strong);
+  background: var(--ic-panel-solid);
+  color: var(--ic-text);
+  box-shadow: var(--ic-dock-shadow);
+}
+.ic-canvas-more:hover > .ic-canvas-more-menu,
+.ic-canvas-more:focus-within > .ic-canvas-more-menu,
+.ic-canvas-more.is-open > .ic-canvas-more-menu {
+  display: grid;
+  gap: 3px;
+}
+.ic-canvas-more-action {
+  width: 100%;
+  min-height: 39px;
+  border: 1px solid transparent;
+  background: transparent;
+  color: inherit;
+  text-align: left;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 9px;
+  border-radius: 9px 8px 10px 8px;
+  font-size: 12.5px;
+  font-weight: 780;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.ic-canvas-more-action:hover:not(:disabled),
+.ic-canvas-more-action:focus-visible {
+  background: var(--vermilion-wash);
+  border-color: var(--vermilion-border);
+  color: var(--vermilion);
+}
+.ic-canvas-more-action:disabled { opacity: .45; cursor: default; }
+.ic-canvas-more-action .ic-save-dirty-dot { margin-left: auto; }
+.ic-canvas-open-wrap { position: relative; }
+.ic-canvas-submenu-chevron { margin-left: auto; font-size: 17px; line-height: 1; }
+.ic-canvas-recent-panel {
+  display: none;
+  position: absolute;
+  right: calc(100% - 2px);
+  top: -5px;
+  width: min(290px, 80vw);
+  max-height: 422px;
+  overflow-y: auto;
+  z-index: 91;
+  padding: 7px;
+  border: 1px solid var(--ic-border-strong);
+  background: var(--ic-panel-solid);
+  color: var(--ic-text);
+  border-radius: 13px 12px 14px 12px;
+  box-shadow: var(--ic-dock-shadow);
+}
+.ic-canvas-open-wrap:hover > .ic-canvas-recent-panel,
+.ic-canvas-open-wrap:focus-within > .ic-canvas-recent-panel,
+.ic-canvas-open-wrap.is-open > .ic-canvas-recent-panel {
+  display: grid;
+  gap: 2px;
+}
+.ic-canvas-recent-title {
+  padding: 6px 8px;
+  color: var(--ic-muted);
+  font-size: 11px;
+  font-weight: 750;
+}
+.ic-canvas-recent-item {
+  min-width: 0;
+  padding: 8px 9px;
+  border: 1px solid transparent;
+  border-radius: 8px;
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+  display: flex;
+  flex-direction: column;
+  text-align: left;
+  gap: 3px;
+}
+.ic-canvas-recent-item:hover,
+.ic-canvas-recent-item:focus-visible {
+  background: var(--ic-surface);
+  border-color: var(--ic-border);
+  color: var(--vermilion);
+}
+.ic-canvas-recent-name {
+  font-size: 12.5px;
+  font-weight: 760;
+  overflow: hidden;
+  max-width: 100%;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.ic-canvas-recent-date { color: var(--ic-muted); font-size: 10.8px; }
+.ic-canvas-recent-empty { padding: 14px 9px; color: var(--ic-muted); font-size: 12px; }
+@media (max-width: 768px) {
+  .ic-canvas-more-menu { right: 0; }
+  .ic-canvas-recent-panel { right: 0; top: 100%; max-height: min(360px, 58vh); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .ic-canvas-toolstrip .ic-canvas-undo-btn { transition: none; transform: none; }
+}

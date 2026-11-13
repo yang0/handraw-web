@@ -11137,6 +11137,21 @@
     });
   }
 
+
+  // Tiny hand-inked action marks follow the site's paper/vermilion visual language.
+  function canvasSketchIcon(kind) {
+    const marks = {
+      new: '<path d="M5.2 3.6 15.2 3.2 19.5 7.4 19.7 21 5 20.6Z"/><path d="m15.2 3.4-.2 4.3 4.6-.3"/><path d="M12.1 10.4v7.3M8.6 14.1l7.3-.2"/>',
+      save: '<path d="M4 3.5 18 3.1 20.6 5.7 20.2 20.7 4.2 21Z"/><path d="M7.4 3.6v6.4l9.1-.2V3.5"/><path d="M8 20.5v-7.4l8.5.1V21"/><path d="M13.8 5v3.1"/>',
+      export: '<path d="M4.1 15.9v4.7l15.9.2v-4.6"/><path d="M11.8 3.2v12.4"/><path d="m7.6 11.7 4.2 4.1 4.5-4.3"/><path d="M5.6 20.5h13"/>',
+      open: '<path d="M2.9 6.7 3.1 19.7l17.6.3 1-10.5-10.3-.3-2.5-3.1-6-.1Z"/><path d="M3 9.8 21.3 9.6"/>',
+      more: '<circle cx="6" cy="12" r="1.15"/><circle cx="12" cy="11.8" r="1.15"/><circle cx="18" cy="12.1" r="1.15"/>',
+      undo: '<path d="M9.3 6.5 4 11.2l5.4 4.5"/><path d="M4.6 11.2h9.1c4.2 0 6 2.1 6 5.2 0 2.1-1.6 3.5-3.3 4"/>'
+    };
+    return '<svg class="ic-canvas-sketch-icon" width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.65" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' +
+      (marks[kind] || marks.more) + '</svg>';
+  }
+
   function renderWorkbenchBar() {
     if (!DOM.workbenchBar) return;
     const bpIcons = {
@@ -11160,6 +11175,12 @@
         .filter((n) => n.type === "article_plan")
         .reduce((acc, n) => acc + (n.data?.cards?.length || 0), 0);
     const histCount = (CS.generationHistory || []).length;
+    ensureDefaultSavedWorkflows();
+    const recentCanvases = (CS.savedWorkflows || [])
+      .filter((wf) => wf && wf.id && !wf.isOfficialPreset &&
+        !String(wf.id).startsWith("preset_") && Array.isArray(wf.graph?.nodes))
+      .sort((a, b) => (Number(b.updatedAtMs) || 0) - (Number(a.updatedAtMs) || 0))
+      .slice(0, 10);
 
     DOM.workbenchBar.innerHTML = `
       <div class="ic-tabs-rail">
@@ -11194,7 +11215,46 @@
         </div>
       </div>
 
+
       <div class="ic-workbench-tools">
+        <div class="ic-canvas-more" id="tb-canvas-more">
+          <button type="button" class="ic-tab-action-pill ic-canvas-more-trigger" id="tb-canvas-more-trigger"
+            aria-haspopup="true" aria-expanded="false" aria-controls="tb-canvas-more-menu" title="画布操作">
+            ${canvasSketchIcon("more")} <span>更多</span>
+          </button>
+          <div class="ic-canvas-more-menu" id="tb-canvas-more-menu" role="menu" aria-label="画布操作">
+            <button type="button" class="ic-canvas-more-action" id="tb-canvas-new" role="menuitem">
+              ${canvasSketchIcon("new")} <span>新建画布</span>
+            </button>
+            <button type="button" class="ic-canvas-more-action" id="tb-canvas-save" role="menuitem"
+              ${!CS.activeTabId ? "disabled" : ""}>
+              ${canvasSketchIcon("save")} <span>保存画布</span>
+              ${CS.tabs.some((t) => t.id === CS.activeTabId && t.dirty) ? '<span class="ic-save-dirty-dot" title="有未保存改动"></span>' : ""}
+            </button>
+            <button type="button" class="ic-canvas-more-action" id="tb-canvas-export" role="menuitem"
+              ${!CS.activeTabId ? "disabled" : ""}>
+              ${canvasSketchIcon("export")} <span>导出画布</span>
+            </button>
+            <div class="ic-canvas-open-wrap" id="tb-canvas-open-wrap">
+              <button type="button" class="ic-canvas-more-action" id="tb-canvas-open" role="menuitem"
+                aria-haspopup="true" aria-expanded="false" aria-controls="tb-canvas-recent">
+                ${canvasSketchIcon("open")} <span>打开画布</span>
+                <span class="ic-canvas-submenu-chevron" aria-hidden="true">‹</span>
+              </button>
+              <div class="ic-canvas-recent-panel" id="tb-canvas-recent" role="menu" aria-label="最近保存的画布">
+                <div class="ic-canvas-recent-title">最近保存 · 最多 10 个</div>
+                ${recentCanvases.length
+                  ? recentCanvases.map((wf) =>
+                      '<button type="button" class="ic-canvas-recent-item" role="menuitem" data-canvas-recent-open="' +
+                      esc(wf.id) + '" title="' + esc(wf.title || "未命名画布") + '">' +
+                      '<span class="ic-canvas-recent-name">' + esc(wf.title || "未命名画布") + '</span>' +
+                      '<span class="ic-canvas-recent-date">' + esc(wf.updatedAt || "") + '</span></button>'
+                    ).join("")
+                  : '<div class="ic-canvas-recent-empty">暂无已保存的画布</div>'}
+              </div>
+            </div>
+          </div>
+        </div>
         <button type="button" class="ic-icon-btn" id="tb-theme-toggle" title="切换宣纸暖昼 / 暗房深空" style="font-size:11px;font-weight:750;padding:2px 8px;">${CS.canvasTheme === "dark" ? "暖昼" : "深空"}</button>
         <button type="button" class="ic-icon-btn" id="tb-grid-toggle" title="切换网格">${CS.gridMode === "dots" ? "⠿" : CS.gridMode === "lines" ? "┼" : "□"}</button>
       </div>
@@ -11284,6 +11344,82 @@
       openAllTabsPopover(allTabsBtn);
     };
 
+
+    const canvasMore = DOM.workbenchBar.querySelector("#tb-canvas-more");
+    if (canvasMore) {
+      const trigger = canvasMore.querySelector("#tb-canvas-more-trigger");
+      const openWrap = canvasMore.querySelector("#tb-canvas-open-wrap");
+      const openTrigger = canvasMore.querySelector("#tb-canvas-open");
+      const closeMenu = () => {
+        canvasMore.classList.remove("is-open");
+        openWrap.classList.remove("is-open");
+        trigger.setAttribute("aria-expanded", "false");
+        openTrigger.setAttribute("aria-expanded", "false");
+      };
+      canvasMore.addEventListener("mouseenter", () => trigger.setAttribute("aria-expanded", "true"));
+      canvasMore.addEventListener("mouseleave", closeMenu);
+      canvasMore.addEventListener("focusout", (e) => {
+        if (!canvasMore.contains(e.relatedTarget)) closeMenu();
+      });
+      trigger.onclick = (e) => {
+        e.stopPropagation();
+        const expanded = canvasMore.classList.toggle("is-open");
+        trigger.setAttribute("aria-expanded", String(expanded));
+      };
+      trigger.onkeydown = (e) => {
+        if (e.key === "ArrowDown") {
+          e.preventDefault();
+          canvasMore.classList.add("is-open");
+          trigger.setAttribute("aria-expanded", "true");
+          canvasMore.querySelector("#tb-canvas-new").focus();
+        } else if (e.key === "Escape") {
+          closeMenu();
+        }
+      };
+      canvasMore.onkeydown = (e) => {
+        if (e.key === "Escape") {
+          e.stopPropagation();
+          closeMenu();
+          trigger.focus();
+        }
+      };
+      openWrap.addEventListener("mouseenter", () => openTrigger.setAttribute("aria-expanded", "true"));
+      openWrap.addEventListener("mouseleave", () => {
+        if (!openWrap.classList.contains("is-open")) openTrigger.setAttribute("aria-expanded", "false");
+      });
+      openTrigger.onclick = (e) => {
+        e.stopPropagation();
+        const expanded = openWrap.classList.toggle("is-open");
+        openTrigger.setAttribute("aria-expanded", String(expanded));
+      };
+      canvasMore.querySelector("#tb-canvas-new").onclick = () => {
+        createWorkflowTab({
+          title: "未命名画布", blueprint: "blank", makeActive: true, autoFit: true, switchToCanvas: true
+        });
+      };
+      canvasMore.querySelector("#tb-canvas-save").onclick = () => saveCurrentWorkflow(false);
+      canvasMore.querySelector("#tb-canvas-export").onclick = () => {
+        const active = CS.tabs.find((t) => t.id === CS.activeTabId);
+        if (!active) return;
+        syncCurrentTabSnapshot();
+        exportWorkflowJsonFile({
+          title: active.title, blueprint: CS.graph.blueprint, graph: cloneGraph(CS.graph)
+        });
+      };
+      canvasMore.querySelectorAll("[data-canvas-recent-open]").forEach((btn) => {
+        btn.onclick = () => {
+          const id = btn.getAttribute("data-canvas-recent-open");
+          const saved = (CS.savedWorkflows || []).find((wf) => wf.id === id && !wf.isOfficialPreset);
+          if (!saved || !Array.isArray(saved.graph?.nodes)) return;
+          createWorkflowTab({
+            title: saved.title, blueprint: saved.blueprint, graph: saved.graph, savedId: saved.id,
+            makeActive: true, autoFit: true, switchToCanvas: true
+          });
+          toast("已打开画布《" + saved.title + "》");
+        };
+      });
+    }
+
     const btnThemeToggle = DOM.workbenchBar.querySelector("#tb-theme-toggle");
     if (btnThemeToggle) btnThemeToggle.onclick = () => {
       CS.canvasTheme = CS.canvasTheme === "dark" ? "paper" : "dark";
@@ -11304,6 +11440,7 @@
     requestAnimationFrame(updateTabScrollButtons);
   }
 
+
   function renderCanvasToolstrip() {
     if (!DOM.canvasToolstrip) return;
     const isShowingTemplateLib = CS.stageView === "canvas" && (!CS.tabs || !CS.tabs.length);
@@ -11313,21 +11450,13 @@
       return;
     }
     DOM.canvasToolstrip.style.display = "";
-
+    // Undo is a single floating canvas button, not a full-width/pill toolbar.
     DOM.canvasToolstrip.innerHTML = `
-      ${
-        !CS.shelfOpen
-          ? `<div class="ic-float-pill">
-              <button type="button" class="ic-icon-btn" id="ic-shelf-reopen-btn" title="展开左侧节点箱">展开节点箱 »</button>
-            </div>`
-          : ""
-      }
-      <div class="ic-float-pill">
-        <button type="button" class="ic-icon-btn" id="bc-undo" title="撤销 (Ctrl+Z)">↩</button>
-        <button type="button" class="ic-icon-btn" id="bc-redo" title="重做 (Ctrl+Y)">↪</button>
-        <div class="ic-divider-v"></div>
-        <button type="button" class="ic-icon-btn" id="bl-arrange">自动整理</button>
-      </div>
+      ${!CS.shelfOpen
+        ? '<button type="button" class="ic-canvas-undo-btn ic-canvas-shelf-btn" id="ic-shelf-reopen-btn" title="展开节点箱">节点箱 »</button>'
+        : ""}
+      <button type="button" class="ic-canvas-undo-btn" id="bc-undo"
+        title="撤销 (Ctrl+Z)" aria-label="撤销">${canvasSketchIcon("undo")}</button>
     `;
 
     const reopenShelfBtn = DOM.canvasToolstrip.querySelector("#ic-shelf-reopen-btn");
@@ -11339,24 +11468,7 @@
         renderTopAndBottomDocks();
       };
     }
-
     DOM.canvasToolstrip.querySelector("#bc-undo").onclick = undoGraph;
-    DOM.canvasToolstrip.querySelector("#bc-redo").onclick = redoGraph;
-    DOM.canvasToolstrip.querySelector("#bl-arrange").onclick = () => {
-      pushUndo();
-      E.autoArrangeGraph(CS.graph);
-      fullRenderCanvas();
-      fitView();
-      const hasLoop = CS.graph.nodes.some((n) => n.type === "loop");
-      const hasBridge = CS.graph.nodes.some((n) => n.type === "bridge");
-      toast(
-        hasLoop
-          ? "已按「输入节点 → 批量 → 生成设置 → 成图显示」自动整理对齐！"
-          : hasBridge
-            ? "已按「输入节点 → 多尺寸输出 → 生成设置 → 成图显示」自动整理对齐！"
-            : "已按「输入节点 → 生成设置 → 成图显示」自动整理对齐！"
-      );
-    };
   }
 
   /* ======================== CLEAN SINGLE-COLUMN TEXT PARAMETER MODAL (ONLY ONE "确定" BUTTON) ======================== */

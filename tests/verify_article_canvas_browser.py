@@ -186,12 +186,17 @@ def main() -> int:
             print(f"Tabs count after picking single template: {open_tabs_count}")
             assert open_tabs_count == 1, f"Expected 1 open tab, got {open_tabs_count}"
 
-            # Verify toolstrip, bottom-right dock, and save button are RESTORED after picking template
+            # The floating undo remains in the canvas; save moved to the More menu.
             assert toolstrip_el.is_visible(), "Toolstrip must be restored and visible after opening template"
             assert bottom_right_el.is_visible(), "Bottom-right dock must be restored and visible after opening template"
-            assert canvas_page.locator("#bl-save-wf").is_visible(), "Save button must be visible after opening template"
+            assert canvas_page.locator("#bc-undo").is_visible(), "Floating undo must be visible after opening template"
+            assert canvas_page.locator("#tb-canvas-more-trigger").is_visible(), "More menu trigger must be visible"
+            canvas_page.locator("#tb-canvas-more-trigger").hover()
+            assert canvas_page.locator("#tb-canvas-save").is_visible(), "Save action must be in More"
+            assert canvas_page.locator("#tb-canvas-export").is_visible(), "Export action must be in More"
+            assert canvas_page.locator("#tb-canvas-open").is_visible(), "Recent canvases action must be in More"
             assert canvas_page.locator("#bl-minimap").is_visible(), "Minimap button must be visible after opening template"
-            print("✓ Toolstrip, bottom-right dock, and save button successfully restored after opening template.")
+            print("✓ Floating undo and canvas More menu restored after opening template.")
 
             # Nodes should be rendered on canvas
             node_count = canvas_page.locator("#ic-nodes-layer .ic-node").count()

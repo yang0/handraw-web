@@ -25,6 +25,7 @@ jobs:
         with:
           node-version: '24'
       - run: node --check demo/assets/task-journey.js && node --check demo/assets/studio-app.js && node --check demo/assets/studio-batch.js
+      - run: node tests/test_canvas_toolbar_simplification.cjs
       - run: node tests/test_task_journey.cjs
       - run: node --check demo/assets/article-generation-guard.js && node tests/test_article_generation_guard.cjs
       - run: node --check demo/assets/article-review.js && node tests/test_article_review.cjs
@@ -242,7 +243,8 @@ jobs:
           tests.test_works_feed tests.test_works_feed_cache
 
   creation-workspace-browser:
-    runs-on: ubuntu-latest
+    # Playwright 1.58 does not install chromium on ubuntu-26.04 (ubuntu-latest).
+    runs-on: ubuntu-24.04
     timeout-minutes: 10
     services:
       postgres:
