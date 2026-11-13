@@ -610,7 +610,21 @@ def admin_action(db, user, body):
                         "SELECT id FROM users WHERE status='active' ORDER BY id"
                     ).fetchall()
                 ]
-            elif group in ("user", "admin", "moderator", "reviewer"):
+            elif group in ("operator", "reviewer"):
+                ids = [
+                    r[0]
+                    for r in tx.execute(
+                        "SELECT id FROM users WHERE status='active' AND role IN ('operator','reviewer') ORDER BY id"
+                    ).fetchall()
+                ]
+            elif group == "moderator":
+                ids = [
+                    r[0]
+                    for r in tx.execute(
+                        "SELECT DISTINCT u.id FROM users u JOIN forum_moderators m ON m.user_id=u.id WHERE u.status='active' ORDER BY u.id"
+                    ).fetchall()
+                ]
+            elif group in ("user", "admin"):
                 ids = [
                     r[0]
                     for r in tx.execute(

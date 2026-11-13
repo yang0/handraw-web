@@ -243,6 +243,42 @@ class EconomyTests(unittest.TestCase):
                 {"action": "base", "units": 1, "confirmation": p["confirmation"]},
             )
 
+    def test_group_gifts_use_actual_operator_roles_and_distinct_forum_moderators(self):
+        operator, _ = register_user(self.db, "gift_operator", "FixturePass123!")
+        moderator, _ = register_user(self.db, "gift_moderator", "FixturePass123!")
+        frozen, _ = register_user(self.db, "gift_frozen", "FixturePass123!")
+        tx = self.db.get_conn()
+        tx.execute(
+            "UPDATE users SET role='operator' WHERE id IN (?,?)",
+            (operator["id"], frozen["id"]),
+        )
+        tx.execute("UPDATE users SET status='frozen' WHERE id=?", (frozen["id"],))
+        for category in ("showcase", "tutorial"):
+            tx.execute(
+                "INSERT INTO forum_moderators(user_id,username,category,created_at) VALUES(?,?,?,CURRENT_TIMESTAMP::text)",
+                (moderator["id"], moderator["username"], category),
+            )
+        for group, uid in (
+            ("reviewer", operator["id"]),
+            ("moderator", moderator["id"]),
+        ):
+            body = {
+                "action": "grant",
+                "group": group,
+                "units": 3,
+                "reason": "group gift",
+                "requestId": "group-" + group,
+            }
+            for _ in range(2):
+                economy.admin_action(self.db, {**self.user, "role": "admin"}, body)
+            rows = tx.execute(
+                "SELECT user_id,units FROM generation_quota_grants WHERE event_key=?",
+                (body["requestId"],),
+            ).fetchall()
+            self.assertEqual([(r[0], r[1]) for r in rows], [(uid, 3)])
+        self.assertEqual(economy.quota(tx, self.uid)["remaining"], 10)
+        self.assertEqual(economy.quota(tx, frozen["id"])["remaining"], 10)
+
     def test_base_total_adjustments_follow_authorization_formula(self):
         q = self.quote(6)
         with self.db.transaction() as tx:
