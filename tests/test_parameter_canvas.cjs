@@ -404,15 +404,33 @@ test("local archive quota failure preserves the current document and previous sa
   assert.equal(s.doc.name,"Unsaved");assert.equal(s.dirty,true);assert.equal(s.list[0].name,"Saved");assert.match(s.error,/导出/);
 });
 
-test("current canvas renders four menu actions, safe recent titles and one standalone undo",t=>{
+test("current canvas renders four direct toolbar actions without More or a permanent name input",t=>{
   const canvas=context.window.HandrawParameterCanvas,doc=canvas.testing.blank();
   context.window.localStorage={getItem:()=>JSON.stringify({doc}),setItem(){}};
   const root={innerHTML:"",querySelector:()=>null,querySelectorAll:()=>[]};
   canvas.mount(root,{scope:"four-action-render",loggedIn:()=>false,resources:()=>[]});
   t.after(()=>{canvas.reset();delete context.window.localStorage;});
-  const menu=root.innerHTML.split('class="pc-document-actions"')[1].split('</details>')[0];
+  const menu=root.innerHTML.split('class="pc-document-actions"')[1].split('class="pc-toolbar"')[0];
   assert.deepEqual([...menu.matchAll(/data-action="([^"]+)"/g)].map(m=>m[1]),["new","save","export","open-canvases"]);
   assert.equal([...root.innerHTML.matchAll(/data-action="undo"/g)].length,1);
   assert.ok(!root.innerHTML.includes('class="pc-undo"'));assert.ok(!root.innerHTML.includes('data-action="choose-canvas"'));
   assert.ok(root.innerHTML.includes('aria-label="最近保存的画布"'));
+  assert.ok(!root.innerHTML.includes('pc-document-menu'));assert.ok(!root.innerHTML.includes('data-name'));
+  assert.ok(menu.includes('role="toolbar"'));
+});
+
+test("named saves trim and validate the workflow name before writing, and preserve its ID",async t=>{
+  storage.clear();const writes=[];const s=store(t,async(url,options)=>{writes.push(options.body);return {writeSeq:writes.length};});
+  const id=s.doc.id,initial=s.doc.name;
+  await assert.rejects(s.saveNamed(" \n "),/名称/);await assert.rejects(s.saveNamed("x".repeat(101)),/名称/);
+  assert.equal(s.doc.name,initial);assert.equal(writes.length,0);
+  assert.equal(await s.saveNamed("  工作流A  "),true);assert.equal(s.doc.name,"工作流A");assert.equal(s.doc.id,id);
+  assert.equal(writes[0].name,"工作流A");assert.equal(await s.saveNamed("工作流A"),true);assert.equal(writes.length,1);
+});
+
+test("a failed named save retains its name and graph for a successful retry",async t=>{
+  storage.clear();let fail=true;const s=store(t,async()=>{if(fail) throw Error("Unavailable");return {writeSeq:1};});
+  s.doc.graph.nodes[0].fields.prompt=["Keep this subject"];s.edit();
+  assert.equal(await s.saveNamed("保留草稿"),false);assert.equal(s.doc.name,"保留草稿");assert.equal(s.dirty,true);
+  fail=false;assert.equal(await s.saveNamed("保留草稿"),true);assert.equal(s.doc.graph.nodes[0].fields.prompt[0],"Keep this subject");assert.equal(s.error,"");
 });

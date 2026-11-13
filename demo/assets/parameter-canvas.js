@@ -19,10 +19,9 @@
       save:'<path d="M4 3.5 18 3.1 20.6 5.7 20.2 20.7 4.2 21Z"/><path d="M7.4 3.6v6.4l9.1-.2V3.5"/><path d="M8 20.5v-7.4l8.5.1V21"/><path d="M13.8 5v3.1"/>',
       export:'<path d="M4.1 15.9v4.7l15.9.2v-4.6"/><path d="M11.8 3.2v12.4"/><path d="m7.6 11.7 4.2 4.1 4.5-4.3"/>',
       open:'<path d="M2.9 6.7 3.1 19.7l17.6.3 1-10.5-10.3-.3-2.5-3.1-6-.1Z"/><path d="M3 9.8 21.3 9.6"/>',
-      more:'<circle cx="6" cy="12" r="1.15"/><circle cx="12" cy="11.8" r="1.15"/><circle cx="18" cy="12.1" r="1.15"/>',
       undo:'<path d="M9.3 6.5 4 11.2l5.4 4.5"/><path d="M4.6 11.2h9.1c4.2 0 6 2.1 6 5.2 0 2.1-1.6 3.5-3.3 4"/>'
     };
-    return `<svg class="pc-sketch-icon" width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.65" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${marks[kind]||marks.more}</svg>`;
+    return `<svg class="pc-sketch-icon" width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.65" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${marks[kind]||""}</svg>`;
   }
   function recentCanvases(items) {
     return [...new Map(items.filter(item=>item?.id && !item.isOfficialPreset && !String(item.id).startsWith("preset_")).map(item=>[item.id,item])).values()]
@@ -429,6 +428,15 @@
       catch(error) {this.fail(error);return false;}
       finally {if(this.savePromise===operation) this.savePromise=null;this.notify("status");}
     }
+    async saveNamed(name) {
+      const value=String(name||"").trim();
+      if(!value || value.length>100) throw new Error("请输入 1–100 个字符的工作流名称");
+      if(this.closed) return false;
+      if(this.doc.name!==value) {this.doc.name=value;this.edit(false,{group:"name"});}
+      const saved=await this.save();
+      if(saved && !this.closed && this.error) {this.error="";this.notify();}
+      return saved;
+    }
     async expand() {
       if(this.expanding) return;
       if(!this.options.loggedIn()) throw new Error("请先登录，再预览和生成");
@@ -546,6 +554,7 @@
   let outputPanelId = null;
   let panelCanvasId = null;
   let nodeResizeObserver = null;
+  let saveDialog = null;
   let spaceHeld = false;
   let cancelPointer = null;
   let suppressPortClick = false;
@@ -586,15 +595,57 @@
       ? items.map(item=>`<button type="button" role="menuitem" data-action="open-canvas" data-canvas-id="${esc(item.id)}" ${current.submission?"disabled":""} title="${esc(item.name||"未命名画布")}"><strong>${esc(item.name||"未命名画布")}</strong><small>${item.updatedAt?esc(runDate(item.updatedAt)):"已保存"}</small></button>`).join("")
       : '<p class="pc-recent-empty">暂无已保存的画布</p>'}`;
   }
-  function closeDocumentMenu() {
-    const menu=root?.querySelector(".pc-document-menu");
-    menu?.removeAttribute("open");
-    menu?.querySelector(".pc-open-canvases")?.classList.remove("is-open");
-    menu?.querySelector('[data-action="open-canvases"]')?.setAttribute("aria-expanded","false");
+  function closeRecentCanvases() {
+    root?.querySelector(".pc-open-canvases")?.classList.remove("is-open");
+    root?.querySelector('[data-action="open-canvases"]')?.setAttribute("aria-expanded","false");
   }
   function setRecentOpen(open) {
     root.querySelector(".pc-open-canvases")?.classList.toggle("is-open",open);
     root.querySelector('[data-action="open-canvases"]')?.setAttribute("aria-expanded",String(open));
+  }
+  function closeSaveDialog(restoreFocus=true) {
+    if(!saveDialog) return;
+    const {element}=saveDialog;
+    saveDialog=null;
+    element.close();element.remove();
+    if(restoreFocus) root?.querySelector('[data-action="save"]')?.focus({preventScroll:true});
+  }
+  function openSaveDialog() {
+    if(!current || current.closed || !root?.offsetWidth) return;
+    if(saveDialog) {saveDialog.element.querySelector('input')?.focus();return;}
+    closeRecentCanvases();closeNodeMenu();
+    const store=current,documentId=store.doc.id,element=document.createElement("dialog");
+    const state={element,store,documentId,saving:false};
+    saveDialog=state;
+    element.className="pc-save-dialog";
+    element.setAttribute("aria-labelledby","pc-save-title");
+    element.innerHTML=`<form novalidate><h2 id="pc-save-title">保存工作流</h2>
+      <label for="pc-workflow-name">工作流名称</label><input id="pc-workflow-name" name="workflowName" type="text" maxlength="100" autocomplete="off" placeholder="例如：封面画风对比" required>
+      <p class="pc-save-error" role="alert" hidden></p><div class="pc-save-actions"><button type="button" data-save-cancel>取消</button><button type="submit" class="pc-save-confirm">保存</button></div></form>`;
+    const input=element.querySelector("input"),error=element.querySelector("[role=alert]"),confirm=element.querySelector('[type=submit]'),cancel=element.querySelector('[data-save-cancel]');
+    input.value=store.doc.name==="参数组合画布"?"":store.doc.name||"";
+    const isCurrent=()=>saveDialog===state && current===store && !store.closed && store.doc.id===documentId;
+    input.oninput=()=>{error.hidden=true;};
+    cancel.onclick=()=>{if(!state.saving) closeSaveDialog();};
+    element.oncancel=event=>{event.preventDefault();if(!state.saving) closeSaveDialog();};
+    element.querySelector("form").onsubmit=async event=>{
+      event.preventDefault();
+      if(!isCurrent() || state.saving) return;
+      const name=input.value.trim();
+      if(!name || name.length>100) {error.textContent="请输入 1–100 个字符的工作流名称";error.hidden=false;input.focus();return;}
+      state.saving=true;confirm.disabled=true;cancel.disabled=true;input.disabled=true;confirm.textContent="保存中…";error.hidden=true;
+      try {
+        const saved=await store.saveNamed(name);
+        if(!isCurrent()) return;
+        if(saved) {closeSaveDialog();return;}
+        error.textContent=store.error||"保存失败，请重试。当前草稿已保留。";error.hidden=false;
+      } catch(failure) {
+        if(isCurrent()) {error.textContent=failure.message||"保存失败，请重试";error.hidden=false;}
+      } finally {
+        if(isCurrent()) {state.saving=false;confirm.disabled=false;cancel.disabled=false;input.disabled=false;confirm.textContent="重试保存";input.focus();}
+      }
+    };
+    document.body.appendChild(element);element.showModal();input.focus();input.select();
   }
   function parameterValue(node,value,index) {
     const id=esc(node.id),field=node.parameter,base=`data-node="${id}" data-parameter="${esc(field)}" data-value="${index}"`;
@@ -1018,6 +1069,7 @@
       ? [oldCanvas.scrollLeft-oldWorld.offsetLeft,oldCanvas.scrollTop-oldWorld.offsetTop] : null;
     const changedDocument = panelCanvasId !== doc.id;
     if (changedDocument) {
+      if(saveDialog && saveDialog.documentId!==doc.id) closeSaveDialog(false);
       selectedEdge = null;
       panelCanvasId = doc.id;
       activePanel = current.submission ? "preview" : null;
@@ -1031,18 +1083,18 @@
     const width=Math.max(1050,...nodes.map(node=>(node.x||0)+420),(previousPan?.[0]||0)+(oldCanvas?.clientWidth||0));
     const height=Math.max(760,...nodes.map(node=>(node.y||0)+500),(previousPan?.[1]||0)+(oldCanvas?.clientHeight||0));
     root.innerHTML = `<div class="pc-header">
-      <div class="pc-document"><input class="pc-name" aria-label="画布名称" data-name value="${esc(doc.name)}"><span data-pc-status role="status"></span></div>
+      <div class="pc-document-actions" role="toolbar" aria-label="画布操作">
+          <button type="button" data-action="new" ${current.submission?"disabled":""}>${sketchIcon("new")}<span>新建画布</span></button>
+          <button type="button" data-action="save" aria-haspopup="dialog">${sketchIcon("save")}<span>保存画布</span></button>
+          <button type="button" data-action="export">${sketchIcon("export")}<span>导出画布</span></button>
+          <div class="pc-open-canvases"><button type="button" data-action="open-canvases" aria-haspopup="menu" aria-expanded="false" aria-controls="pc-recent-canvases">${sketchIcon("open")}<span>打开画布</span><span aria-hidden="true">⌄</span></button>
+            <div id="pc-recent-canvases" class="pc-recent-list" role="menu" aria-label="最近保存的画布"></div></div>
+      </div>
       <div class="pc-toolbar" aria-label="画布工具">
+        <span data-pc-status role="status"></span>
         ${isGuided ? "" : '<button type="button" data-action="add-node-menu" aria-haspopup="dialog">＋ 添加节点</button>'}
         <button type="button" data-action="toggle-history" aria-expanded="false" aria-controls="pc-drawer">出图历史</button>
         <button type="button" class="pc-primary" data-action="preview">预览出图</button>
-        <details class="pc-document-menu"><summary aria-haspopup="menu">${sketchIcon("more")}<span>更多</span></summary><div class="pc-document-actions" role="menu" aria-label="画布操作">
-          <button type="button" role="menuitem" data-action="new" ${current.submission?"disabled":""}>${sketchIcon("new")}<span>新建画布</span></button>
-          <button type="button" role="menuitem" data-action="save">${sketchIcon("save")}<span>保存画布</span></button>
-          <button type="button" role="menuitem" data-action="export">${sketchIcon("export")}<span>导出画布</span></button>
-          <div class="pc-open-canvases"><button type="button" role="menuitem" data-action="open-canvases" aria-haspopup="menu" aria-expanded="false" aria-controls="pc-recent-canvases">${sketchIcon("open")}<span>打开画布</span><span aria-hidden="true">‹</span></button>
-            <div id="pc-recent-canvases" class="pc-recent-list" role="menu" aria-label="最近保存的画布"></div></div>
-        </div></details>
       </div></div>
       ${current.error?`<div class="pc-error" role="alert">${esc(current.error)}${current.conflict?'<button type="button" data-action="recover-copy">恢复为新画布</button>':""}</div>`:""}
       ${isGuided?'<nav class="pc-step-nav" aria-label="跳转画布步骤"><button type="button" data-action="step" data-step="parameters">1 准备参数</button><button type="button" data-action="step" data-step="matching">2 搭配方式</button><button type="button" data-action="step" data-step="checkout">3 预览出图</button></nav>':""}
@@ -1071,7 +1123,7 @@
       for (const card of canvas.querySelectorAll("[data-card]")) nodeResizeObserver.observe(card);
     }
     const body=root.querySelector('.pc-guided-body');if(body) body.scrollTop=oldScroll;
-    bindDocumentMenu();
+    bindRecentCanvases();
   }
   function guidedHtml(flow) {
     return `<div class="pc-guided-body"><main class="pc-parameters-area" aria-label="准备参数"><div class="pc-step-title"><span>1</span><div><h2>准备参数</h2><p>填写想画的内容，画风和比例都可添加多项。</p></div></div>
@@ -1084,7 +1136,6 @@
   }
   function valueChanged(target) {
     const node=current.doc.graph.nodes.find(n=>n.id===target.dataset.node);
-    if(target.hasAttribute("data-name")) {current.doc.name=target.value;current.edit(false,{group:"name"});return;}
     if(!node) return;
     if(target.dataset.property) node[target.dataset.property]=target.dataset.property==="repeat"?Number(target.value):target.value;
     else if(target.dataset.value!=null) {
@@ -1105,7 +1156,7 @@
     activePanel = panel;
     outputPanelId = id;
     renderPanels();
-    if (panel) closeDocumentMenu();
+    if (panel) closeRecentCanvases();
     if (focus && panel) root.querySelector(".pc-drawer:not([hidden]) [data-action='close-drawer']")?.focus({preventScroll:true});
   }
 
@@ -1164,17 +1215,12 @@
     }
     if (event.button===1) event.preventDefault();
   }
-  function bindDocumentMenu() {
+  function bindRecentCanvases() {
     const recentWrap=root.querySelector(".pc-open-canvases");
     if(recentWrap) {
       recentWrap.onpointerenter=event=>{if(event.pointerType!=="touch") setRecentOpen(true);};
       recentWrap.onpointerleave=event=>{if(event.pointerType!=="touch" && !recentWrap.contains(document.activeElement)) setRecentOpen(false);};
       recentWrap.onfocusout=event=>{if(!recentWrap.contains(event.relatedTarget)) setRecentOpen(false);};
-    }
-    const documentMenu=root.querySelector(".pc-document-menu");
-    if(documentMenu) {
-      documentMenu.ontoggle=()=>{if(!documentMenu.open) setRecentOpen(false);};
-      documentMenu.onfocusout=event=>{if(!documentMenu.contains(event.relatedTarget)) closeDocumentMenu();};
     }
   }
   function bind() {
@@ -1190,7 +1236,7 @@
       const button=event.target.closest("button[data-action]");if(!button) return;
       const action=button.dataset.action,node=current.doc.graph.nodes.find(n=>n.id===button.dataset.node),index=Number(button.dataset.value);
       if(action==="open-canvases") {setRecentOpen(event.pointerType==="touch"?!root.querySelector(".pc-open-canvases").classList.contains("is-open"):true);return;}
-      if(action==="open-canvas") {closeDocumentMenu();return void busy(()=>current.open(button.dataset.canvasId));}
+      if(action==="open-canvas") {closeRecentCanvases();return void busy(()=>current.open(button.dataset.canvasId));}
       if(action==="undo") {current.undo();root.querySelector('.pc-scroll')?.focus({preventScroll:true});return;}
       if(action==="delete-edge") {deleteSelectedEdge();return;}
       if(action==="cancel-edge") {clearEdgeSelection();root.querySelector(".pc-scroll")?.focus({preventScroll:true});return;}
@@ -1203,7 +1249,7 @@
       }
       if(action==="choose-run") {void busy(()=>current.watch(button.dataset.run));return;}
       if(action==="locate-nodes") {
-        root.querySelector(".pc-document-menu")?.removeAttribute("open");
+        closeRecentCanvases();
         root.querySelector("[data-card]")?.scrollIntoView({block:"center",inline:"center"});
         return;
       }
@@ -1262,10 +1308,10 @@
         focusParameter(added);return;
       }
       if(action==="match-mode") {node.mode=button.dataset.matchMode;current.edit();return;}
-      if(action==="save") {closeDocumentMenu();if(!current.doc.writeSeq) current.dirty=true;return void busy(()=>current.save());}
+      if(action==="save") {openSaveDialog();return;}
       if(action==="more-canvases") return void busy(()=>current.loadMoreCanvases());
       if(action==="more-runs") return void busy(()=>current.loadMoreRuns());
-      if(action==="new"||action==="recover-copy") {closeDocumentMenu();return void busy(()=>current.create(action==="recover-copy"));}
+      if(action==="new"||action==="recover-copy") {closeRecentCanvases();return void busy(()=>current.create(action==="recover-copy"));}
       if(action==="preview") {
         showPanel("preview",null,false);
         if(current.submission||current.preview) {renderPanels();return;}
@@ -1283,7 +1329,7 @@
         submitFromPreview();return;
       }
       if(action==="export") {
-        closeDocumentMenu();
+        closeRecentCanvases();
         const url=URL.createObjectURL(new Blob([JSON.stringify(current.doc,null,2)],{type:"application/json"}));
         const a=document.createElement("a");a.href=url;a.download="参数画布.json";
         document.body.appendChild(a);a.click();a.remove();
@@ -1347,11 +1393,11 @@
       if(!editing && (event.ctrlKey||event.metaKey) && !event.altKey && ["z","y"].includes(event.key.toLowerCase())) {
         event.preventDefault();event.stopPropagation();current.undo(event.key.toLowerCase()==="y"||event.shiftKey);root.querySelector('.pc-scroll')?.focus({preventScroll:true});return;
       }
-      const menu=event.target.closest(".pc-document-menu");
+      const menu=event.target.closest(".pc-open-canvases");
       if(menu && ["ArrowDown","ArrowUp","ArrowLeft","ArrowRight","Escape"].includes(event.key)) {
         event.preventDefault();event.stopPropagation();
-        const open=root.querySelector('[data-action="open-canvases"]'),summary=menu.querySelector("summary");
-        if(event.key==="Escape") {closeDocumentMenu();summary.focus();return;}
+        const open=root.querySelector('[data-action="open-canvases"]');
+        if(event.key==="Escape") {closeRecentCanvases();open.focus();return;}
         const inRecent=Boolean(event.target.closest(".pc-recent-list"));
         if((event.key==="ArrowLeft"||event.key==="ArrowRight") && (event.target===open||inRecent)) {
           if(inRecent) {setRecentOpen(false);open.focus();}
@@ -1359,11 +1405,10 @@
           return;
         }
         if(!["ArrowUp","ArrowDown"].includes(event.key)) return;
-        menu.open=true;
-        const buttons=inRecent?[...root.querySelectorAll('.pc-recent-list button:not(:disabled)')]
-          :[...menu.querySelectorAll('.pc-document-actions>button:not(:disabled),.pc-open-canvases>button')];
-        const index=buttons.indexOf(event.target),next=index+(event.key==="ArrowDown"?1:-1);
-        (buttons[(next+buttons.length)%buttons.length]||summary).focus();
+        setRecentOpen(true);
+        const buttons=[...root.querySelectorAll('.pc-recent-list button:not(:disabled)')];
+        const index=buttons.indexOf(event.target),next=index<0?(event.key==="ArrowDown"?0:buttons.length-1):index+(event.key==="ArrowDown"?1:-1);
+        (buttons[(next+buttons.length)%buttons.length]||open).focus();
         return;
       }
       if(!editing && (event.key==="Enter" || event.key===" ") && event.target.closest("[data-edge-from]")) {
@@ -1379,7 +1424,7 @@
       }
     };
     root.onpointerdown=event=>{
-      if (!event.target.closest(".pc-document-menu")) closeDocumentMenu();
+      if (!event.target.closest(".pc-open-canvases")) closeRecentCanvases();
       const viewport=event.target.closest(".pc-scroll");
       if(viewport && event.button===1) {beginPan(event,viewport);return;}
       if(event.button!==0 || !event.isPrimary) return;
@@ -1472,7 +1517,8 @@
     else if(changedRoot) {render();bind();}
   }
   function dismissInteractions() {
-    closeDocumentMenu();
+    closeSaveDialog(false);
+    closeRecentCanvases();
     clearEdgeSelection();
     closeNodeMenu();
     cancelPointer?.();
@@ -1501,7 +1547,7 @@
   global.addEventListener?.("resize", () => {
     if (root?.offsetWidth && current && !cancelPointer) drawEdges();
   });
-  global.HandrawParameterCanvas={mount,dismissInteractions,saveCurrent:()=>current?.save(),openRun:async id=>{
+  global.HandrawParameterCanvas={mount,dismissInteractions,saveCurrent:openSaveDialog,openRun:async id=>{
     const store=current;
     if(!store) return;
     await store.openRun(id);
