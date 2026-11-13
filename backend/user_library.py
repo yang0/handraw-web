@@ -677,6 +677,7 @@ def handle_library_put(handler: Any, req_path: str, body: dict[str, Any]) -> boo
 
     try:
         with handler.db.transaction() as tx:
+            tx.execute("SELECT pg_advisory_xact_lock(189,hashtext(?))", (str(user_id),))
             # Check if UID belongs to another user (UID is globally unique: foreign UID returns 404)
             foreign = tx.execute(
                 "SELECT user_id FROM user_uploads WHERE asset_uid = ? AND user_id <> ? LIMIT 1",
@@ -1088,6 +1089,7 @@ def handle_library_delete(handler: Any, req_path: str, qs: dict[str, list[str]])
     resp_status: int = 200
 
     with handler.db.transaction() as tx:
+        tx.execute("SELECT pg_advisory_xact_lock(189,hashtext(?))", (str(user_id),))
         row = tx.execute(
             "SELECT * FROM user_uploads WHERE user_id = ? AND asset_uid = ? AND (cat IS NULL OR cat IN ('characters', 'props', 'scenes', 'other')) LIMIT 1",
             (user_id, uid),
@@ -1154,6 +1156,7 @@ def handle_library_post(handler: Any, req_path: str, body: dict[str, Any]) -> bo
     resp_status: int = 200
 
     with handler.db.transaction() as tx:
+        tx.execute("SELECT pg_advisory_xact_lock(189,hashtext(?))", (str(user_id),))
         row = tx.execute(
             "SELECT * FROM user_uploads WHERE user_id = ? AND asset_uid = ? AND (cat IS NULL OR cat IN ('characters', 'props', 'scenes', 'other')) LIMIT 1",
             (user_id, uid),

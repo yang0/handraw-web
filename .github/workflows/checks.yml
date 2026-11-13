@@ -69,6 +69,11 @@ jobs:
           python-version: '3.12'
           cache: pip
       - run: python -m pip install -r requirements.txt
+      - name: Match PostgreSQL archive tools to the server
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends postgresql-client-16
+          echo '/usr/lib/postgresql/16/bin' >> "$GITHUB_PATH"
       - name: Full Python unittest suite (balanced shard)
         run: python ops/ci_python_shard.py --shards 6 --shard ${{ matrix.shard }}
 

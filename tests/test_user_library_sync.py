@@ -275,7 +275,9 @@ class UserLibrarySyncTests(unittest.TestCase):
         status_codes = []
         responses = []
 
+        barrier = threading.Barrier(6)
         def _update(name: str):
+            barrier.wait(timeout=10)
             st, body, _ = self._request(
                 "PUT",
                 f"/api/library/assets/{u_lock}",
@@ -285,15 +287,14 @@ class UserLibrarySyncTests(unittest.TestCase):
             status_codes.append(st)
             responses.append(body)
 
-        t1 = threading.Thread(target=_update, args=("Winner A",))
-        t2 = threading.Thread(target=_update, args=("Winner B",))
-        t1.start()
-        t2.start()
-        t1.join()
-        t2.join()
-
-        self.assertIn(200, status_codes)
-        self.assertIn(409, status_codes)
+        threads=[threading.Thread(target=_update,args=(f"Concurrent edit {index}",)) for index in range(6)]
+        for thread in threads:
+            thread.start()
+        for thread in threads:
+            thread.join(timeout=15)
+        self.assertEqual(len(status_codes),6)
+        self.assertEqual(status_codes.count(200),1,status_codes)
+        self.assertEqual(status_codes.count(409),5,status_codes)
 
         conflict_res = next(r for r in responses if r.get("code") == "conflict")
         self.assertIn("current", conflict_res)

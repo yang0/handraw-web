@@ -1773,10 +1773,12 @@ def admin_create_official_asset(
 
     with db.transaction() as tx:
         if raw_code:
+            tx.execute("SELECT pg_advisory_xact_lock(188,hashtext(?))", (raw_code.split("-",1)[0],))
             if tx.execute("SELECT 1 FROM catalog_assets WHERE code = ? OR UPPER(code) = ?", (raw_code, raw_code)).fetchone():
                 raise ServiceError(f"编号 {raw_code} 已被占用", status=409, code="code_taken", extra={"code": "code_taken"})
             code = raw_code
         else:
+            tx.execute("SELECT pg_advisory_xact_lock(188,hashtext(?))", (series,))
             code = _allocate_official_code(tx, series)
 
         _check_official_name_taken(tx, kind, name)
