@@ -2,7 +2,7 @@
 const test=require("node:test"),assert=require("node:assert/strict"),vm=require("node:vm"),fs=require("node:fs");
 const context={window:{__HANDRAW_TESTING__:true},setTimeout,clearTimeout,console};
 vm.createContext(context);vm.runInContext(fs.readFileSync("demo/assets/parameter-canvas.js","utf8"),context);
-const {CanvasStore,selectedQuote,arrangeNodes,pickResourceCandidate,simpleFlow,combinationSummary,addGuidedParameter,connectionError,addCanvasNode,outputItems,groupExistingParameters,matchingPreview,matchingSources,recentCanvases}=context.window.HandrawParameterCanvas.testing;
+const {CanvasStore,selectedQuote,arrangeNodes,pickResourceCandidate,simpleFlow,combinationSummary,addGuidedParameter,connectionError,addCanvasNode,outputItems,groupExistingParameters,matchingPreview,matchingSources,recentCanvases,removeCandidate,removeParameterField,repairEmptyCandidates}=context.window.HandrawParameterCanvas.testing;
 const storage=new Map();
 function store(t,api,scope="user:canvas") {
   const instance=new CanvasStore({api,scope,loggedIn:()=>true,storage:{getItem:key=>storage.get(key),setItem:(key,value)=>storage.set(key,value)}});
@@ -433,4 +433,69 @@ test("a failed named save retains its name and graph for a successful retry",asy
   s.doc.graph.nodes[0].fields.prompt=["Keep this subject"];s.edit();
   assert.equal(await s.saveNamed("保留草稿"),false);assert.equal(s.doc.name,"保留草稿");assert.equal(s.dirty,true);
   fail=false;assert.equal(await s.saveNamed("保留草稿"),true);assert.equal(s.doc.graph.nodes[0].fields.prompt[0],"Keep this subject");assert.equal(s.error,"");
+});
+
+test("removing the last color candidate restores the original combinations and other parameters",t=>{
+  storage.clear();const s=store(t,async()=>({writeSeq:1})),node=s.doc.graph.nodes[0];
+  node.fields.prompt=["Forest","Ocean"];node.fields.style1=["FA-001","FA-002"];s.edit();
+  const before=JSON.stringify(node.fields),edges=JSON.stringify(s.doc.graph.edges),order=JSON.stringify(node.fieldOrder);
+  const plans=()=>{const source=matchingSources(s.doc.graph,node);return JSON.stringify(matchingPreview(source.sources,node.mode,1,200));};
+  const initial=plans();
+  for(let i=0;i<3;i++) {
+    addGuidedParameter(s,"colors");node.fields.colors=[["red"],["blue"]];s.edit();
+    assert.equal(combinationSummary(s.doc.graph).count,8);
+    assert.equal(removeCandidate(node,"colors",1),true);s.edit();assert.equal(combinationSummary(s.doc.graph).count,4);
+    assert.equal(removeCandidate(node,"colors",0),true);s.edit();
+    assert.equal(JSON.stringify(node.fields),before);assert.equal(JSON.stringify(node.fieldOrder),order);
+    assert.equal(plans(),initial);assert.equal(JSON.stringify(s.doc.graph.edges),edges);
+  }
+  s.undo();assert.deepEqual(Array.from(s.doc.graph.nodes[0].fields.colors[0]),["red"]);
+  s.undo(true);assert.equal(Object.hasOwn(s.doc.graph.nodes[0].fields,"colors"),false);
+});
+
+test("all optional parameter deletions preserve the required content and field order",t=>{
+  for(const field of ["colors","tones","moods","refImages","whitespace","mode","layout","ratio","style1"]) {
+    storage.clear();const s=store(t,async()=>({writeSeq:1})),node=s.doc.graph.nodes[0];node.fields.prompt=["Keep my subject"];s.edit();
+    addGuidedParameter(s,field);assert.equal(removeCandidate(node,field,0),true);
+    assert.equal(Object.hasOwn(node.fields,field),false,field);assert.ok(!node.fieldOrder.includes(field));
+    assert.equal(node.fields.prompt[0],"Keep my subject");assert.equal(combinationSummary(s.doc.graph).count,1);
+    assert.equal(removeCandidate(node,field,0),false,"A stale removal must not affect another field");
+  }
+});
+
+test("removing a whole optional field and clearing required or standalone candidates keep an editable graph",t=>{
+  storage.clear();const s=store(t,async()=>({writeSeq:1})),node=s.doc.graph.nodes[0];node.fields.prompt=["One","Two"];s.edit();
+  addGuidedParameter(s,"colors");assert.equal(removeParameterField(node,"colors"),true);
+  assert.equal(combinationSummary(s.doc.graph).count,2);assert.equal(removeCandidate(node,"prompt",0),true);
+  assert.equal(node.fields.prompt[0],"Two");removeCandidate(node,"prompt",0);
+  assert.equal(node.fields.prompt.length,1);assert.equal(node.fields.prompt[0],"");assert.match(combinationSummary(s.doc.graph).problem,/填写每个主题/);
+  const only={id:"only",type:"parameters",fields:{colors:[["red"]]},fieldOrder:["colors"]};
+  removeCandidate(only,"colors",0);assert.equal(only.fields.colors.length,1);assert.equal(only.fields.colors[0].length,0);
+  const single={type:"parameter",parameter:"colors",values:[["red"]]};removeCandidate(single,"colors",0);
+  assert.equal(single.values.length,1);assert.equal(single.values[0].length,0);
+});
+
+test("already saved empty optional candidates recover without modifying other values or identities",()=>{
+  const graph=context.window.HandrawParameterCanvas.testing.blank().graph,node=graph.nodes[0];
+  node.fields.prompt=["Existing private content"];node.fields.colors=[];node.fieldOrder.push("colors");
+  assert.equal(repairEmptyCandidates(graph),true);assert.ok(!Object.hasOwn(node.fields,"colors"));
+  assert.equal(node.fields.prompt[0],"Existing private content");assert.equal(node.id,"params");assert.equal(graph.edges[0].to,"output");
+  assert.equal(repairEmptyCandidates(graph),false);assert.ok(!node.fieldOrder.includes("colors"));
+  node.fields.prompt=[];assert.equal(repairEmptyCandidates(graph),true);assert.equal(node.fields.prompt.length,1);
+  assert.equal(node.fields.prompt[0],"");
+});
+
+test("warm-cache and cloud documents with an empty color list can save and preview again",async t=>{
+  storage.clear();const document=context.window.HandrawParameterCanvas.testing.blank();document.id="broken";document.writeSeq=9;
+  document.graph.nodes[0].fields.prompt=["Recover body"];document.graph.nodes[0].fields.colors=[];document.graph.nodes[0].fieldOrder.push("colors");
+  storage.set("handraw.parameter-canvas:cache-repair",JSON.stringify({doc:document}));
+  const cached=store(t,async()=>({writeSeq:10}),"cache-repair");assert.equal(cached.dirty,true);assert.equal(combinationSummary(cached.doc.graph).count,1);
+  let sent;
+  const cloud=store(t,async(url,options)=>{
+    if(options?.method==="POST") {sent=options.body;return {writeSeq:10};}
+    if(url.endsWith("/runs")) return {items:[]};return {canvas:JSON.parse(JSON.stringify(document))};
+  },"cloud-repair");
+  await cloud.open("broken");assert.equal(cloud.dirty,true);assert.equal(combinationSummary(cloud.doc.graph).count,1);
+  assert.equal(await cloud.save(),true);assert.equal(sent.id,"broken");assert.equal(sent.baseWriteSeq,9);assert.equal(sent.graph.nodes[0].fields.prompt[0],"Recover body");
+  assert.equal(Object.hasOwn(sent.graph.nodes[0].fields,"colors"),false);
 });

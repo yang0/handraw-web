@@ -150,6 +150,37 @@
     node.fields[field]=[initialCandidate(field)];
     node.fieldOrder?.push(field);
   }
+  function removeParameterField(node,field) {
+    if(node?.type!=="parameters" || !Object.hasOwn(node.fields,field)) return false;
+    delete node.fields[field];
+    if(node.fieldOrder) node.fieldOrder=node.fieldOrder.filter(item=>item!==field);
+    return true;
+  }
+  function removeCandidate(node,field,index) {
+    const target=parameterField(node,field),values=target?.values;
+    if(!Array.isArray(values) || !Number.isInteger(index) || index<0 || index>=values.length) return false;
+    if(values.length===1) {
+      if(node.type==="parameters" && field!=="prompt" && Object.keys(node.fields).length>1) removeParameterField(node,field);
+      else values[0]=initialCandidate(target.parameter);
+    } else values.splice(index,1);
+    return true;
+  }
+  function repairEmptyCandidates(graph) {
+    let changed=false;
+    for(const node of graph.nodes || []) {
+      if(node.type==="parameters" && node.fields) {
+        for(const [field,values] of Object.entries(node.fields)) {
+          if(!Array.isArray(values) || values.length) continue;
+          if(field!=="prompt" && Object.keys(node.fields).length>1) removeParameterField(node,field);
+          else node.fields[field]=[initialCandidate(field)];
+          changed=true;
+        }
+      } else if(node.type==="parameter" && Array.isArray(node.values) && !node.values.length) {
+        node.values=[initialCandidate(node.parameter)];changed=true;
+      }
+    }
+    return changed;
+  }
   function combinationSummary(graph) {
     const flow=simpleFlow(graph);
     if(!flow) return {count:null,problem:"此画布使用自由连线，请预览实际组合。",formula:"",flow:null};
@@ -300,6 +331,7 @@
       this.cacheKey="handraw.parameter-canvas:"+options.scope;
       try { const cached=JSON.parse(options.storage?.getItem(this.cacheKey)||"null");
         if(cached?.doc?.graph?.nodes) {this.doc=cached.doc;this.dirty=Boolean(cached.dirty);this.submission=cached.submission||null;this.preferredRunId=cached.runId||null;this.view=cached.view==="guided"?"guided":"free";} } catch(_) {}
+      if(repairEmptyCandidates(this.doc.graph)) {this.dirty=true;this.persist();}
       this.localDocuments=[];
       if(!options.loggedIn()) {
         try {this.localDocuments=JSON.parse(options.storage?.getItem(this.cacheKey+":saved")||"[]").filter(item=>item?.graph?.nodes);} catch(_) {}
@@ -376,7 +408,10 @@
       if(!result.canvas?.graph) throw new Error("画布不存在");
       if(this.closed||navigation!==this.navigation) return;
       this.doc=result.canvas;this.confirmation=null;this.dirty=false; this.conflict=false; this.preview=null; this.run=null;this.recent=[];this.recentCursor="";
-      this.error="";this.resetHistory(); this.persist(); this.notify(); await this.loadRecent();
+      const repaired=repairEmptyCandidates(this.doc.graph);
+      this.error="";this.resetHistory(); this.persist();
+      if(repaired) this.edit(true,{record:false});else this.notify();
+      await this.loadRecent();
     }
     async create(copy=false) {
       if(this.submission) throw new Error("请先确认上一次提交状态");
@@ -391,6 +426,7 @@
       if(this.dirty && !this.conflict && !(await this.save())) return false;
       this.navigation++;
       this.doc={id:uid("canvas"),name:document.name||"导入的参数画布",writeSeq:0,graph:clone(document.graph)};
+      repairEmptyCandidates(this.doc.graph);
       this.preferredRunId=null;this.conflict=false;this.run=null;this.runId=null;this.recent=[];this.recentCursor="";clearTimeout(this.pollTimer);this.resetHistory();this.edit(true);
       return this.save();
     }
@@ -988,7 +1024,7 @@
     if (current.submitting) return '<p role="status">正在提交批次…</p>';
     if (current.submission) return '<p role="status">上一批提交状态待确认。</p><button type="button" class="pc-primary" data-action="submit">确认提交状态</button>';
     const preview = current.preview;
-    if (!preview) return "";
+    if (!preview) return `<p role="status">${current.expanding?"正在重新核对出图内容与费用…":"参数已更新，请重新预览出图内容与费用。"}</p><button type="button" data-action="recheck-preview" ${current.expanding?"disabled":""}>重新预览</button>`;
     const q = selectedQuote(preview, current.selected.size);
     return `<p>已选 ${q.count} / ${preview.count} 张 · 免费 ${q.freeUsed} 张 · 预计 ${q.total} 积分</p>
       ${current.confirmation === "submit"
@@ -1363,11 +1399,8 @@
         if(resource?.image) options.openImage?.(resource.image,`${code} ${resource.name_zh||resource.name||""}`);return;
       }
       if(action==="remove-node") {current.doc.graph.nodes=current.doc.graph.nodes.filter(n=>n!==node);current.doc.graph.edges=current.doc.graph.edges.filter(e=>e.from!==node.id&&e.to!==node.id);}
-      else if(action==="remove-field") {
-        delete node.fields[fieldNode.parameter];
-        if(node.fieldOrder) node.fieldOrder=node.fieldOrder.filter(field=>field!==fieldNode.parameter);
-      }
-      else if(action==="remove-value") fieldNode.values.splice(index,1);
+      else if(action==="remove-field") removeParameterField(node,fieldNode.parameter);
+      else if(action==="remove-value") {if(!removeCandidate(node,fieldNode.parameter,index)) return;}
       else if(action==="add-value") {
         if(fieldNode.values.length>=200) {wireHint("每个参数最多添加 200 个候选");return;}
         fieldNode.values.push(initialCandidate(fieldNode.parameter));
@@ -1556,5 +1589,5 @@
       else showPanel("output");
     }
   },importDocument:document=>current?.importDocument(document),reset:()=>{dismissInteractions();nodeResizeObserver?.disconnect();current?.close();current=null;root=null;panelCanvasId=null;}};
-  if(global.__HANDRAW_TESTING__) global.HandrawParameterCanvas.testing={CanvasStore,blank,selectedQuote,arrangeNodes,pickResourceCandidate,simpleFlow,combinationSummary,addGuidedParameter,connectionError,addCanvasNode,outputItems,groupExistingParameters,matchingPreview,matchingSources,recentCanvases};
+  if(global.__HANDRAW_TESTING__) global.HandrawParameterCanvas.testing={CanvasStore,blank,selectedQuote,arrangeNodes,pickResourceCandidate,simpleFlow,combinationSummary,addGuidedParameter,connectionError,addCanvasNode,outputItems,groupExistingParameters,matchingPreview,matchingSources,recentCanvases,removeCandidate,removeParameterField,repairEmptyCandidates};
 })(window);
