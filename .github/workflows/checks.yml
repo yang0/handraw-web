@@ -40,7 +40,7 @@ jobs:
   # worker. Historical timings balance slow HTTP/integration modules.
   python-full:
     name: python-full (shard ${{ matrix.shard }} / 6)
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     strategy:
       fail-fast: false
       matrix:
