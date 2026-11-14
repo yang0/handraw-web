@@ -86,7 +86,7 @@
         finally{button.disabled=false;}
       };
       root.onclick=async event=>{
-        const button=event.target.closest('button');if(!button||button.type==='submit'||button.disabled)return;button.disabled=true;
+        const button=event.target.closest('button');if(!button||button.closest('[data-custom-purchase]')||button.disabled)return;button.disabled=true;
         try{
           if(button.dataset.purchase){await openCheckout({packId:button.dataset.purchase});}
           else if(button.dataset.sync){await api(`/api/billing/orders/${encodeURIComponent(button.dataset.sync)}/sync`,{method:'POST',body:{}});await mountWallet(root);}
