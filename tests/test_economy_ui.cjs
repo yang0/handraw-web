@@ -11,6 +11,16 @@ function setup(api){
 }
 const spec=(id,extra={})=>({id,name:'标准规格',enabled:true,verified:true,priceCents:25,...extra});
 function root(){return {isConnected:true,innerHTML:'',textContent:'',select:{},querySelector(){return this.select;}};}
+
+test('guests do not query private economy data and sign-out fences an in-flight picker',async()=>{
+  let calls=0,finish;
+  const ui=setup(()=>{calls++;return new Promise(resolve=>finish=resolve);});
+  const el=root();await ui.mountPicker(el,{loggedIn:false});assert.equal(calls,0);
+  const pending=ui.mountPicker(el);
+  await ui.mountPicker(el,{loggedIn:false});
+  finish({specs:[spec('private')]});await pending;
+  assert.match(el.textContent,/登录后/);assert.equal(el.innerHTML,'');
+});
 test('the displayed first valid specification is actually submitted; unverified specs stay unavailable',async()=>{
   let body;
   const ui=setup(async(path,opts)=>{if(path.endsWith('/quote')){body=opts.body;return {ok:true};}return {specs:[spec('unverified',{verified:false}),spec('active-2k')]};});

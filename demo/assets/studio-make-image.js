@@ -136,18 +136,11 @@
     };
   }
 
-  function formatCostText({ loggedIn, freeRemaining, creditPerImage, dailyQuota, balance }) {
-    const unitPrice = Number.isFinite(creditPerImage) && creditPerImage > 0 ? creditPerImage : 2;
-    const dailyFree = Number.isFinite(dailyQuota) && dailyQuota > 0 ? dailyQuota : 3;
+  function formatCostText({ loggedIn }) {
     if (!loggedIn) {
-      return `每张 ${unitPrice} 积分，新用户每天免费 ${dailyFree} 张`;
+      return "生图使用生图余额或对应规格免费额度，社区积分单独使用；登录后查看额度与报价。";
     }
-    const free = Number(freeRemaining || 0);
-    const bal = Number(balance || 0);
-    if (free > 0) {
-      return `本次 1 张：免费（积分余额：${bal}）`;
-    }
-    return `本次 1 张：需 ${unitPrice} 积分（积分余额：${bal}）`;
+    return "生成前确认人民币费用，优先使用对应规格免费额度；不扣社区积分。";
   }
 
   class MakeImageController {
@@ -218,19 +211,7 @@
 
     renderCostHtml() {
       const ctx = this.context || {};
-      const settings = ctx.siteSettings || {};
-      const creditPerImage = Number(settings.credit_cost_per_image || settings.creditCostPerImage || 2);
-      const dailyQuota = Number(settings.daily_free_quota || settings.dailyFreeQuota || 3);
-      const freeRemaining = Number(ctx.freeQuotaRemaining || 0);
-      const balance = Number(ctx.credits || 0);
-
-      const text = formatCostText({
-        loggedIn: ctx.loggedIn,
-        freeRemaining,
-        creditPerImage,
-        dailyQuota,
-        balance
-      });
+      const text = formatCostText({ loggedIn: ctx.loggedIn });
 
       return `<span class="make-image-cost-text">${esc(text)}</span>`;
     }

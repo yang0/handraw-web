@@ -30,8 +30,9 @@
   }
   async function quote(items){return api('/api/studio/quote',{method:'POST',body:{items:items.map(item=>({specId:item.specId||chosenSpec,ratio:item.ratio||'3:4',slotPosition:item.slotPosition}))}});}
   async function confirm(items){return confirmDialog(await quote(items));}
-  async function mountPicker(root){
+  async function mountPicker(root,{loggedIn=true}={}){
     const load=Symbol();pickerLoads.set(root,load);
+    if(!loggedIn){availableSpecs=[];root.textContent='登录后查看生图规格与免费额度';return;}
     try {
       const state=await api('/api/economy');
       if(!root.isConnected||pickerLoads.get(root)!==load)return;

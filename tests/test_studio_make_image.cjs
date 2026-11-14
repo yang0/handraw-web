@@ -479,7 +479,8 @@ function createTestGraph(options = {}) {
     dailyQuota: 3,
     balance: 0
   });
-  assert.equal(unauthCost, "每张 2 积分，新用户每天免费 3 张");
+  assert.match(unauthCost, /生图余额.*对应规格免费额度.*社区积分单独使用/);
+  assert.doesNotMatch(unauthCost, /每天|每张.*积分/);
 
   // Authenticated with free quota
   const authFreeCost = formatCostText({
@@ -489,7 +490,7 @@ function createTestGraph(options = {}) {
     dailyQuota: 3,
     balance: 20
   });
-  assert.equal(authFreeCost, "本次 1 张：免费（积分余额：20）");
+  assert.match(authFreeCost, /人民币费用.*对应规格免费额度.*不扣社区积分/);
 
   // Authenticated without free quota
   const authPaidCost = formatCostText({
@@ -499,7 +500,7 @@ function createTestGraph(options = {}) {
     dailyQuota: 3,
     balance: 20
   });
-  assert.equal(authPaidCost, "本次 1 张：需 2 积分（积分余额：20）");
+  assert.equal(authPaidCost, authFreeCost, "legacy point/quota fields cannot promise a price or free generation");
 
   // Verify that count buttons (1/2/4/8) are not in HTML
   const fakeDom = createFakeDom();
@@ -524,7 +525,6 @@ function createTestGraph(options = {}) {
   // In make-image source, ensure new UI labels don't contain emoji
   // Check headings, labels, button texts in make-image template
   const uiTexts = [
-    "做图",
     "画风模式",
     "单画风",
     "双画风融合",

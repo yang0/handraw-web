@@ -20,7 +20,7 @@
       const toolbar=document.querySelector('.ic-studio-topbar,.ic-studio-toolbar,.studio-topbar,.ic-pv-topbar');
       if(toolbar&&!toolbar.contains(control))toolbar.appendChild(control);
       const account=S.App.state?.loggedIn ? String(S.App.state?.user?.id||S.App.state?.username||'signed-in') : 'guest';
-      if(account!==pickerAccount){pickerAccount=account;void window.HandrawEconomy.mountPicker(control);}
+      if(account!==pickerAccount){pickerAccount=account;void window.HandrawEconomy.mountPicker(control,{loggedIn:!!S.App.state?.loggedIn});}
     };
     document.body.appendChild(control);new MutationObserver(place).observe(document.getElementById('studio-app-root'),{childList:true,subtree:true});place();
   }
