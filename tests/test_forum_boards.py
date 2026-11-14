@@ -247,6 +247,54 @@ class ForumBoardTests(unittest.TestCase):
             future.result(timeout=5)
         self.denied(lambda: B.require_topic(self.db.get_conn(), self.tid, self.member))
 
+    def test_reports_and_legacy_reply_aliases_obey_private_membership(self):
+        from backend.admin_services import admin_list_reports, admin_resolve_report
+
+        reply = S.publish_forum_reply_post(
+            self.db, self.member, self.tid, "私密回复内容"
+        )["replyId"]
+        self.db.get_conn().execute(
+            "UPDATE forum_replies SET legacy_source='work_comments:legacy-private' WHERE id=?",
+            (reply,),
+        )
+        operator = dict(self.outsider, role="operator", status="active")
+        targets = (("reply", reply), ("comment", "legacy-private"), ("topic", self.tid))
+        report_ids = []
+        for kind, target in targets:
+            body = {
+                "targetType": kind,
+                "targetId": target,
+                "reason": "隐私检查",
+                "detail": "仅成员可读的举报详情",
+            }
+            self.denied(lambda: S.submit_abuse_report(self.db, self.outsider, body))
+            S.submit_abuse_report(self.db, self.member, body)
+            report_id = int(
+                self.db.get_conn()
+                .execute(
+                    "SELECT id FROM reports WHERE target_type=? AND target_id=?",
+                    (kind, target),
+                )
+                .fetchone()[0]
+            )
+            report_ids.append(report_id)
+            self.denied(
+                lambda: admin_resolve_report(self.db, operator, report_id, "dismissed")
+            )
+            self.assertEqual(
+                self.db.get_conn()
+                .execute("SELECT status FROM reports WHERE id=?", (report_id,))
+                .fetchone()[0],
+                "open",
+            )
+        self.assertFalse(admin_list_reports(self.db, operator)["items"])
+        B.change_members(
+            self.db, self.admin, self.key, {"usernames": [self.outsider["username"]]}
+        )
+        self.assertEqual(len(admin_list_reports(self.db, operator)["items"]), 3)
+        for report_id in report_ids:
+            admin_resolve_report(self.db, operator, report_id, "dismissed")
+
     def test_real_http_admin_and_direct_urls(self):
         server = web.create_channel_server(
             0, "main", self.db, host="127.0.0.1", demo_mode=False

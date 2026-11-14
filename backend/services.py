@@ -4263,6 +4263,11 @@ def submit_abuse_report(db: Database, user: dict[str, Any], body: dict[str, Any]
     with db.transaction() as tx:
         settings = get_site_settings(tx)
         threshold = max(1, int(settings.get("moderation", {}).get("auto_pause_report_threshold", 3)))
+        if target_type in ("reply", "comment"):
+            from .admin_services import resolve_migrated_comment
+            resolved, _, reply = resolve_migrated_comment(tx, target_type, target_id)
+            if resolved == "forum_reply" and reply:
+                require_forum_topic(tx, reply["topic_id"], user, write=True)
 
         target_title = target_id
         if target_type == "work":

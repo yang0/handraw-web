@@ -2509,6 +2509,7 @@ def admin_list_reports(db: Database, user: dict[str, Any] | None, status: str = 
     if user.get("role") != "admin":
         sql += f" AND (target_type<>'topic' OR EXISTS(SELECT 1 FROM forum_topics t WHERE t.id=reports.target_id AND {forum_access_sql('t.category', user)}))"
         sql += f" AND (target_type NOT IN ('reply','forum_reply') OR EXISTS(SELECT 1 FROM forum_replies r JOIN forum_topics t ON t.id=r.topic_id WHERE r.id=reports.target_id AND {forum_access_sql('t.category', user)}))"
+        sql += f" AND (target_type<>'comment' OR (NOT EXISTS(SELECT 1 FROM forum_replies r WHERE r.legacy_source='work_comments:'||reports.target_id) AND NOT EXISTS(SELECT 1 FROM work_comments c WHERE c.id=reports.target_id AND c.status='migrated')) OR EXISTS(SELECT 1 FROM forum_replies r JOIN forum_topics t ON t.id=r.topic_id WHERE r.legacy_source='work_comments:'||reports.target_id AND {forum_access_sql('t.category', user)}))"
     params: list[Any] = []
     if status and status != "all":
         sql += " AND status = ?"
@@ -2598,6 +2599,14 @@ def admin_resolve_report(
         else:
             effective_target_type = rep["target_type"]
             effective_target_id = rep["target_id"]
+
+        if user.get("role") != "admin":
+            if effective_target_type == "topic":
+                require_forum_topic(tx, effective_target_id, user, write=True)
+            elif effective_target_type in ("reply", "forum_reply"):
+                parent = tx.execute("SELECT topic_id FROM forum_replies WHERE id=?", (effective_target_id,)).fetchone()
+                if parent:
+                    require_forum_topic(tx, parent["topic_id"], user, write=True)
 
         if prof["effectiveRole"] == "moderator":
             if effective_target_type not in ("topic", "reply"):
