@@ -90,7 +90,7 @@ def chat(
     *,
     temperature: float = 0.7,
     max_tokens: int | None = None,
-    timeout: float = 60.0,
+    timeout: float | None = None,
     json_mode: bool = False,
 ) -> tuple[str, dict[str, Any]]:
     """Execute a chat completion request against the configured AI service.
@@ -104,7 +104,6 @@ def chat(
             elapsed_ms (int): Total round-trip time in milliseconds.
     """
     start_time = time.monotonic()
-    deadline = start_time + max(0.01, timeout)
 
     def _meta(ok: bool, reason: str = "") -> dict[str, Any]:
         elapsed_ms = int((time.monotonic() - start_time) * 1000)
@@ -115,9 +114,11 @@ def chat(
         }
 
     cfg = load_ai_config()
+    eff_timeout = float(timeout if timeout is not None else (cfg.get("timeout") or 60.0))
+    deadline = start_time + max(0.01, eff_timeout)
     base = str(cfg.get("url") or "").rstrip("/")
     key = str(cfg.get("key") or "").strip()
-    model = str(cfg.get("model") or "deepseek-v4.1-flash").strip()
+    model = str(cfg.get("model") or "gpt-6").strip()
 
     if not base or not key:
         logger.info("AI call skipped: no key or endpoint configured")

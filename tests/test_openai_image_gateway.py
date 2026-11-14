@@ -144,6 +144,12 @@ def _make_mock_gateway_handler(state: _MockOpenAIGatewayState):
 
             if state.mode == "empty":
                 out = {"created": 1700000000, "data": []}
+            elif self.path == "/v1/chat/completions":
+                out = {
+                    "id": "chatcmpl-test",
+                    "object": "chat.completion",
+                    "choices": [{"index": 0, "message": {"role": "assistant", "content": "OK"}, "finish_reason": "stop"}],
+                }
             else:
                 out = {
                     "created": 1700000000,
@@ -222,6 +228,7 @@ class OpenAIImageGatewayHTTPTests(unittest.TestCase):
         cls.temp_dir = tempfile.TemporaryDirectory()
         root = Path(cls.temp_dir.name)
         cls.img_cfg = root / "image-service.json"
+        cls.ai_cfg = root / "ai-service.json"
 
         cls.gw_state = _MockOpenAIGatewayState()
         cls.gw_server = ThreadingHTTPServer(("127.0.0.1", 0), _make_mock_gateway_handler(cls.gw_state))
@@ -250,6 +257,7 @@ class OpenAIImageGatewayHTTPTests(unittest.TestCase):
                 "HANDRAW_DEMO_MODE": "0",
                 "HANDRAW_ALLOWED_ORIGINS": ORIGIN,
                 "HANDRAW_IMAGE_CONFIG": str(cls.img_cfg),
+                "HANDRAW_AI_CONFIG": str(cls.ai_cfg),
             },
         )
         cls.env.start()
@@ -586,6 +594,120 @@ class OpenAIImageGatewayHTTPTests(unittest.TestCase):
         # Clean up inflight row so subsequent tests aren't counted against max_inflight
         from backend.services import refund_failed_cloud_generation
         refund_failed_cloud_generation(self.db, prep["genId"], "cleanup")
+
+    def test_admin_can_update_image_and_text_ai_gateway_configs_and_probe_ai(self) -> None:
+        orig_img_text = self.img_cfg.read_text(encoding="utf-8")
+        try:
+            # 1. Default textAi points to gpt-6 and local gateway; non-admin cannot read or update
+            st_forbidden, _ = self._req("GET", "/api/admin/gateway", cookie=self.cookie)
+            self.assertEqual(st_forbidden, 403)
+            st_post_forb, _ = self._req(
+                "POST",
+                "/api/admin/gateway",
+                {"target": "text_ai", "textAi": {"baseUrl": f"http://127.0.0.1:{self.gw_port}", "model": "gpt-6"}},
+                cookie=self.cookie,
+            )
+            self.assertEqual(st_post_forb, 403)
+
+            st_init, init_body = self._req("GET", "/api/admin/gateway", cookie=self.admin_cookie)
+            self.assertEqual(st_init, 200)
+            self.assertEqual(init_body["textAi"]["model"], "gpt-6")
+            self.assertEqual(init_body["textAi"]["baseUrl"], "http://127.0.0.1:8000/v1")
+
+            # 2. SSRF / metadata endpoint must be rejected
+            st_bad, _ = self._req(
+                "POST",
+                "/api/admin/gateway",
+                {"target": "text_ai", "textAi": {"baseUrl": "http://169.254.169.254/latest", "model": "gpt-6"}},
+                cookie=self.admin_cookie,
+            )
+            self.assertEqual(st_bad, 400)
+
+            # 3. Admin saves Text AI gateway (url without /v1 gets normalized) + new key, then preserves key when updating model only
+            st_ai1, body_ai1 = self._req(
+                "POST",
+                "/api/admin/gateway",
+                {
+                    "target": "text_ai",
+                    "textAi": {
+                        "baseUrl": f"http://127.0.0.1:{self.gw_port}",
+                        "apiKey": "sk-secret-ai-9999",
+                        "model": "gpt-6",
+                        "timeoutSeconds": 45,
+                    },
+                },
+                cookie=self.admin_cookie,
+            )
+            self.assertEqual(st_ai1, 200)
+            self.assertEqual(body_ai1["textAi"]["baseUrl"], f"http://127.0.0.1:{self.gw_port}/v1")
+            self.assertEqual(body_ai1["textAi"]["model"], "gpt-6")
+            self.assertEqual(body_ai1["textAi"]["timeoutSeconds"], 45)
+            self.assertNotIn("sk-secret-ai-9999", json.dumps(body_ai1))
+
+            st_ai2, body_ai2 = self._req(
+                "POST",
+                "/api/admin/gateway",
+                {
+                    "target": "text_ai",
+                    "textAi": {
+                        "baseUrl": f"http://127.0.0.1:{self.gw_port}/v1",
+                        "apiKey": "",
+                        "model": "gpt-6",
+                        "timeoutSeconds": 60,
+                    },
+                },
+                cookie=self.admin_cookie,
+            )
+            self.assertEqual(st_ai2, 200)
+            saved_ai = json.loads(self.ai_cfg.read_text(encoding="utf-8"))
+            self.assertEqual(saved_ai["key"], "sk-secret-ai-9999")
+
+            # 4. Probe Text AI hits /v1/chat/completions with configured model and key
+            st_probe, body_probe = self._req("GET", "/api/admin/gateway?probeAi=1", cookie=self.admin_cookie)
+            self.assertEqual(st_probe, 200)
+            self.assertTrue(body_probe["aiProbe"]["probed"])
+            self.assertTrue(body_probe["aiProbe"]["reachable"])
+            chat_reqs = [r for r in self.gw_state.requests if r["path"] == "/v1/chat/completions"]
+            self.assertEqual(len(chat_reqs), 1)
+            self.assertEqual(chat_reqs[0]["auth"], "Bearer sk-secret-ai-9999")
+            self.assertEqual(chat_reqs[0]["json"]["model"], "gpt-6")
+
+            # 5. Update Image gateway keeping existing key when apiKey is blank
+            st_img, body_img = self._req(
+                "POST",
+                "/api/admin/gateway",
+                {
+                    "target": "image",
+                    "image": {
+                        "baseUrl": f"http://127.0.0.1:{self.gw_port}/v1",
+                        "apiKey": "",
+                        "protocol": "openai",
+                        "model": "gptfree-pool/gpt-image-2.6",
+                        "quality": "high",
+                        "timeoutSeconds": 25,
+                        "allowSampleFallback": False,
+                    },
+                },
+                cookie=self.admin_cookie,
+            )
+            self.assertEqual(st_img, 200)
+            self.assertEqual(body_img["gateway"]["quality"], "high")
+            self.assertEqual(body_img["gateway"]["timeoutSeconds"], 25)
+            self.assertFalse(body_img["gateway"]["allowSampleFallback"])
+            self.assertEqual(json.loads(self.img_cfg.read_text(encoding="utf-8"))["key"], "magpie")
+
+            # 6. Audit logs must never leak raw API keys
+            audit_rows = self.db.get_conn().execute(
+                "SELECT details_json FROM audit_logs WHERE action LIKE 'gateway.update.%'"
+            ).fetchall()
+            self.assertGreaterEqual(len(audit_rows), 2)
+            for ar in audit_rows:
+                self.assertNotIn("sk-secret-ai-9999", ar["details_json"])
+                self.assertNotIn("magpie", ar["details_json"])
+        finally:
+            self.img_cfg.write_text(orig_img_text, encoding="utf-8")
+            if self.ai_cfg.is_file():
+                self.ai_cfg.unlink()
 
 
 if __name__ == "__main__":

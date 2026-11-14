@@ -68,6 +68,7 @@ from .admin_services import (
     admin_resolve_report,
     admin_revoke_forum_moderator,
     admin_toggle_redeem_code,
+    admin_update_gateway_config,
     admin_update_settings,
     admin_update_user,
     admin_upsert_catalog_asset,
@@ -3293,7 +3294,14 @@ class HandrawRequestHandler(BaseHTTPRequestHandler):
 
         if req_path == "/api/admin/gateway":
             user = self._current_user(required=True)
-            self._send_json(admin_get_gateway_overview(self.db, user, probe=(q1("probe") in ("1", "true"))))
+            self._send_json(
+                admin_get_gateway_overview(
+                    self.db,
+                    user,
+                    probe=(q1("probe") in ("1", "true")),
+                    probe_ai=(q1("probeAi") in ("1", "true")),
+                )
+            )
             return
 
         if req_path == "/api/admin/generations":
@@ -4429,6 +4437,11 @@ class HandrawRequestHandler(BaseHTTPRequestHandler):
         if m_toggle_redeem:
             user = self._current_user(required=True)
             self._send_json(admin_toggle_redeem_code(self.db, user, m_toggle_redeem.group(1), bool(body.get("active"))))
+            return
+
+        if req_path == "/api/admin/gateway":
+            user = self._current_user(required=True)
+            self._send_json(admin_update_gateway_config(self.db, user, body))
             return
 
         if req_path == "/api/admin/settings":

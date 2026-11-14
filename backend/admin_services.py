@@ -2,17 +2,31 @@
 from __future__ import annotations
 
 import hashlib
+import ipaddress
 import json
+import os
 import re
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
 from pathlib import Path
 from typing import Any
 
 from .postgres_db import PgConnection
 
-from .config import CONTENT_DIR, get_image_config_path, get_uploads_dir, load_image_config, open_url, resolve_gateway_model
+from .config import (
+    CONTENT_DIR,
+    get_ai_config_path,
+    get_image_config_path,
+    get_uploads_dir,
+    load_ai_config,
+    load_image_config,
+    normalize_ai_base_url,
+    normalize_image_protocol,
+    open_url,
+    resolve_gateway_model,
+)
 from .db import Database, local_today_str, utc_now_iso
 from .runtime_policy import sanitize_media_url
 from .security import generate_api_key, hash_password
@@ -3237,7 +3251,59 @@ def admin_toggle_redeem_code(db: Database, user: dict[str, Any] | None, code: st
 
 # ======================== 6. GATEWAY & GENERATION TASK MONITOR ========================
 
-def admin_get_gateway_overview(db: Database, user: dict[str, Any] | None, probe: bool = False) -> dict[str, Any]:
+
+def _validate_gateway_endpoint_url(raw_url: Any, label: str) -> str:
+    clean = str(raw_url or "").strip().rstrip("/")
+    if not clean or any(ch.isspace() or ord(ch) < 32 for ch in clean):
+        raise ServiceError(f"{label}不能为空，且不能包含空白或控制字符")
+    parsed = urllib.parse.urlsplit(clean)
+    scheme = (parsed.scheme or "").lower()
+    if scheme not in ("http", "https") or not parsed.hostname:
+        raise ServiceError(f"{label}必须为有效的 http:// 或 https:// 地址")
+    if parsed.username or parsed.password:
+        raise ServiceError(f"{label}禁止在 URL 中嵌入用户名或密码")
+    host = parsed.hostname.strip().lower()
+    try:
+        ip = ipaddress.ip_address(host)
+    except ValueError:
+        ip = None
+    if ip is not None and (ip.is_link_local or ip.is_multicast or ip.is_unspecified or str(ip) == "100.100.100.200"):
+        raise ServiceError(f"{label}禁止指向云元数据或保留网段地址")
+    return clean
+
+
+def _is_masked_or_empty_secret(raw: Any) -> bool:
+    s = str(raw or "").strip()
+    return not s or s == "未配置" or "****" in s or "••" in s
+
+
+def _read_json_dict(path: Path) -> dict[str, Any]:
+    if not path.is_file():
+        return {}
+    try:
+        loaded = json.loads(path.read_text(encoding="utf-8"))
+        return loaded if isinstance(loaded, dict) else {}
+    except Exception:
+        return {}
+
+
+def _atomic_write_json_secret(path: Path, payload: dict[str, Any]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp_path = path.with_suffix(path.suffix + ".tmp")
+    tmp_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    try:
+        os.chmod(tmp_path, 0o600)
+    except OSError:
+        pass
+    tmp_path.replace(path)
+
+
+def admin_get_gateway_overview(
+    db: Database,
+    user: dict[str, Any] | None,
+    probe: bool = False,
+    probe_ai: bool = False,
+) -> dict[str, Any]:
     require_staff(user, allowed_roles=("admin",))
     conn = db.get_conn()
     settings = get_site_settings(conn)
@@ -3245,17 +3311,42 @@ def admin_get_gateway_overview(db: Database, user: dict[str, Any] | None, probe:
 
     cfg_path = get_image_config_path()
     file_cfg = load_image_config()
-    base_url = str(file_cfg.get("base_url") or "http://127.0.0.1:5005")
-    api_base_url = str(file_cfg.get("api_base_url") or f"{base_url}/v1")
-    api_key = str(file_cfg.get("key") or "")
-    protocol = str(file_cfg.get("protocol") or "image-tasks")
+    raw_img_cfg = _read_json_dict(cfg_path)
+    raw_img_url = str(raw_img_cfg.get("url") or raw_img_cfg.get("base_url") or "").strip().rstrip("/")
+    base_url = str(file_cfg.get("base_url") or raw_img_url or "http://127.0.0.1:8000")
+    if base_url.endswith("/v1"):
+        api_base_url = base_url
+        base_url = base_url[:-3]
+    else:
+        api_base_url = str(file_cfg.get("api_base_url") or f"{base_url}/v1")
+    api_key = str(file_cfg.get("key") or raw_img_cfg.get("key") or raw_img_cfg.get("api_key") or "")
+    protocol = str(
+        file_cfg.get("protocol")
+        or normalize_image_protocol(
+            raw_img_cfg.get("protocol") or raw_img_cfg.get("api_style"),
+            raw_url=raw_img_url or base_url,
+            model=str(raw_img_cfg.get("model") or ""),
+        )
+        or "image-tasks"
+    )
     display_url = api_base_url if protocol == "openai" else base_url
+    effective_img_model = resolve_gateway_model(settings, file_cfg if file_cfg else raw_img_cfg)
+    effective_img_timeout = int(
+        file_cfg.get("timeout")
+        or raw_img_cfg.get("timeout")
+        or gw_settings.get("timeout_seconds", 35)
+    )
+    effective_img_quality = str(
+        file_cfg.get("quality")
+        or raw_img_cfg.get("quality")
+        or gw_settings.get("quality", "auto")
+    )
 
     probe_result: dict[str, Any] = {
         "probed": False,
         "reachable": False,
         "latencyMs": 0,
-        "detail": "点击「立即探测网关」检测实时连通性",
+        "detail": "点击「探测生图网关」检测实时连通性",
     }
     if probe:
         t0 = time.time()
@@ -3290,6 +3381,46 @@ def admin_get_gateway_overview(db: Database, user: dict[str, Any] | None, probe:
                 "detail": f"未连接 ({str(exc)[:80]}) · 自动启用本地高保真样张回退",
             }
 
+    ai_cfg_path = get_ai_config_path()
+    ai_cfg = load_ai_config()
+    ai_base_url = str(ai_cfg.get("url") or "http://127.0.0.1:8000/v1").strip().rstrip("/")
+    ai_key = str(ai_cfg.get("key") or "").strip()
+    ai_model = str(ai_cfg.get("model") or "gpt-6").strip() or "gpt-6"
+    ai_timeout = int(ai_cfg.get("timeout") or 60)
+
+    ai_probe_result: dict[str, Any] = {
+        "probed": False,
+        "reachable": False,
+        "latencyMs": 0,
+        "detail": "点击「测试文字模型」验证实时对话连通性",
+    }
+    if probe_ai:
+        from . import ai_client
+        reply_text, meta = ai_client.chat(
+            [{"role": "user", "content": "Reply with OK"}],
+            temperature=0.0,
+            max_tokens=12,
+            timeout=min(12.0, float(ai_timeout)),
+        )
+        latency_ai = int(meta.get("elapsed_ms") or 0)
+        if meta.get("ok"):
+            snippet = reply_text.strip().replace("\n", " ")[:24]
+            ai_probe_result = {
+                "probed": True,
+                "reachable": True,
+                "latencyMs": latency_ai,
+                "detail": f"模型 {ai_model} 在线 ({latency_ai}ms)：{snippet}",
+            }
+        else:
+            reason_code = str(meta.get("reason") or "error")
+            hint = "未配置密钥" if reason_code == "no_key" else reason_code
+            ai_probe_result = {
+                "probed": True,
+                "reachable": False,
+                "latencyMs": latency_ai,
+                "detail": f"测试失败 ({hint}, {latency_ai}ms)",
+            }
+
     stats_row = conn.execute(
         """
         SELECT
@@ -3309,13 +3440,21 @@ def admin_get_gateway_overview(db: Database, user: dict[str, Any] | None, probe:
             "configFileExists": cfg_path.is_file(),
             "baseUrl": display_url,
             "apiKeyMasked": _mask_secret_key(api_key),
-            "model": resolve_gateway_model(settings, file_cfg),
+            "model": effective_img_model,
             "protocol": protocol,
-            "timeoutSeconds": int(file_cfg.get("timeout") or gw_settings.get("timeout_seconds", 35)),
-            "quality": str(file_cfg.get("quality") or gw_settings.get("quality", "auto")),
+            "timeoutSeconds": effective_img_timeout,
+            "quality": effective_img_quality,
             "allowSampleFallback": bool(gw_settings.get("allow_sample_fallback", True)),
         },
         "probe": probe_result,
+        "textAi": {
+            "configFileExists": ai_cfg_path.is_file(),
+            "baseUrl": ai_base_url,
+            "apiKeyMasked": _mask_secret_key(ai_key),
+            "model": ai_model,
+            "timeoutSeconds": ai_timeout,
+        },
+        "aiProbe": ai_probe_result,
         "stats": {
             "total": int(stats_row["total"] or 0),
             "live": int(stats_row["live_cnt"] or 0),
@@ -3327,6 +3466,164 @@ def admin_get_gateway_overview(db: Database, user: dict[str, Any] | None, probe:
             "totalAmountCents": int(conn.execute("SELECT COALESCE(sum(amount_cents),0) FROM generation_charges WHERE status='settled'").fetchone()[0]),
         },
     }
+
+
+def admin_update_gateway_config(
+    db: Database,
+    user: dict[str, Any] | None,
+    payload: dict[str, Any],
+) -> dict[str, Any]:
+    actor = require_staff(user, allowed_roles=("admin",))
+    if not isinstance(payload, dict):
+        raise ServiceError("请求参数格式错误")
+
+    target = str(payload.get("target") or "both").strip().lower()
+    if target not in ("image", "text_ai", "both"):
+        raise ServiceError(f"不支持的网关配置目标：{target}")
+    reason = str(payload.get("reason") or "后台修改网关与模型接口配置").strip()[:200]
+    now_iso = utc_now_iso()
+
+    if target in ("image", "both") and ("image" in payload or target == "image"):
+        img_in = payload.get("image") if isinstance(payload.get("image"), dict) else payload
+        raw_url = _validate_gateway_endpoint_url(img_in.get("baseUrl"), "生图网关地址")
+        img_path = get_image_config_path()
+        existing_raw = _read_json_dict(img_path)
+        existing_loaded = load_image_config()
+        existing_key = str(
+            existing_raw.get("key")
+            or existing_raw.get("api_key")
+            or existing_loaded.get("key")
+            or ""
+        ).strip()
+        if bool(img_in.get("clearApiKey")):
+            final_img_key = ""
+        elif _is_masked_or_empty_secret(img_in.get("apiKey")):
+            final_img_key = existing_key
+        else:
+            final_img_key = str(img_in.get("apiKey") or "").strip()
+
+        model = str(img_in.get("model") or existing_raw.get("model") or "gpt-image-2").strip()[:120]
+        if not model:
+            raise ServiceError("生图模型名称不能为空")
+        protocol = normalize_image_protocol(
+            img_in.get("protocol") or existing_raw.get("protocol") or "image-tasks",
+            raw_url=raw_url,
+            model=model,
+        )
+        quality = str(img_in.get("quality") or existing_raw.get("quality") or "auto").strip()[:32] or "auto"
+        try:
+            timeout_sec = max(5, min(300, int(img_in.get("timeoutSeconds") or existing_raw.get("timeout") or 35)))
+        except (TypeError, ValueError) as exc:
+            raise ServiceError("生图超时时间必须为 5～300 秒的整数") from exc
+        allow_fallback = bool(img_in.get("allowSampleFallback", True))
+
+        _atomic_write_json_secret(
+            img_path,
+            {
+                "url": raw_url,
+                "key": final_img_key,
+                "protocol": protocol,
+                "model": model,
+                "quality": quality,
+                "timeout": timeout_sec,
+            },
+        )
+
+        with db.transaction() as tx:
+            current_gw = get_site_settings(tx).get("gateway", {})
+            merged_gw = dict(current_gw) if isinstance(current_gw, dict) else {}
+            merged_gw.update(
+                {
+                    "model": model,
+                    "quality": quality,
+                    "timeout_seconds": timeout_sec,
+                    "allow_sample_fallback": allow_fallback,
+                }
+            )
+            tx.execute(
+                """
+                INSERT INTO site_settings (key, value_json, updated_by, updated_at)
+                VALUES ('gateway', ?, ?, ?)
+                ON CONFLICT(key) DO UPDATE SET
+                    value_json = excluded.value_json,
+                    updated_by = excluded.updated_by,
+                    updated_at = excluded.updated_at
+                """,
+                (json.dumps(merged_gw, ensure_ascii=False), actor["username"], now_iso),
+            )
+            record_audit_log(
+                tx,
+                actor,
+                "gateway.update.image",
+                "gateway",
+                "image-service",
+                reason,
+                {
+                    "baseUrl": raw_url,
+                    "protocol": protocol,
+                    "model": model,
+                    "quality": quality,
+                    "timeoutSeconds": timeout_sec,
+                    "allowSampleFallback": allow_fallback,
+                    "apiKeyMasked": _mask_secret_key(final_img_key),
+                },
+            )
+
+    if target in ("text_ai", "both") and ("textAi" in payload or target == "text_ai"):
+        ai_in = payload.get("textAi") if isinstance(payload.get("textAi"), dict) else payload
+        raw_ai_url = normalize_ai_base_url(_validate_gateway_endpoint_url(ai_in.get("baseUrl"), "文字模型接口地址"))
+        ai_path = get_ai_config_path()
+        existing_ai_raw = _read_json_dict(ai_path)
+        existing_ai_key = str(
+            existing_ai_raw.get("key")
+            or existing_ai_raw.get("api_key")
+            or os.environ.get("HANDRAW_AI_KEY", "")
+        ).strip()
+        if bool(ai_in.get("clearApiKey")):
+            final_ai_key = ""
+        elif _is_masked_or_empty_secret(ai_in.get("apiKey")):
+            final_ai_key = existing_ai_key
+        else:
+            final_ai_key = str(ai_in.get("apiKey") or "").strip()
+
+        if not final_ai_key and bool(ai_in.get("reuseImageKey")):
+            final_ai_key = str(load_image_config().get("key") or _read_json_dict(get_image_config_path()).get("key") or "").strip()
+
+        ai_model = str(ai_in.get("model") or existing_ai_raw.get("model") or "gpt-6").strip()[:120]
+        if not ai_model:
+            raise ServiceError("文字模型名称不能为空")
+        try:
+            ai_timeout = max(5, min(300, int(ai_in.get("timeoutSeconds") or existing_ai_raw.get("timeout") or 60)))
+        except (TypeError, ValueError) as exc:
+            raise ServiceError("文字模型超时时间必须为 5～300 秒的整数") from exc
+
+        _atomic_write_json_secret(
+            ai_path,
+            {
+                "url": raw_ai_url,
+                "key": final_ai_key,
+                "model": ai_model,
+                "timeout": ai_timeout,
+            },
+        )
+        with db.transaction() as tx:
+            record_audit_log(
+                tx,
+                actor,
+                "gateway.update.text_ai",
+                "gateway",
+                "ai-service",
+                reason,
+                {
+                    "baseUrl": raw_ai_url,
+                    "model": ai_model,
+                    "timeoutSeconds": ai_timeout,
+                    "apiKeyMasked": _mask_secret_key(final_ai_key),
+                },
+            )
+
+    overview = admin_get_gateway_overview(db, actor, probe=False, probe_ai=False)
+    return {"ok": True, **overview}
 
 
 def admin_list_generations(

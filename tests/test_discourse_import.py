@@ -210,6 +210,66 @@ class DiscourseImportTests(unittest.TestCase):
         self.assertEqual(res2["skipped"], 2)
         self.assertEqual(len(res2["conflicts"]), 2)
 
+    def test_chinese_username_600k_google_oauth_and_zero_bonus_verified_email(self):
+        # 8. 中文用户名、Discourse 3.2 user_passwords (600000轮 password_salt)、Google OAuth 关联及 0 积分导入（不触发+20邮箱认证奖励）
+        password = "ChineseUserPass!99"
+        salt = "salt_32bytes_hex_0123456789abcdef"
+        dk = hashlib.pbkdf2_hmac("sha256", password.encode("utf-8"), salt.encode("utf-8"), 600000, dklen=32)
+        records = [
+            {
+                "id": 1,
+                "username": "旺德福",
+                "name": "旺德福",
+                "email": "boss@handraw-style.com",
+                "password_hash": dk.hex(),
+                "password_salt": salt,
+                "admin": True,
+                "moderator": True,
+                "email_verified": True,
+            },
+            {
+                "id": 40,
+                "username": "小旺旺",
+                "name": "小旺旺",
+                "email": "google_member@example.com",
+                "google_uid": "109876543210987654321",
+                "moderator": True,
+                "email_verified": True,
+            },
+        ]
+        res = import_discourse_users_batch(self.db, None, records, migration_credits=0)
+        self.assertEqual(res["imported"], 2)
+        self.assertEqual(res["skipped"], 0)
+        self.assertEqual(res["bonusPerUser"], 0)
+        self.assertIn("旺德福", res["staffCandidates"])
+        self.assertIn("小旺旺", res["staffCandidates"])
+
+        conn = self.db.get_conn()
+        # Verify zero points granted despite email_verified=True
+        balances = conn.execute(
+            "SELECT u.username, w.balance FROM users u JOIN wallets w ON w.user_id = u.id WHERE u.username IN ('旺德福', '小旺旺')"
+        ).fetchall()
+        self.assertEqual({r["username"]: int(r["balance"]) for r in balances}, {"旺德福": 0, "小旺旺": 0})
+
+        # Verify 600k Discourse password login succeeds for Chinese username
+        user_row, token = login_user(self.db, "旺德福", password)
+        self.assertEqual(user_row["username"], "旺德福")
+        self.assertTrue(token)
+
+        # Verify verified_emails & oauth_identities created
+        v_cnt = int(
+            conn.execute(
+                "SELECT COUNT(*) FROM verified_emails v JOIN users u ON u.id = v.user_id WHERE u.username IN ('旺德福', '小旺旺')"
+            ).fetchone()[0]
+        )
+        self.assertEqual(v_cnt, 2)
+        g_row = conn.execute(
+            "SELECT o.provider_user_id, u.username FROM oauth_identities o JOIN users u ON u.id = o.user_id WHERE o.provider = 'google'"
+        ).fetchone()
+        self.assertIsNotNone(g_row)
+        self.assertEqual(g_row["username"], "小旺旺")
+        self.assertEqual(g_row["provider_user_id"], "109876543210987654321")
+
 
 if __name__ == "__main__":
     unittest.main()

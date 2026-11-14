@@ -6,6 +6,16 @@ CREATE TABLE IF NOT EXISTS contribution_reward_content (
  reward_id bigint NOT NULL REFERENCES contribution_rewards(id),
  PRIMARY KEY(kind,fingerprint), UNIQUE(reward_id)
 );
+CREATE OR REPLACE FUNCTION public.v3_safe_jsonb_array(raw text) RETURNS jsonb LANGUAGE plpgsql IMMUTABLE AS $$
+DECLARE val jsonb;
+BEGIN
+ IF raw IS NULL OR btrim(raw) = '' THEN RETURN '[]'::jsonb; END IF;
+ val := raw::jsonb;
+ IF jsonb_typeof(val) = 'array' THEN RETURN val; END IF;
+ RETURN '[]'::jsonb;
+EXCEPTION WHEN OTHERS THEN
+ RETURN '[]'::jsonb;
+END $$;
 CREATE OR REPLACE FUNCTION contribution_fingerprint(reward_kind text,target text) RETURNS text LANGUAGE SQL STABLE AS $$
  SELECT encode(sha256(convert_to(payload,'UTF8')),'hex') FROM (
   SELECT COALESCE((
@@ -14,7 +24,7 @@ CREATE OR REPLACE FUNCTION contribution_fingerprint(reward_kind text,target text
                       NULLIF((SELECT u.sha256 FROM user_uploads u WHERE u.image_url=images.image_url AND u.sha256<>'' LIMIT 1),''),image_url) identity_key
       FROM (SELECT CASE WHEN jsonb_typeof(value)='string' THEN value#>>'{}'
                     ELSE COALESCE(value->>'url',value->>'imageUrl','') END image_url
-            FROM jsonb_array_elements(CASE WHEN w.images_json IS JSON ARRAY THEN w.images_json::jsonb ELSE '[]'::jsonb END)) images
+            FROM jsonb_array_elements(public.v3_safe_jsonb_array(w.images_json))) images
       WHERE image_url<>''
     ) identities
   ),regexp_replace(w.prompt,'\s+','','g')) payload

@@ -171,17 +171,48 @@ def get_ai_config_path() -> Path:
     return Path(os.environ.get("HANDRAW_AI_CONFIG", str(WEB_ROOT / "ai-service.json")))
 
 
-def load_ai_config() -> dict:
+def normalize_ai_base_url(raw_url: str) -> str:
+    """Normalize an OpenAI-compatible text chat gateway base URL."""
+    clean = str(raw_url or "").strip().rstrip("/")
+    if not clean:
+        return ""
+    parsed = urllib.parse.urlsplit(clean)
+    if parsed.path in ("", "/"):
+        return f"{clean}/v1"
+    return clean
+
+
+def load_ai_config() -> dict[str, Any]:
+    """Load normalized text-AI model configuration from file or environment."""
+    default_url = os.environ.get("HANDRAW_AI_URL", "http://127.0.0.1:8000/v1")
+    default_key = os.environ.get("HANDRAW_AI_KEY", "")
+    default_model = os.environ.get("HANDRAW_AI_MODEL", "gpt-6")
     p = get_ai_config_path()
     if p.is_file():
         try:
-            return json.loads(p.read_text(encoding="utf-8"))
+            loaded = json.loads(p.read_text(encoding="utf-8"))
+            if isinstance(loaded, dict):
+                raw_url = str(loaded.get("url") or loaded.get("base_url") or default_url)
+                out: dict[str, Any] = {
+                    "url": normalize_ai_base_url(raw_url) or normalize_ai_base_url(default_url),
+                    "key": str(loaded.get("key") or loaded.get("api_key") or default_key).strip(),
+                    "model": str(loaded.get("model") or default_model).strip() or "gpt-6",
+                }
+                raw_timeout = loaded.get("timeout")
+                if raw_timeout not in (None, ""):
+                    try:
+                        parsed_t = int(raw_timeout)
+                        if parsed_t > 0:
+                            out["timeout"] = parsed_t
+                    except (TypeError, ValueError):
+                        pass
+                return out
         except Exception:
             pass
     return {
-        "url": os.environ.get("HANDRAW_AI_URL", "http://127.0.0.1:3065/v1"),
-        "key": os.environ.get("HANDRAW_AI_KEY", ""),
-        "model": os.environ.get("HANDRAW_AI_MODEL", "deepseek-v4.1-flash"),
+        "url": normalize_ai_base_url(default_url) or "http://127.0.0.1:8000/v1",
+        "key": default_key.strip(),
+        "model": default_model.strip() or "gpt-6",
     }
 
 

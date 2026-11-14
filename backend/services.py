@@ -7003,15 +7003,14 @@ def import_discourse_users_batch(
 
         for rec in records:
             raw_uname = str(rec.get("username") or "").strip()
-            cleaned_uname = re.sub(r"[^a-zA-Z0-9_\-]", "", raw_uname)
-            if not raw_uname or cleaned_uname != raw_uname:
+            if not raw_uname or not re.fullmatch(r"[\w\-]{1,32}", raw_uname):
                 invalid_usernames.append(raw_uname)
                 skipped += 1
                 continue
-            if cleaned_uname.lower() in ("system", "discobot"):
+            if raw_uname.lower() in ("system", "discobot"):
                 skipped += 1
                 continue
-            uname = cleaned_uname
+            uname = raw_uname
 
             email = str(rec.get("email") or "").strip().lower()
             if not email:
@@ -7040,7 +7039,7 @@ def import_discourse_users_batch(
                 staff_candidates.append(uname)
 
             disc_hash = str(rec.get("password_hash") or "").strip()
-            disc_salt = str(rec.get("salt") or "").strip()
+            disc_salt = str(rec.get("salt") or rec.get("password_salt") or "").strip()
             plain_pw = str(rec.get("password") or "").strip()
 
             if disc_hash and disc_salt and len(disc_hash) == 64:
@@ -7074,6 +7073,37 @@ def import_discourse_users_batch(
                 "INSERT INTO wallets (user_id, balance, free_quota_date, free_quota_used, checkin_date, locked, updated_at) VALUES (?, 0, '', 0, '', 0, ?)",
                 (uid, now_iso),
             )
+            email_verified = (
+                str(rec.get("email_verified") or "").lower() in ("true", "1", "t", "yes")
+                or rec.get("email_verified") is True
+            )
+            if email_verified:
+                if bonus <= 0:
+                    # Reserve the verified reward slot with 0 units BEFORE inserting
+                    # verified_emails so trigger award_verified_account_points() does not
+                    # mint +20 points when migration explicitly sets bonus = 0.
+                    tx.execute(
+                        """
+                        INSERT INTO contribution_rewards (user_id, kind, target_id, month, units)
+                        VALUES (?, 'verified', ?, to_char(now() AT TIME ZONE 'Asia/Shanghai', 'YYYY-MM'), 0)
+                        ON CONFLICT (kind, target_id) DO NOTHING
+                        """,
+                        (uid, str(uid)),
+                    )
+                tx.execute(
+                    "INSERT INTO verified_emails (user_id, email, verified_at) VALUES (?, ?, ?) ON CONFLICT (user_id) DO NOTHING",
+                    (uid, email, now_iso),
+                )
+            google_uid = str(rec.get("google_uid") or rec.get("google_sub") or "").strip()
+            if google_uid:
+                tx.execute(
+                    """
+                    INSERT INTO oauth_identities (provider, provider_user_id, user_id, provider_login, linked_at)
+                    VALUES ('google', ?, ?, ?, ?)
+                    ON CONFLICT DO NOTHING
+                    """,
+                    (google_uid, uid, email, now_iso),
+                )
             if bonus > 0:
                 apply_wallet_delta(
                     tx,

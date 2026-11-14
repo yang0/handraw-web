@@ -1457,23 +1457,23 @@
 
   function renderGatewaySection() {
     const gw = state.data.gateway;
-    if (!gw) return `<div class="adm-panel">正在读取生图网关状态…</div>`;
+    if (!gw) return `<div class="adm-panel">正在读取生图网关与文字模型状态…</div>`;
     const g = gw.gateway;
+    const ai = gw.textAi || { baseUrl: "http://127.0.0.1:8000/v1", apiKeyMasked: "未配置", model: "gpt-6", timeoutSeconds: 60 };
+    const ap = gw.aiProbe || { probed: false, reachable: false, latencyMs: 0, detail: "点击「测试文字模型」验证实时对话连通性" };
     const st = gw.stats;
     const p = gw.probe;
     return `
       <div class="adm-kpi-grid">
         <div class="adm-kpi-card">
-          <div class="adm-kpi-label">🔌 网关上游地址</div>
+          <div class="adm-kpi-label">🔌 生图网关地址</div>
           <div class="adm-kpi-val" style="font-size:17px;word-break:break-all;">${esc(g.baseUrl)}</div>
           <div class="adm-kpi-foot">密钥掩码：<code>${esc(g.apiKeyMasked)}</code> · 模型：<code>${esc(g.model)}</code></div>
         </div>
         <div class="adm-kpi-card">
-          <div class="adm-kpi-label">📡 实时连通性探针</div>
-          <div class="adm-kpi-val ${p.probed ? (p.reachable ? "jade" : "vermilion") : ""}" style="font-size:19px;">
-            ${p.probed ? (p.reachable ? "✅ 在线正常" : "⚠️ 离线回退") : "待探测"}
-          </div>
-          <div class="adm-kpi-foot">${esc(p.detail)}</div>
+          <div class="adm-kpi-label">✍️ 文字规划模型</div>
+          <div class="adm-kpi-val" style="font-size:17px;word-break:break-all;">${esc(ai.model)}</div>
+          <div class="adm-kpi-foot">接口：<code>${esc(ai.baseUrl)}</code> · 密钥：<code>${esc(ai.apiKeyMasked)}</code></div>
         </div>
         <div class="adm-kpi-card">
           <div class="adm-kpi-label">🎨 累计生图任务</div>
@@ -1484,6 +1484,110 @@
           <div class="adm-kpi-label">🛡️ 失败自动退费保护</div>
           <div class="adm-kpi-val jade">${st.refunded} 单已退</div>
           <div class="adm-kpi-foot">累计生图结算 ¥${((st.totalAmountCents||0)/100).toFixed(2)}；明确失败释放预占，未知结果继续查询</div>
+        </div>
+      </div>
+
+      <div class="adm-grid-2" style="margin-bottom:18px;">
+        <div class="adm-panel">
+          <div class="adm-panel-head">
+            <h3 class="adm-panel-title">🎨 生图网关接口配置</h3>
+            <span class="adm-badge ${p.probed ? (p.reachable ? "published" : "hidden") : "neutral"}">
+              ${p.probed ? (p.reachable ? "✅ 在线正常" : "⚠️ 未连接") : "仅超管可编辑"}
+            </span>
+          </div>
+          <div class="adm-field">
+            <label for="gw-img-url">生图网关地址 (Base URL)</label>
+            <input class="adm-input" id="gw-img-url" value="${esc(g.baseUrl)}" placeholder="http://127.0.0.1:8000" />
+          </div>
+          <div class="adm-form-grid">
+            <div class="adm-field">
+              <label for="gw-img-key">API Key（留空保持原密钥）</label>
+              <input class="adm-input" id="gw-img-key" type="password" autocomplete="new-password" value="" placeholder="当前：${esc(g.apiKeyMasked)}（留空不变）" />
+            </div>
+            <div class="adm-field">
+              <label for="gw-img-protocol">接口协议</label>
+              <select class="adm-select" id="gw-img-protocol">
+                <option value="image-tasks" ${g.protocol === "image-tasks" ? "selected" : ""}>image-tasks (/api/image-tasks)</option>
+                <option value="openai" ${g.protocol === "openai" ? "selected" : ""}>openai (/v1/images/*)</option>
+              </select>
+            </div>
+          </div>
+          <div class="adm-form-grid">
+            <div class="adm-field">
+              <label for="gw-img-model">生图模型名</label>
+              <input class="adm-input" id="gw-img-model" value="${esc(g.model)}" placeholder="gpt-image-2" />
+            </div>
+            <div class="adm-field">
+              <label for="gw-img-quality">画质档位 (quality)</label>
+              <select class="adm-select" id="gw-img-quality">
+                <option value="auto" ${g.quality === "auto" ? "selected" : ""}>auto</option>
+                <option value="high" ${g.quality === "high" ? "selected" : ""}>high</option>
+                <option value="medium" ${g.quality === "medium" ? "selected" : ""}>medium</option>
+                <option value="low" ${g.quality === "low" ? "selected" : ""}>low</option>
+              </select>
+            </div>
+          </div>
+          <div class="adm-form-grid">
+            <div class="adm-field">
+              <label for="gw-img-timeout">请求超时 (秒)</label>
+              <input class="adm-input" id="gw-img-timeout" type="number" min="5" max="300" value="${esc(g.timeoutSeconds || 35)}" />
+            </div>
+            <div class="adm-field" style="display:flex;align-items:flex-end;">
+              <label style="display:flex;align-items:center;gap:6px;cursor:pointer;margin-bottom:8px;">
+                <input type="checkbox" id="gw-img-fallback" ${g.allowSampleFallback ? "checked" : ""} />
+                网关异常时允许本地高保真样张回退
+              </label>
+            </div>
+          </div>
+          <div style="font-size:12px;color:var(--adm-ink-soft);margin-bottom:12px;">
+            实时探测状态：${esc(p.detail)}
+          </div>
+          <div style="display:flex;gap:8px;flex-wrap:wrap;">
+            <button type="button" class="adm-btn adm-btn-primary" id="btn-save-img-gw">💾 保存生图接口配置</button>
+            <button type="button" class="adm-btn" id="btn-probe-gateway">📡 探测生图网关</button>
+          </div>
+        </div>
+
+        <div class="adm-panel">
+          <div class="adm-panel-head">
+            <h3 class="adm-panel-title">✍️ 文字规划模型配置（文章 / 套图拆解）</h3>
+            <span class="adm-badge ${ap.probed ? (ap.reachable ? "published" : "hidden") : "neutral"}">
+              ${ap.probed ? (ap.reachable ? "✅ 对话正常" : "⚠️ 测试异常") : esc(ai.model)}
+            </span>
+          </div>
+          <div class="adm-field">
+            <label for="gw-ai-url">文字模型接口地址 (Base URL，自动补全 /v1)</label>
+            <input class="adm-input" id="gw-ai-url" value="${esc(ai.baseUrl)}" placeholder="http://127.0.0.1:8000/v1" />
+          </div>
+          <div class="adm-form-grid">
+            <div class="adm-field">
+              <label for="gw-ai-key">API Key（留空保持原密钥）</label>
+              <input class="adm-input" id="gw-ai-key" type="password" autocomplete="new-password" value="" placeholder="当前：${esc(ai.apiKeyMasked)}（留空不变）" />
+            </div>
+            <div class="adm-field">
+              <label for="gw-ai-model">文字模型名</label>
+              <input class="adm-input" id="gw-ai-model" value="${esc(ai.model)}" placeholder="gpt-6" />
+            </div>
+          </div>
+          <div class="adm-form-grid">
+            <div class="adm-field">
+              <label for="gw-ai-timeout">单次对话超时 (秒)</label>
+              <input class="adm-input" id="gw-ai-timeout" type="number" min="5" max="300" value="${esc(ai.timeoutSeconds || 60)}" />
+            </div>
+            <div class="adm-field" style="display:flex;align-items:flex-end;">
+              <label style="display:flex;align-items:center;gap:6px;cursor:pointer;margin-bottom:8px;">
+                <input type="checkbox" id="gw-ai-reuse-key" />
+                未填文字密钥时复用本机生图网关密钥
+              </label>
+            </div>
+          </div>
+          <div style="font-size:12px;color:var(--adm-ink-soft);margin-bottom:12px;">
+            文字模型连通状态：${esc(ap.detail)}
+          </div>
+          <div style="display:flex;gap:8px;flex-wrap:wrap;">
+            <button type="button" class="adm-btn adm-btn-primary" id="btn-save-ai-gw">💾 保存文字模型配置</button>
+            <button type="button" class="adm-btn" id="btn-probe-ai-gateway">📡 测试文字模型</button>
+          </div>
         </div>
       </div>
 
@@ -1504,7 +1608,6 @@
             <input class="adm-input" id="flt-gen-q" value="${esc(state.filters.genQ)}" placeholder="搜索用户 / 配方编号 / Prompt…" style="width:230px;" />
             <button class="adm-btn" id="btn-gen-search">🔍 筛选</button>
           </div>
-          <button class="adm-btn adm-btn-primary" id="btn-probe-gateway">📡 立即探测网关连通性</button>
         </div>
 
         <div class="adm-table-wrap">
@@ -3483,16 +3586,109 @@
         reloadCurrent();
       };
     }
+    const mergeGatewaySnapshot = (nextGw, options) => {
+      const prev = state.data.gateway || {};
+      const merged = Object.assign({}, nextGw || {});
+      const preserveImageProbe = Boolean(options && options.preserveImageProbe);
+      const preserveAiProbe = Boolean(options && options.preserveAiProbe);
+      if (preserveImageProbe && prev.probe && prev.probe.probed && (!merged.probe || !merged.probe.probed)) {
+        merged.probe = prev.probe;
+      }
+      if (preserveAiProbe && prev.aiProbe && prev.aiProbe.probed && (!merged.aiProbe || !merged.aiProbe.probed)) {
+        merged.aiProbe = prev.aiProbe;
+      }
+      return merged;
+    };
     const btnProbe = document.getElementById("btn-probe-gateway");
     if (btnProbe) {
       btnProbe.onclick = async () => {
         btnProbe.disabled = true;
         btnProbe.textContent = "⏳ 正在探测上游网关…";
         try {
-          state.data.gateway = await api("/api/admin/gateway?probe=1");
+          const nextGw = await api("/api/admin/gateway?probe=1");
+          state.data.gateway = mergeGatewaySnapshot(nextGw, { preserveAiProbe: true });
           renderMainConsole();
           toast(state.data.gateway.probe.detail);
         } catch (err) {
+          btnProbe.disabled = false;
+          btnProbe.textContent = "📡 探测生图网关";
+          toast(err.message, true);
+        }
+      };
+    }
+    const btnSaveImgGw = document.getElementById("btn-save-img-gw");
+    if (btnSaveImgGw) {
+      btnSaveImgGw.onclick = async () => {
+        btnSaveImgGw.disabled = true;
+        try {
+          const timeoutVal = parseInt(document.getElementById("gw-img-timeout").value || "35", 10);
+          const res = await api("/api/admin/gateway", {
+            method: "POST",
+            body: {
+              target: "image",
+              image: {
+                baseUrl: document.getElementById("gw-img-url").value.trim(),
+                apiKey: document.getElementById("gw-img-key").value.trim(),
+                protocol: document.getElementById("gw-img-protocol").value,
+                model: document.getElementById("gw-img-model").value.trim(),
+                quality: document.getElementById("gw-img-quality").value,
+                timeoutSeconds: Number.isFinite(timeoutVal) ? timeoutVal : 35,
+                allowSampleFallback: document.getElementById("gw-img-fallback").checked,
+              },
+              reason: "超级管理员在后台保存生图网关接口配置",
+            },
+          });
+          state.data.gateway = mergeGatewaySnapshot(res, { preserveAiProbe: true });
+          renderMainConsole();
+          toast("生图网关接口配置已保存生效");
+        } catch (err) {
+          btnSaveImgGw.disabled = false;
+          toast(err.message, true);
+        }
+      };
+    }
+    const btnSaveAiGw = document.getElementById("btn-save-ai-gw");
+    if (btnSaveAiGw) {
+      btnSaveAiGw.onclick = async () => {
+        btnSaveAiGw.disabled = true;
+        try {
+          const timeoutVal = parseInt(document.getElementById("gw-ai-timeout").value || "60", 10);
+          const res = await api("/api/admin/gateway", {
+            method: "POST",
+            body: {
+              target: "text_ai",
+              textAi: {
+                baseUrl: document.getElementById("gw-ai-url").value.trim(),
+                apiKey: document.getElementById("gw-ai-key").value.trim(),
+                reuseImageKey: document.getElementById("gw-ai-reuse-key").checked,
+                model: document.getElementById("gw-ai-model").value.trim(),
+                timeoutSeconds: Number.isFinite(timeoutVal) ? timeoutVal : 60,
+              },
+              reason: "超级管理员在后台保存文字规划模型配置",
+            },
+          });
+          state.data.gateway = mergeGatewaySnapshot(res, { preserveImageProbe: true });
+          renderMainConsole();
+          toast("文字规划模型配置已保存生效");
+        } catch (err) {
+          btnSaveAiGw.disabled = false;
+          toast(err.message, true);
+        }
+      };
+    }
+    const btnProbeAi = document.getElementById("btn-probe-ai-gateway");
+    if (btnProbeAi) {
+      btnProbeAi.onclick = async () => {
+        btnProbeAi.disabled = true;
+        btnProbeAi.textContent = "⏳ 正在测试对话…";
+        try {
+          const nextGw = await api("/api/admin/gateway?probeAi=1");
+          state.data.gateway = mergeGatewaySnapshot(nextGw, { preserveImageProbe: true });
+          renderMainConsole();
+          toast(state.data.gateway.aiProbe.detail, !state.data.gateway.aiProbe.reachable);
+        } catch (err) {
+          btnProbeAi.disabled = false;
+          btnProbeAi.textContent = "📡 测试文字模型";
           toast(err.message, true);
         }
       };
