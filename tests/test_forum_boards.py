@@ -84,6 +84,18 @@ class ForumBoardTests(unittest.TestCase):
         boot = S.build_boot_payload(self.db, self.member)
         self.assertIn(self.tid, [t["id"] for t in boot["topics"]])
         self.assertIn(self.key, [b["key"] for b in boot["forumBoards"]])
+        from backend.forum_resources import related_items
+
+        self.db.get_conn().execute(
+            "UPDATE forum_topics SET styles_json='[\"FA-001\"]' WHERE id=?", (self.tid,)
+        )
+        for viewer, expected in (
+            (self.member, True),
+            (self.outsider, False),
+            (None, False),
+        ):
+            items = related_items(self.db, viewer, "style", "FA-001", "topics")["items"]
+            self.assertEqual(self.tid in [t["id"] for t in items], expected)
 
     def test_revoke_blocks_all_social_writes_and_notifications_without_destroying_posts(
         self,

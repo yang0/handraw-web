@@ -446,7 +446,7 @@ def related_items(db,user,kind,target,tab,q='',sort='newest',offset=0,limit=24):
     if tab not in tabs:
         raise S.ServiceError('无效的关联分类',status=400)
     offset,limit=_page(offset,limit,36)
-    items,total=_related_page(db,kind,target,resource,mapping,tab,str(q).strip().lower()[:150],sort,offset,limit) if published else ([],0)
+    items,total=_related_page(db,kind,target,resource,mapping,tab,str(q).strip().lower()[:150],sort,offset,limit,user) if published else ([],0)
     return {'ok':True,'items':items,'total':total,'offset':offset,'limit':limit,'tab':tab}
 
 
