@@ -388,13 +388,30 @@ def create_checkout_order(
     *,
     request_headers: Mapping[str, str],
     server_port: int | None = None,
+    custom_amount_yuan: Any = None,
+    custom_purpose: Any = None,
 ) -> dict[str, Any]:
     cfg = load_payment_config()
     if not cfg.get("enabled"):
         raise ServiceError("在线充值尚未配置完成", status=503, code="billing_not_configured")
 
     clean_pack_id = str(pack_id or "").strip()
-    package = next((p for p in cfg["active_packages"] if p["id"] == clean_pack_id), None)
+    if custom_amount_yuan is not None or custom_purpose is not None:
+        if clean_pack_id or custom_purpose not in ("cash", "points"):
+            raise ServiceError("请选择一种充值用途", status=400, code="invalid_purchase_purpose")
+        if type(custom_amount_yuan) is not int or not 1 <= custom_amount_yuan <= 10000:
+            raise ServiceError("自定义金额须为 1–10000 元的整数", status=400, code="invalid_purchase_amount")
+        if cfg.get("provider") != "xorpay" or cfg.get("currency") != "CNY":
+            raise ServiceError("当前支付渠道暂不支持自定义金额", status=400, code="custom_purchase_unavailable")
+        clean_pack_id = f"custom_{custom_purpose}_{custom_amount_yuan}"
+        package = {
+            "title": "生图余额充值" if custom_purpose == "cash" else "购买社区积分",
+            "purpose": custom_purpose,
+            "price_cents": custom_amount_yuan * 100,
+            "credits": custom_amount_yuan * 10 if custom_purpose == "points" else 0,
+        }
+    else:
+        package = next((p for p in cfg["active_packages"] if p["id"] == clean_pack_id), None)
     if not package:
         raise ServiceError("无效的购买档位", status=400, code="invalid_package")
 

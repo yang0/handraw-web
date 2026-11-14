@@ -20,6 +20,46 @@ from backend.services import register_user
 
 
 class XorPayBillingTests(unittest.TestCase):
+    def test_custom_amount_validation_before_gateway(self):
+        headers={'Origin':'http://trusted.test','Authorization':f'Bearer {self.tok_a}'}
+        invalid=[{'purpose':purpose,'amountYuan':amount}
+                 for purpose in ('cash','points')
+                 for amount in (0,10001,-1,1.5,True,'10',None)]
+        invalid += [{'purpose':'other','amountYuan':10}, {'amountYuan':10},
+                    {'packId':'pack_100','purpose':'cash','amountYuan':10}]
+        with patch('backend.billing._xorpay_api_request') as provider:
+            for body in invalid:
+                with self.subTest(body=body):
+                    status,_,_=self._req('POST','/api/billing/checkout',body,headers)
+                    self.assertEqual(status,400)
+            provider.assert_not_called()
+
+    def test_custom_orders_settle_exact_amount_and_purpose_once(self):
+        from backend.billing import _settle_paid_order_tx
+        headers={'Origin':'http://trusted.test','Authorization':f'Bearer {self.tok_a}'}
+        _,before,_=self._req('GET','/api/economy',headers=headers)
+        with patch('backend.billing._xorpay_api_request',return_value={'status':'ok','aoid':'custom-fixture','info':{'qr':'https://qr.alipay.com/custom'}}) as provider:
+            for purpose in ('cash','points'):
+                for amount in (1,37,10000):
+                    body={'purpose':purpose,'amountYuan':amount,'credits':999999,'amountCents':1}
+                    status,result,_=self._req('POST','/api/billing/checkout',body,headers)
+                    self.assertEqual(status,200,result)
+                    order=result['order']
+                    self.assertEqual(order['amountCents'],amount*100)
+                    self.assertEqual(order['credits'],amount*10 if purpose=='points' else 0)
+                    self.assertEqual(order['purpose'],purpose)
+                    self.assertEqual(provider.call_args.args[2]['price'],f'{amount:.2f}')
+                    status,repeated,_=self._req('POST','/api/billing/checkout',body,headers)
+                    self.assertEqual(status,200)
+                    self.assertEqual(repeated['order']['id'],order['id'])
+                    for _ in range(2):
+                        with self.db.transaction() as tx:
+                            _settle_paid_order_tx(tx,order_id=order['id'],provider_order_id='custom-'+order['id'])
+            self.assertEqual(provider.call_count,6)
+        _,after,_=self._req('GET','/api/economy',headers=headers)
+        self.assertEqual(after['cash']['balanceCents']-before['cash']['balanceCents'],10038*100)
+        self.assertEqual(after['points']-before['points'],10038*10)
+
     def test_checkout_reuses_pending_order_and_exposes_only_owned_qr(self):
         headers={'Origin':'http://trusted.test','Authorization':f'Bearer {self.tok_a}'}
         with patch('backend.billing._xorpay_api_request',return_value={'status':'ok','aoid':'aoid_top_level','info':{'qr':'https://qr.alipay.com/fixture-receipt'}}) as provider:

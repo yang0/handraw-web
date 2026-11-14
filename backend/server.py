@@ -3781,6 +3781,8 @@ class HandrawRequestHandler(BaseHTTPRequestHandler):
                     self.db,
                     user,  # type: ignore[arg-type]
                     str(body.get("packId") or ""),
+                    custom_amount_yuan=body.get("amountYuan"),
+                    custom_purpose=body.get("purpose"),
                     request_headers={k: v for k, v in self.headers.items()},
                     server_port=getattr(self.server, "server_port", None),
                 )
