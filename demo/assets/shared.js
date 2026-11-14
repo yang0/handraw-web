@@ -2942,9 +2942,10 @@
         </nav>
 
         <div class="hw-topbar-right">
-          <form class="hw-global-search" id="hw-global-search-form">
+          <form class="hw-global-search" id="hw-global-search-form" role="search">
             <select id="hw-global-search-channel" aria-label="搜索范围"><option value="all">全站</option><option value="styles">画风</option><option value="layouts">图型</option><option value="colors">主题色</option><option value="works">作品</option><option value="forum">社区</option></select>
-            <input type="search" id="hw-global-search-input" maxlength="200" placeholder="搜索全站正文与资源…" />
+            <input type="search" id="hw-global-search-input" maxlength="200" enterkeyhint="search" placeholder="搜索全站正文与资源…" />
+            <button type="submit" class="hw-global-search-btn" id="hw-global-search-submit" aria-label="搜索" title="搜索">⌕</button>
           </form>
 
           ${
@@ -3113,8 +3114,12 @@
     const searchForm = document.getElementById("hw-global-search-form");
     searchForm.onsubmit = (e) => {
       e.preventDefault();
-      const q = document.getElementById("hw-global-search-input").value.trim();
-      if (!q) return;
+      const searchInput = document.getElementById("hw-global-search-input");
+      const q = searchInput ? searchInput.value.trim() : "";
+      if (!q) {
+        if (searchInput && typeof searchInput.focus === "function") searchInput.focus();
+        return;
+      }
       const channel = document.getElementById("hw-global-search-channel").value;
       const target = new URL(channelUrl("main"),location.href);
       target.pathname='/search/';target.search=new URLSearchParams({q,channel}).toString();

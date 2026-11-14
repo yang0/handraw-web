@@ -54,26 +54,71 @@
 }
 .hw-mf-create:hover { transform: translateY(-2px); background: #94311b; }
 .hw-mf-controls { display: flex; align-items: center; justify-content: space-between; gap: 16px; flex-wrap: wrap; padding-bottom: 13px; }
+.hw-mf-search-form {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: 1 1 280px;
+  max-width: 560px;
+  min-width: 0;
+}
 .hw-mf-search {
   display: flex;
   align-items: center;
   gap: 7px;
-  flex: 1 1 245px;
-  max-width: 480px;
+  flex: 1 1 auto;
   min-width: 0;
   border: 1px solid var(--mf-line);
   background: var(--mf-card);
   border-radius: 999px;
-  padding: 0 15px;
+  padding: 0 15px 0 10px;
   min-height: 45px;
   color: var(--mf-muted);
 }
-.hw-mf-search span { font-size: 22px; line-height: 1; }
+.hw-mf-search-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 auto;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  border: 0;
+  border-radius: 999px;
+  background: transparent;
+  color: var(--mf-muted);
+  font-size: 20px;
+  line-height: 1;
+  cursor: pointer;
+}
+.hw-mf-search-btn:hover,
+.hw-mf-search-btn:focus-visible { color: var(--mf-red); }
 .hw-mf-search input {
   width: 100%; min-width: 0; border: 0; outline: 0; background: none;
   color: var(--mf-ink); font-size: 13px;
 }
 .hw-mf-search:focus-within { outline: 2px solid #d6a399; outline-offset: 1px; }
+.hw-mf-fulltext-btn {
+  flex: 0 0 auto;
+  min-height: 45px;
+  padding: 0 16px;
+  border: 1px solid var(--mf-line);
+  border-radius: 999px;
+  background: var(--mf-card);
+  color: var(--mf-ink);
+  font: inherit;
+  font-size: 13px;
+  font-weight: 700;
+  white-space: nowrap;
+  cursor: pointer;
+  transition: border-color .15s ease, color .15s ease, background .15s ease;
+}
+.hw-mf-fulltext-btn:hover,
+.hw-mf-fulltext-btn:focus-visible {
+  border-color: var(--mf-red);
+  color: var(--mf-red);
+  background: #fdf6f2;
+}
 .hw-mf-tabs { display: flex; align-items: center; flex-wrap: wrap; gap: 5px; }
 .hw-mf-tabs button {
   font-size: 13px;
@@ -109,9 +154,12 @@
   text-decoration: none;
 }
 .hw-mf-chip:hover { color: var(--mf-red); background: #f9e8e0; }
-.hw-mf-subhead { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin: 4px 0 17px; }
+.hw-mf-subhead { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; margin: 4px 0 17px; }
 .hw-mf-subhead h2 { font-size: 17px; font-weight: 850; margin: 0; }
 .hw-mf-subhead > span { font-size: 12px; color: var(--mf-muted); }
+.hw-mf-submeta { display: inline-flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.hw-mf-fulltext-link { color: var(--mf-red); font-weight: 700; text-decoration: none; white-space: nowrap; }
+.hw-mf-fulltext-link:hover { text-decoration: underline; }
 .hw-mf-grid {
   column-count: 5;
   column-gap: 17px;
@@ -194,10 +242,18 @@
 .hw-mf-remix:hover { text-decoration: underline; }
 .hw-mf-card--topic { border-top: 3px solid #9a8165; }
 .hw-mf-card--resource { border-top: 3px solid #d0b9a0; }
-.hw-mf-excerpt {
+.hw-mf-excerpt,
+.hw-mf-snippet {
   display: -webkit-box; overflow: hidden; -webkit-line-clamp: 4;
   -webkit-box-orient: vertical; margin: 7px 0 0;
   font-size: 12px; line-height: 1.65; color: var(--mf-muted); overflow-wrap: anywhere;
+}
+.hw-mf-card mark {
+  background: var(--vermilion-wash, #f9e8e0);
+  color: var(--mf-red);
+  font-weight: 700;
+  padding: 0 2px;
+  border-radius: 3px;
 }
 .hw-mf-empty { padding: 65px 20px; text-align: center; background: var(--mf-card); border: 1px dashed var(--mf-line); border-radius: 13px; }
 .hw-mf-empty h2 { font-size: 18px; margin: 0 0 8px; }
@@ -221,7 +277,7 @@
   .hw-mf-intro { font-size: 12px; }
   .hw-mf-create { font-size: 12px; padding: 9px 10px; }
   .hw-mf-controls { gap: 11px; }
-  .hw-mf-search { flex-basis: 100%; max-width: none; }
+  .hw-mf-search-form { flex-basis: 100%; max-width: none; }
   .hw-mf-tabs { width: 100%; overflow-x: auto; flex-wrap: nowrap; padding-bottom: 3px; }
   .hw-mf-tabs button { white-space: nowrap; padding: 0 11px; }
   .hw-mf-media img { max-height: 360px; }

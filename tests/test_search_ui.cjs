@@ -9,6 +9,7 @@ const ROOT = path.resolve(__dirname, '..');
 for (const rel of [
   'demo/assets/search-page.js',
   'demo/assets/search-admin.js',
+  'demo/assets/mixed-feed.js',
   'demo/assets/shared.js',
   'demo/assets/main-app.js',
   'demo/assets/forum-app.js',
@@ -341,4 +342,113 @@ test('search-admin renders channel metrics and triggers rebuild & retry', async 
   assert(calls.some((c) => c.url === '/api/admin/search/rebuild' && c.method === 'POST'));
   await retryBtn.onclick({ target: retryBtn });
   assert(calls.some((c) => c.url === '/api/admin/search/retry' && c.method === 'POST'));
+});
+
+test('topbar search form includes clickable #hw-global-search-submit button', () => {
+  const sharedSource = fs.readFileSync(path.join(ROOT, 'demo/assets/shared.js'), 'utf8');
+  const searchCss = fs.readFileSync(path.join(ROOT, 'demo/assets/search.css'), 'utf8');
+  assert(sharedSource.includes('id="hw-global-search-submit"'));
+  assert(sharedSource.includes('type="submit" class="hw-global-search-btn"'));
+  assert(searchCss.includes('.hw-global-search-btn'));
+});
+
+test('mixed-feed queries /api/search, escapes XSS inside <mark>, and navigates on Enter', async () => {
+  const requests = [];
+  const inp = { value: '', isConnected: true, focus() {} };
+  const form = {};
+  const resultPane = { innerHTML: '', querySelectorAll() { return []; } };
+  const moreBtn = {};
+  const root = {
+    innerHTML: '',
+    querySelector(sel) {
+      if (sel === '#hw-mf-search') return inp;
+      if (sel === '#hw-mf-search-form') return form;
+      if (sel === '.hw-mf-results') return resultPane;
+      if (sel === '#hw-mf-more') return moreBtn;
+      return null;
+    },
+    querySelectorAll() { return []; },
+  };
+  const shared = {
+    App: {
+      styles: [],
+      layouts: [],
+      state: { user: { id: 'u1' }, works: [], styles: [], layouts: [] },
+    },
+    esc: (v) => String(v ?? '').replace(/[&<>"']/g, (c) => ({
+      '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;',
+    }[c])),
+    channelUrl: () => 'https://handraw-style.com/',
+    safeHref: (u) => (/^(\/|https?:\/\/)/i.test(String(u || '')) ? String(u) : '#'),
+    safeMediaUrl: (u) => (/^(\/|https?:\/\/)/i.test(String(u || '')) ? String(u) : ''),
+  };
+  const locationObj = { href: 'https://handraw-style.com/' };
+  const windowObj = {
+    HANDRAW_SHARED: shared,
+    setTimeout,
+    clearTimeout,
+    location: locationObj,
+    AbortController,
+    URL,
+    fetch: async (url) => {
+      requests.push(url);
+      return {
+        ok: true,
+        async json() {
+          return {
+            ok: true,
+            hits: [
+              {
+                channel: 'styles',
+                code: 'FA-036',
+                author: '官方',
+                url: '/t/FA-036',
+                image: '/uploads/fa036.png',
+                title: '水墨中国风',
+                titleParts: [{ text: '<svg onload=1>中国风', match: true }],
+                snippetParts: [{ text: '229 中国风画风提示词', match: true }],
+              },
+            ],
+            hasMore: false,
+            nextCursor: '',
+          };
+        },
+      };
+    },
+  };
+  const context = vm.createContext({
+    window: windowObj,
+    global: windowObj,
+    document: { createElement() { return { style: {} }; } },
+    setTimeout,
+    clearTimeout,
+    AbortController,
+    URL,
+    encodeURIComponent,
+    WeakSet,
+    Promise,
+    Error,
+    Array,
+    String,
+    Object,
+  });
+  const code = fs.readFileSync(path.join(ROOT, 'demo/assets/mixed-feed.js'), 'utf8');
+  vm.runInContext(code, context, { filename: 'demo/assets/mixed-feed.js' });
+  windowObj.HandrawMixedFeed.render(root);
+  assert(root.innerHTML.includes('id="hw-mf-search-form"'));
+  assert(root.innerHTML.includes('id="hw-mf-fulltext-btn"'));
+
+  inp.value = '中国风';
+  inp.oninput({ isComposing: false });
+  await new Promise((r) => setTimeout(r, 260));
+  assert.equal(requests.length, 1);
+  assert.match(requests[0], /^\/api\/search\?q=%E4%B8%AD%E5%9B%BD%E9%A3%8E&channel=all&sort=relevance/);
+  assert(resultPane.innerHTML.includes('<mark>&lt;svg onload=1&gt;中国风</mark>'));
+  assert(resultPane.innerHTML.includes('FA-036'));
+  assert(!resultPane.innerHTML.includes('<svg'));
+
+  let prevented = false;
+  inp.onkeydown({ key: 'Enter', isComposing: false, preventDefault() { prevented = true; } });
+  assert.equal(prevented, true);
+  assert.equal(locationObj.href, 'https://handraw-style.com/search/?q=%E4%B8%AD%E5%9B%BD%E9%A3%8E');
 });

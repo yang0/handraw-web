@@ -8,8 +8,18 @@
   var visibleCount = 24;
   var observer = null;
   var searchTimer = 0;
+  var searchSeq = 0;
+  var searchAbort = null;
+  var remoteSearch = null;
   var loadingScenarios = false;
   var ratioBoundRoots = new WeakSet();
+  var SEARCH_CHANNEL_LABELS = {
+    styles: "画风",
+    layouts: "图型",
+    colors: "主题色",
+    works: "作品",
+    forum: "社区"
+  };
   var PATTERN = ["work", "work", "work", "resource", "work", "work", "work", "topic",
     "work", "work", "work", "resource", "work", "work", "work", "topic",
     "work", "work", "resource", "work"];
@@ -263,17 +273,252 @@
     }).catch(function () { st.homeScenariosFailed = true; })
       .finally(function () { loadingScenarios = false; });
   }
+  function getFetch() {
+    if (window && typeof window.fetch === "function") return window.fetch;
+    return typeof fetch === "function" ? fetch : null;
+  }
+  function searchChannelForTab(tab) {
+    if (tab === "work") return "works";
+    if (tab === "topic") return "forum";
+    return "all";
+  }
+  function fullSearchHref(q, tab) {
+    var trimmed = String(q || "").trim();
+    var ch = searchChannelForTab(tab);
+    var parts = [];
+    if (trimmed) parts.push("q=" + encodeURIComponent(trimmed));
+    if (ch && ch !== "all") parts.push("channel=" + encodeURIComponent(ch));
+    var qs = parts.length ? "?" + parts.join("&") : "";
+    var base = (S && typeof S.channelUrl === "function") ? S.channelUrl("main") : "/";
+    if (typeof URL === "function" && /^https?:\/\//i.test(String(base || ""))) {
+      var u = new URL(base);
+      u.pathname = "/search/";
+      u.search = qs;
+      return u.href;
+    }
+    return "/search/" + qs;
+  }
+  function safeUrl(u) {
+    if (S && typeof S.safeHref === "function") return S.safeHref(u);
+    var s = String(u || "");
+    return /^(\/|https?:\/\/)/i.test(s) ? s : "#";
+  }
+  function safeImg(u) {
+    if (S && typeof S.safeMediaUrl === "function") return S.safeMediaUrl(u);
+    var s = String(u || "");
+    return /^(\/|https?:\/\/)/i.test(s) ? s : "";
+  }
+  function renderParts(items) {
+    if (!Array.isArray(items) || !items.length) return "";
+    return items.map(function (p) {
+      var text = esc((p && p.text) || "");
+      return p && p.match ? "<mark>" + text + "</mark>" : text;
+    }).join("");
+  }
+  function searchHitCard(hit) {
+    var href = esc(safeUrl(hit && hit.url));
+    var img = safeImg(hit && hit.image);
+    var chLabel = SEARCH_CHANNEL_LABELS[hit && hit.channel] || "内容";
+    var titleHtml = renderParts(hit && hit.titleParts) || esc((hit && hit.title) || chLabel);
+    var snippetHtml = renderParts(hit && hit.snippetParts);
+    var codeHtml = hit && hit.code ? '<span>' + esc(hit.code) + '</span>' : '';
+    var authorText = hit && hit.author ? esc(hit.author) : '';
+    var imgAttr = (window && window.HandrawImageLoader) ? 'data-hw-src="' : 'src="';
+    return '<article class="hw-mf-card hw-mf-search-hit">' +
+      (img ? '<a class="hw-mf-media" href="' + href + '">' +
+        '<img ' + imgAttr + esc(img) + '" alt="" loading="lazy"></a>' : '') +
+      '<div class="hw-mf-body">' +
+        '<a class="hw-mf-title" href="' + href + '">' + titleHtml + '</a>' +
+        (snippetHtml ? '<p class="hw-mf-snippet">' + snippetHtml + '</p>' : '') +
+        '<div class="hw-mf-codes"><span>' + esc(chLabel) + '</span>' + codeHtml + '</div>' +
+        '<div class="hw-mf-footer">' +
+          '<span class="hw-mf-author">' + authorText + '</span>' +
+          '<a class="hw-mf-stats hw-mf-remix" href="' + href + '">查看详情 ↗</a>' +
+        '</div>' +
+      '</div>' +
+    '</article>';
+  }
+  function fetchSingleChannel(term, channel, sort, cursor, signal) {
+    var fetchFn = getFetch();
+    var qs = "q=" + encodeURIComponent(term) + "&channel=" + encodeURIComponent(channel) +
+      "&sort=" + encodeURIComponent(sort);
+    if (cursor) qs += "&cursor=" + encodeURIComponent(cursor);
+    return fetchFn("/api/search?" + qs, {
+      credentials: "include",
+      cache: "no-store",
+      signal: signal
+    }).then(function (resp) {
+      return resp.json().then(function (data) {
+        if (!resp.ok || (data && data.ok === false)) {
+          throw new Error((data && data.error) || "搜索失败");
+        }
+        return data || {};
+      });
+    });
+  }
+  function runRemoteSearch(root, term) {
+    var fetchFn = getFetch();
+    if (!term || !fetchFn) {
+      remoteSearch = null;
+      return;
+    }
+    var seq = ++searchSeq;
+    if (searchAbort && typeof searchAbort.abort === "function") searchAbort.abort();
+    var AC = typeof AbortController === "function" ? AbortController : (window && window.AbortController);
+    searchAbort = AC ? new AC() : null;
+    var signal = searchAbort ? searchAbort.signal : undefined;
+    var tab = currentTab;
+    var sort = tab === "latest" ? "newest" : "relevance";
+    remoteSearch = {
+      query: term,
+      tab: tab,
+      loading: true,
+      loadingMore: false,
+      error: "",
+      hits: [],
+      nextCursor: "",
+      hasMore: false,
+      limited: false,
+      resourcePartial: false
+    };
+    refreshResults(root);
+    var promise;
+    if (tab === "resource") {
+      promise = Promise.all(["styles", "layouts", "colors"].map(function (ch) {
+        return fetchSingleChannel(term, ch, sort, "", signal);
+      })).then(function (list) {
+        var seen = {};
+        var merged = [];
+        list.forEach(function (d) {
+          (d.hits || []).forEach(function (hit) {
+            var key = (hit.channel || "") + ":" + (hit.url || hit.code || hit.title || "");
+            if (!seen[key]) { seen[key] = true; merged.push(hit); }
+          });
+        });
+        return {
+          hits: merged,
+          nextCursor: "",
+          hasMore: list.some(function (d) { return Boolean(d.hasMore); }),
+          limited: list.some(function (d) { return Boolean(d.limited); }),
+          resourcePartial: true
+        };
+      });
+    } else {
+      promise = fetchSingleChannel(term, searchChannelForTab(tab), sort, "", signal);
+    }
+    promise.then(function (data) {
+      if (seq !== searchSeq || String(query || "").trim() !== term) return;
+      var inp = root.querySelector("#hw-mf-search");
+      if (inp && inp.isConnected === false) return;
+      remoteSearch = {
+        query: term,
+        tab: tab,
+        loading: false,
+        loadingMore: false,
+        error: "",
+        hits: Array.isArray(data.hits) ? data.hits : [],
+        nextCursor: data.nextCursor || "",
+        hasMore: Boolean(data.hasMore),
+        limited: Boolean(data.limited),
+        resourcePartial: Boolean(data.resourcePartial)
+      };
+      refreshResults(root);
+    }, function (err) {
+      if ((err && err.name === "AbortError") || seq !== searchSeq || String(query || "").trim() !== term) return;
+      var inp = root.querySelector("#hw-mf-search");
+      if (inp && inp.isConnected === false) return;
+      remoteSearch = {
+        query: term,
+        tab: tab,
+        loading: false,
+        loadingMore: false,
+        error: (err && err.message) ? err.message : "全站搜索暂时不可用",
+        hits: [],
+        nextCursor: "",
+        hasMore: false,
+        limited: false,
+        resourcePartial: false
+      };
+      refreshResults(root);
+    });
+  }
+  function loadMoreRemote(root) {
+    if (!remoteSearch || remoteSearch.loading || remoteSearch.loadingMore) return;
+    if (visibleCount < remoteSearch.hits.length) {
+      visibleCount += 24;
+      refreshResults(root);
+      return;
+    }
+    if (remoteSearch.resourcePartial || !remoteSearch.hasMore || !remoteSearch.nextCursor) return;
+    var seq = searchSeq;
+    var snapshot = remoteSearch;
+    var sort = snapshot.tab === "latest" ? "newest" : "relevance";
+    snapshot.loadingMore = true;
+    refreshResults(root);
+    fetchSingleChannel(snapshot.query, searchChannelForTab(snapshot.tab), sort, snapshot.nextCursor, searchAbort ? searchAbort.signal : undefined)
+      .then(function (data) {
+        if (seq !== searchSeq || remoteSearch !== snapshot) return;
+        snapshot.loadingMore = false;
+        snapshot.hits = snapshot.hits.concat(Array.isArray(data.hits) ? data.hits : []);
+        snapshot.nextCursor = data.nextCursor || "";
+        snapshot.hasMore = Boolean(data.hasMore);
+        visibleCount += 24;
+        refreshResults(root);
+      }, function () {
+        if (seq !== searchSeq || remoteSearch !== snapshot) return;
+        snapshot.loadingMore = false;
+        refreshResults(root);
+      });
+  }
+  function subheadTitle() {
+    return currentTab === "latest" ? '最近更新' :
+      currentTab === "work" ? '全部作品' : currentTab === "resource" ? '发现画风与图型' :
+        currentTab === "topic" ? '社区经验与讨论' : '发现值得复刻的灵感';
+  }
   function resultsHtml(st, items, create) {
+    var trimmed = String(query || "").trim();
+    var fullHref = esc(fullSearchHref(trimmed, currentTab));
+    if (trimmed && remoteSearch && remoteSearch.query === trimmed && remoteSearch.tab === currentTab) {
+      if (remoteSearch.loading && !items.length) {
+        return '<div class="hw-mf-subhead"><h2>' + subheadTitle() + '</h2>' +
+          '<span>正在检索全站索引…</span></div>' +
+          '<div class="hw-mf-empty"><h2>正在搜索「' + esc(trimmed) + '」…</h2>' +
+          '<p>正在检索全站画风、图型、主题色、作品与社区正文。</p></div>';
+      }
+      if (!remoteSearch.loading && !remoteSearch.error) {
+        var hits = remoteSearch.hits;
+        var visibleHits = hits.slice(0, visibleCount);
+        var moreHits = visibleHits.length < hits.length || (!remoteSearch.resourcePartial && remoteSearch.hasMore);
+        var statusText = hits.length
+          ? '已显示 ' + visibleHits.length + (moreHits ? '+' : '') + ' 条全站结果'
+          : '暂无匹配内容';
+        return '<div class="hw-mf-subhead"><h2>' + subheadTitle() + '</h2>' +
+          '<span class="hw-mf-submeta"><span>' + statusText + '</span>' +
+          '<a class="hw-mf-fulltext-link" href="' + fullHref + '">在全站搜索页查看全部 ↗</a></span></div>' +
+          (visibleHits.length ? '<div class="hw-mf-grid">' + visibleHits.map(searchHitCard).join("") + '</div>' :
+            '<div class="hw-mf-empty"><h2>暂时没有匹配「' + esc(trimmed) + '」的内容</h2>' +
+            '<p>换个关键词、编号，或切换频道在全站搜索页查看。</p>' +
+            '<a href="' + fullHref + '">打开全站搜索 ↗</a></div>') +
+          (moreHits ? '<div class="hw-mf-pager"><button type="button" id="hw-mf-search-more"' +
+            (remoteSearch.loadingMore ? ' disabled>正在加载…</button></div>' : '>加载更多</button></div>') : '');
+      }
+    }
     var visible = items.slice(0, visibleCount);
-    return       '<div class="hw-mf-subhead"><h2>' + (currentTab === "latest" ? '最近更新' :
-        currentTab === "work" ? '全部作品' : currentTab === "resource" ? '发现画风与图型' :
-          currentTab === "topic" ? '社区经验与讨论' : '发现值得复刻的灵感') + '</h2>' +
-      '<span>' + (items.length ? '已找到 ' + items.length + ' 条内容' : '暂无匹配内容') + '</span></div>' +
+    var errorNotice = (trimmed && remoteSearch && remoteSearch.query === trimmed && remoteSearch.error)
+      ? '（全站检索暂不可用，当前显示已加载内容）'
+      : '';
+    var loadingNotice = (trimmed && remoteSearch && remoteSearch.query === trimmed && remoteSearch.loading)
+      ? ' · 正在检索全站索引…'
+      : '';
+    return       '<div class="hw-mf-subhead"><h2>' + subheadTitle() + '</h2>' +
+      '<span class="hw-mf-submeta"><span>' + (items.length ? '已找到 ' + items.length + ' 条内容' : '暂无匹配内容') +
+      esc(errorNotice + loadingNotice) + '</span>' +
+      (trimmed ? '<a class="hw-mf-fulltext-link" href="' + fullHref + '">在全站搜索页查看全部 ↗</a>' : '') + '</span></div>' +
       (visible.length ? '<div class="hw-mf-grid">' + visible.map(function (item) {
         return renderCard(item, st);
       }).join("") + '</div>' :
         '<div class="hw-mf-empty"><h2>暂时没有匹配的内容</h2><p>换个关键词，或从创作台开始你的第一张作品。</p>' +
-        '<a href="' + create + '">开始创作 ↗</a></div>') +
+        (trimmed ? '<a href="' + fullHref + '">前往全站搜索 ↗</a>' : '<a href="' + create + '">开始创作 ↗</a>') + '</div>') +
       (visible.length < items.length ? '<div class="hw-mf-pager"><button type="button" id="hw-mf-more">加载更多</button>' +
         '<div id="hw-mf-sentinel" aria-hidden="true"></div></div>' : '') +
       '';
@@ -287,39 +532,82 @@
     panel.innerHTML = resultsHtml(st, items, url("studio", { entry: "quick" }));
     bind(root, items);
     bindMediaRatios(root);
+    if (window && window.HandrawImageLoader && typeof window.HandrawImageLoader.scan === "function") {
+      window.HandrawImageLoader.scan(panel);
+    }
   }
   function bind(root, items) {
     root.querySelectorAll("[data-mf-tab]").forEach(function (btn) {
       btn.onclick = function () {
         currentTab = btn.getAttribute("data-mf-tab") || "recommended";
         visibleCount = 24;
+        var trimmed = String(query || "").trim();
+        if (trimmed && getFetch()) {
+          render(root);
+          runRemoteSearch(root, trimmed);
+          return;
+        }
+        remoteSearch = null;
         render(root);
       };
     });
+    var searchForm = root.querySelector("#hw-mf-search-form");
     var inp = root.querySelector("#hw-mf-search");
+    function goFullSearch(raw, forceNavigate) {
+      var trimmed = String(raw || "").trim();
+      if (!trimmed && !forceNavigate) {
+        if (inp && typeof inp.focus === "function") inp.focus();
+        return;
+      }
+      if (window && window.location) window.location.href = fullSearchHref(trimmed, currentTab);
+    }
+    if (searchForm) {
+      searchForm.onsubmit = function (event) {
+        if (event && typeof event.preventDefault === "function") event.preventDefault();
+        var viaFulltext = Boolean(event && event.submitter && event.submitter.id === "hw-mf-fulltext-btn");
+        goFullSearch(inp ? inp.value : query, viaFulltext);
+      };
+    }
     if (inp) {
-      var composing = false;
       function scheduleSearch() {
         query = inp.value;
         window.clearTimeout(searchTimer);
         searchTimer = window.setTimeout(function () {
-          if (!inp.isConnected || composing) return;
+          if (!inp.isConnected || inp.__hwComposing) return;
           visibleCount = 24;
-          // Keep the live input/caret intact during debounced CJK search.
-          refreshResults(root);
+          var trimmed = String(query || "").trim();
+          if (!trimmed || !getFetch()) {
+            if (searchAbort && typeof searchAbort.abort === "function") searchAbort.abort();
+            remoteSearch = null;
+            // Keep the live input/caret intact during debounced CJK search.
+            refreshResults(root);
+            return;
+          }
+          runRemoteSearch(root, trimmed);
         }, 200);
       }
       inp.oncompositionstart = function () {
-        composing = true;
+        inp.__hwComposing = true;
         window.clearTimeout(searchTimer);
       };
       inp.oncompositionend = function () {
-        composing = false;
+        inp.__hwComposing = false;
         scheduleSearch();
       };
       inp.oninput = function (event) {
-        if (composing || (event && event.isComposing)) return;
+        if (inp.__hwComposing || (event && event.isComposing)) return;
         scheduleSearch();
+      };
+      inp.onkeydown = function (event) {
+        if (!event || event.key !== "Enter" || inp.__hwComposing || event.isComposing) return;
+        if (typeof event.preventDefault === "function") event.preventDefault();
+        goFullSearch(inp.value, false);
+      };
+    }
+    var searchMore = root.querySelector("#hw-mf-search-more");
+    if (searchMore) {
+      searchMore.onclick = function () {
+        loadMoreRemote(root);
       };
     }
     var more = root.querySelector("#hw-mf-more");
@@ -375,8 +663,11 @@
       '<a class="hw-mf-create" href="' + create + '">' + (isReturning ? '继续创作 ↗' : '开始创作 ↗') + '</a>' +
       '</header>' +
       '<div class="hw-mf-controls">' +
-      '<label class="hw-mf-search"><span aria-hidden="true">⌕</span>' +
-      '<input id="hw-mf-search" type="search" placeholder="搜索作品、画风、图型、创作技巧…" value="' + esc(query) + '" aria-label="搜索首页内容" autocomplete="off"></label>' +
+      '<form class="hw-mf-search-form" id="hw-mf-search-form" role="search">' +
+      '<div class="hw-mf-search">' +
+      '<button type="submit" class="hw-mf-search-btn" id="hw-mf-search-btn" aria-label="搜索" title="搜索">⌕</button>' +
+      '<input id="hw-mf-search" type="search" enterkeyhint="search" placeholder="搜索作品、画风、图型、创作技巧…" value="' + esc(query) + '" aria-label="搜索首页内容" autocomplete="off"></div>' +
+      '<button type="submit" class="hw-mf-fulltext-btn" id="hw-mf-fulltext-btn">全文搜索</button></form>' +
       '<nav class="hw-mf-tabs" aria-label="发现内容分类">' + TABS.map(function (tab) {
         return '<button type="button" data-mf-tab="' + tab[0] + '" class="' +
           (currentTab === tab[0] ? 'is-active' : '') + '" aria-pressed="' +
