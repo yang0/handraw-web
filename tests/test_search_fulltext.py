@@ -65,16 +65,16 @@ class FakeMeilisearchState:
         self.fail_next_task_code = ""
         self.fail_swap = False
 
-    def new_task(self, *, fail_code: str = "") -> dict:
+    def new_task(self, *, index_uid: str | None = "handraw_test", fail_code: str = "") -> dict:
         uid = self.next_task_uid
         self.next_task_uid += 1
         code = fail_code or self.fail_next_task_code
         if not fail_code and self.fail_next_task_code:
             self.fail_next_task_code = ""
         if code:
-            task = {"taskUid": uid, "status": "failed", "error": {"code": code}}
+            task = {"taskUid": uid, "indexUid": index_uid, "status": "failed", "error": {"code": code}}
         else:
-            task = {"taskUid": uid, "status": "succeeded"}
+            task = {"taskUid": uid, "indexUid": index_uid, "status": "succeeded"}
         self.tasks[uid] = task
         return {"taskUid": uid, "status": "enqueued"}
 
@@ -218,7 +218,10 @@ class FakeMeilisearchServer:
                     m_task = re.fullmatch(r"/tasks/(\d+)", self.path)
                     if m_task:
                         task = state.tasks.get(int(m_task.group(1)))
-                        if not task:
+                        if not task or (
+                            self.headers.get("Authorization") == f"Bearer {state.read_key}"
+                            and task.get("indexUid") is None
+                        ):
                             self._send(404, {"code": "task_not_found"})
                             return
                         self._send(200, task)
@@ -304,7 +307,7 @@ class FakeMeilisearchServer:
                     if self.path == "/swap-indexes":
                         if state.fail_swap:
                             state.fail_swap = False
-                            self._send(202, state.new_task(fail_code="simulated_swap_failed"))
+                            self._send(202, state.new_task(index_uid=None, fail_code="simulated_swap_failed"))
                             return
                         for pair in body or []:
                             a, b = pair["indexes"]
@@ -312,7 +315,7 @@ class FakeMeilisearchServer:
                             idx_b = state.indexes.pop(b, {"primaryKey": "id", "settings": {}, "docs": {}})
                             state.indexes[a] = idx_b
                             state.indexes[b] = idx_a
-                        self._send(202, state.new_task())
+                        self._send(202, state.new_task(index_uid=None))
                         return
                 self._send(404, {"code": "not_found"})
 
@@ -836,6 +839,7 @@ class FulltextSearchTests(unittest.TestCase):
             self._drain_worker()
             fjob = self.db.get_conn().execute("SELECT * FROM search_jobs WHERE id=?", (j_fail["jobs"][0],)).fetchone()
             self.assertEqual(fjob["status"], "unknown")
+            self.assertIsNotNone(fjob["task_uid"])
             still_ok = self._http("GET", "/api/search?channel=forum&q=" + quote("琉璃盏"))[1]["hits"]
             self.assertTrue(still_ok)
 

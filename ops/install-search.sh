@@ -92,13 +92,13 @@ import json,urllib.request
 from pathlib import Path
 def env(path):return dict(line.split('=',1) for line in Path(path).read_text().splitlines() if '=' in line)
 cfg=env('/etc/handraw/search.env');master=cfg['HANDRAW_SEARCH_KEY']
-def create(actions):
+def create(actions,indexes):
  req=urllib.request.Request('http://127.0.0.1:7700/keys',method='POST',
-  data=json.dumps({'description':'Handraw internal search','actions':actions,'indexes':['handraw_*'],'expiresAt':None}).encode(),
+  data=json.dumps({'description':'Handraw internal search','actions':actions,'indexes':indexes,'expiresAt':None}).encode(),
   headers={'Authorization':'Bearer '+master,'Content-Type':'application/json'})
  with urllib.request.urlopen(req) as r:return json.load(r)['key']
-cfg['HANDRAW_SEARCH_KEY']=create(['search','indexes.get','stats.get'])
-cfg['HANDRAW_SEARCH_WRITE_KEY']=create(['*'])
+cfg['HANDRAW_SEARCH_KEY']=create(['search','indexes.get','stats.get'],['handraw_*'])
+cfg['HANDRAW_SEARCH_WRITE_KEY']=create(['*'],['*'])
 Path('/etc/handraw/search.env').write_text(''.join(k+'='+v+'\n' for k,v in cfg.items()))
 print('Dedicated search and worker keys installed; secret values omitted.')
 PY

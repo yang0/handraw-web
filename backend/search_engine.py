@@ -31,6 +31,7 @@ class SearchEngine:
     def wait(self, task, *, timeout=180):
         uid = task['taskUid'] if isinstance(task, dict) else task
         until = time.monotonic() + timeout
+        delay = .01
         while time.monotonic() < until:
             state = self.request('GET', f'/tasks/{int(uid)}')
             if state['status'] == 'succeeded':
@@ -38,7 +39,8 @@ class SearchEngine:
             if state['status'] in ('failed', 'canceled'):
                 code = (state.get('error') or {}).get('code', 'index_task_failed')
                 raise RuntimeError(f'Search task {uid} failed ({code})')
-            time.sleep(.1)
+            time.sleep(delay)
+            delay = min(.1, delay * 2)
         raise TimeoutError(f'Search task {uid} still pending')
 
     def ensure_index(self, index):

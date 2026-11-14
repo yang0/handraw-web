@@ -49,12 +49,15 @@ class SearchWorker:
                 current[channel,code] = hashlib.sha256(json.dumps(docs,sort_keys=True).encode()).hexdigest()
         stored = {(r['channel'],r['entity_id']):r['fingerprint'] for r in conn.execute('SELECT * FROM search_resource_manifest').fetchall()}
         with self.db.transaction() as tx:
+            queued = {r['channel'] for r in tx.execute("SELECT channel FROM search_jobs WHERE status='queued'").fetchall()}
             for (channel,code), fingerprint in current.items():
                 if stored.get((channel,code)) != fingerprint:
-                    tx.execute('SELECT search_enqueue(?,?)',(channel,code))
+                    if channel not in queued:
+                        tx.execute('SELECT search_enqueue(?,?)',(channel,code))
                     tx.execute('INSERT INTO search_resource_manifest(channel,entity_id,fingerprint) VALUES(?,?,?) ON CONFLICT(channel,entity_id) DO UPDATE SET fingerprint=excluded.fingerprint',(channel,code,fingerprint))
             for channel,code in stored.keys() - current.keys():
-                tx.execute('SELECT search_enqueue(?,?)',(channel,code))
+                if channel not in queued:
+                    tx.execute('SELECT search_enqueue(?,?)',(channel,code))
                 tx.execute('DELETE FROM search_resource_manifest WHERE channel=? AND entity_id=?',(channel,code))
         self.last_manifest = time.monotonic()
 
@@ -100,6 +103,7 @@ class SearchWorker:
         self.engine.ensure_index(index_name(channel))
         shadow = index_name(channel) + '_build_' + uuid.uuid4().hex
         swapping = False
+        swap_task_uid = None
         try:
             # Existing modifying transactions commit before the epoch changes;
             # all later mutations retain this epoch until the final barrier.
@@ -134,7 +138,8 @@ class SearchWorker:
                 self._replay(channel,epoch,shadow,seen)
                 swapping = True
                 task = self.engine.request('POST','/swap-indexes',[{'indexes':[index_name(channel),shadow]}])
-                tx.execute('UPDATE search_jobs SET task_uid=? WHERE id=?',(task['taskUid'],jid))
+                swap_task_uid = task.get('taskUid') if isinstance(task, dict) else None
+                tx.execute('UPDATE search_jobs SET task_uid=? WHERE id=?',(swap_task_uid,jid))
                 self.engine.wait(task)
                 stats = self.engine.request('GET',f'/indexes/{index_name(channel)}/stats')
                 tx.execute("UPDATE search_jobs SET status='succeeded',phase='complete',finished_at=now() WHERE id=?",(jid,))
@@ -143,7 +148,12 @@ class SearchWorker:
             self.engine.wait(self.engine.request('DELETE',f'/indexes/{shadow}'))
         except Exception as exc:
             error = type(exc).__name__ + ': ' + str(exc)[:250]
-            conn.execute('UPDATE search_jobs SET status=?,error=?,finished_at=now() WHERE id=?',('unknown' if swapping else 'failed',error,jid))
+            if not swapping:
+                try:
+                    self.engine.wait(self.engine.request('DELETE',f'/indexes/{shadow}'))
+                except Exception:
+                    pass
+            conn.execute('UPDATE search_jobs SET status=?,task_uid=COALESCE(?,task_uid),error=?,finished_at=now() WHERE id=?',('unknown' if swapping else 'failed',swap_task_uid,error,jid))
             conn.execute('UPDATE search_channels SET last_error=? WHERE channel=?',(error,channel))
             log.warning('Search rebuild failed: channel=%s error=%s',channel,type(exc).__name__)
 
