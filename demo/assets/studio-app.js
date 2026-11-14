@@ -227,6 +227,8 @@
     if (!changed && CS.tabs.length) return false;
 
     cacheScopeEpoch += 1;
+    benchmarkAssetsPromise = null;
+    Catalog.benchmarkAssets = {characters: [], props: [], scenes: [], other: []};
     _articlesSyncVersion = 0;
     _articleCloudBases.clear();
     _articleCloudSnapshots.clear();
@@ -2345,7 +2347,14 @@
 
   // 2) Asset Picker Modal (我的图库 / 官方示例 / 本地上传 + 角色/道具/场景/其他分类)
   async function openAssetPickerModal(targetOrOptions, options = {}) {
-    await ensureWorkspaceCollection("uploads");
+    const requestEpoch = cacheScopeEpoch, requestScope = activeCacheScope;
+    try {
+      await Promise.all([ensureWorkspaceCollection("uploads"), ensureBenchmarkAssets()]);
+    } catch (error) {
+      if (!isStaleScope(requestEpoch, requestScope)) toast(error.message || "参考图库加载失败，请重试");
+      return;
+    }
+    if (isStaleScope(requestEpoch, requestScope)) return;
     let curItems = [];
     let isNode = false;
     let onCommitCallback = null;
@@ -17372,9 +17381,37 @@
     Catalog.moods = [...new Set((App.options?.moods || []).map(normalizeMoodLabel).filter(Boolean))];
   }
 
+  let benchmarkAssetsPromise = null;
+  function ensureBenchmarkAssets() {
+    if (benchmarkAssetsPromise) return benchmarkAssetsPromise;
+    const epoch = cacheScopeEpoch, scope = activeCacheScope;
+    const loading = fetch("/data/benchmark-assets.json").then(async response => {
+      if (!response.ok) throw new Error("参考图库加载失败，请重试");
+      const raw = await response.json();
+      if (isStaleScope(epoch, scope)) return;
+      if (Array.isArray(raw?.assets)) {
+        for (const category of ["characters", "props", "scenes", "other"]) {
+          const items = raw.assets.filter(item => item.cat === category).map(item => ({...item, custom:item.is_custom}));
+          if (category !== "other" || items.length) Catalog.benchmarkAssets[category] = items;
+        }
+      } else if (raw && typeof raw === "object") {
+        for (const category of ["characters", "props", "scenes", "other"])
+          if (category !== "other" || raw[category]?.length) Catalog.benchmarkAssets[category] = raw[category] || [];
+      }
+    }).catch(error => {if (benchmarkAssetsPromise === loading) benchmarkAssetsPromise = null; throw error;});
+    benchmarkAssetsPromise = loading;
+    return benchmarkAssetsPromise;
+  }
+
+  let studioMounted = false;
   async function boot() {
     try {
+      // Start configuration alongside the shared catalog/session boot. It is
+      // required for generation, but article history and the reference picker
+      // are not prerequisites for a usable single-image or canvas workspace.
+      const configPromise = fetch("/api/studio/config").then(response => response.ok ? response.json() : null).catch(() => null);
       await S.initApp("studio", () => {
+        if (!studioMounted) return;
         const scopeChanged = hydrateLocalScopedState();
         syncCatalogFromShared();
         hydrateCloudStudioWorkspace().then(async () => {
@@ -17390,43 +17427,15 @@
       });
       hydrateLocalScopedState();
       syncCatalogFromShared();
-      await hydrateCloudStudioWorkspace();
-
-      const [cfgRes, benchRes] = await Promise.all([
-        fetch("/api/studio/config").catch(() => null),
-        fetch("/data/benchmark-assets.json").catch(() => null)
-      ]);
-
-      if (cfgRes && cfgRes.ok) {
-        CS.serverCfg = await cfgRes.json();
-      }
+      const workspacePromise = hydrateCloudStudioWorkspace();
+      const config = await configPromise;
+      if (config) CS.serverCfg = config;
       configureGenerationEngine();
       const defaultOtherAssets = [
         { id: "OT-001", name_zh: "朱砂闲章与宣纸底纹", desc_zh: "东方手绘版面装饰印章参考", image: "/images/poster-demo-autumn-equinox.webp", cat: "other", custom: false },
         { id: "OT-002", name_zh: "手账胶带与便签边框", desc_zh: "拼贴感信息卡装饰元素参考", image: "/images/A_001-016.webp", cat: "other", custom: false }
       ];
-      if (benchRes && benchRes.ok) {
-        const rawBench = await benchRes.json();
-        if (Array.isArray(rawBench?.assets)) {
-          const arr = rawBench.assets;
-          const otherFromJson = arr.filter((x) => x.cat === "other").map((x) => ({ ...x, custom: x.is_custom }));
-          Catalog.benchmarkAssets = {
-            characters: arr.filter((x) => x.cat === "characters").map((x) => ({ ...x, custom: x.is_custom })),
-            props: arr.filter((x) => x.cat === "props").map((x) => ({ ...x, custom: x.is_custom })),
-            scenes: arr.filter((x) => x.cat === "scenes").map((x) => ({ ...x, custom: x.is_custom })),
-            other: otherFromJson.length ? otherFromJson : defaultOtherAssets
-          };
-        } else if (rawBench && typeof rawBench === "object") {
-          Catalog.benchmarkAssets = {
-            characters: rawBench.characters || [],
-            props: rawBench.props || [],
-            scenes: rawBench.scenes || [],
-            other: rawBench.other && rawBench.other.length ? rawBench.other : defaultOtherAssets
-          };
-        }
-      } else {
-        Catalog.benchmarkAssets.other = defaultOtherAssets;
-      }
+      Catalog.benchmarkAssets.other = defaultOtherAssets;
 
       mountStudioShell();
       // A completed import from a previous tab/session may be recovered without
@@ -17452,12 +17461,21 @@
         toast("已将恢复的文档作为新文章打开，未覆盖原有文章");
         return true;
       });
+      const route = new URLSearchParams(window.location.search);
+      if (route.get("entry") === "article" || ["articles-all", "my-articles"].includes(route.get("view")))
+        await workspacePromise;
       await hydrateTabsAndUrlParams();
       renderShelfDrawer();
       fullRenderCanvas();
       bindViewportInteractions();
       if (CS.stageView === "canvas") requestAnimationFrame(() => fitView());
-      resumePendingCloudTasks();
+      studioMounted = true;
+      const scope = activeCacheScope, epoch = cacheScopeEpoch;
+      void workspacePromise.then(() => {
+        if (isStaleScope(epoch, scope)) return;
+        if (CS.stageView === "preview") renderFullPreviewStage();
+        resumePendingCloudTasks();
+      });
     } catch (err) {
       console.error("[Handraw Canvas Studio v4 Boot Error]", err);
       const r = document.getElementById("studio-app-root");
@@ -17537,6 +17555,8 @@
       articleCloudPayload,
       loadArticleDocument,
       hydrateCloudStudioWorkspace,
+      ensureBenchmarkAssets,
+      getReferenceAssets: getAllAssetItems,
       ensureMyArticlesInitialized,
       articleImageProgress,
       extractArticlePlainExcerpt,

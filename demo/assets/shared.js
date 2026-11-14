@@ -719,7 +719,7 @@
 
   async function refreshFromServer() {
     try {
-      const boot = await apiJson("/api/boot", { method: "GET" });
+      const boot = await apiJson(bootEndpoint(), { method: "GET" });
       if (boot && boot.serverBacked) {
         applyBootState(boot);
         return boot;
@@ -752,6 +752,12 @@
     notifyAll();
   }
 
+  function bootEndpoint() {
+    // The legacy topic-fork path still reads a topic from the full boot state.
+    return App.channel === "studio" && !new URLSearchParams(window.location.search).has("forkTopic")
+      ? "/api/boot?surface=studio" : "/api/boot";
+  }
+
   async function initApp(channelName, onChange) {
     App.channel = channelName;
     if (onChange) App.listeners.push(onChange);
@@ -763,7 +769,7 @@
       const responses = await Promise.all([
         fetch("/data/catalog.json"),
         fetch("/data/options.json"),
-        fetch("/api/boot", { credentials: "include" })
+        fetch(bootEndpoint(), { credentials: "include" })
       ]);
       if (!responses[0].ok || !responses[1].ok || !responses[2].ok) {
         const bad = responses.find((r) => !r.ok);

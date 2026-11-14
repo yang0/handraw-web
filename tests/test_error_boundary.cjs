@@ -117,7 +117,7 @@ const settle = () => new Promise(resolve => setImmediate(resolve));
 
   for (const template of ['index.html', 'forum.html', 'studio.html', 'admin.html']) {
     const html = fs.readFileSync(path.join(__dirname, '../demo', template), 'utf8');
-    const scripts = [...html.matchAll(/<script src="([^"]+)"/g)].map(match => match[1]);
+    const scripts = [...html.matchAll(/<script\b[^>]*\bsrc="([^"]+)"/g)].map(match => match[1]);
     assert.equal(scripts[0], '/assets/error-boundary.js?v=1', template + ' installs the handler first');
   }
   const main = fs.readFileSync(path.join(__dirname, '../demo/assets/main-app.js'), 'utf8');

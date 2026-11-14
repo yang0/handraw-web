@@ -1330,7 +1330,29 @@ const {
   win.HANDRAW_SHARED.App.state.serverBacked=false;
   }
 
-  console.log("All studio generation, document isolation, save and history tests passed (35/35).");
+  // Lazy reference data is shared per account, but a late old-account response
+  // must never populate another account's picker.
+  api.switchScope("reference_old");
+  const referenceResponse=value=>({ok:true,status:200,json:async()=>value});
+  let releaseReference,referenceCalls=0;
+  fetchHandler=()=>{referenceCalls++;return new Promise(resolve=>releaseReference=resolve);};
+  const oldReference=api.ensureBenchmarkAssets();
+  assert.equal(api.ensureBenchmarkAssets(),oldReference);assert.equal(referenceCalls,1);
+  api.switchScope("reference_new");
+  fetchHandler=async()=>referenceResponse({assets:[{id:"new-reference",cat:"characters",name_zh:"New"}]});
+  await api.ensureBenchmarkAssets();
+  releaseReference(referenceResponse({assets:[{id:"old-private-reference",cat:"characters",name_zh:"Old"}]}));
+  await oldReference;
+  assert(api.getReferenceAssets().some(item=>item.id==="new-reference"));
+  assert(!api.getReferenceAssets().some(item=>item.id==="old-private-reference"));
+  api.switchScope("reference_retry");
+  fetchHandler=async()=>({ok:false});
+  await assert.rejects(api.ensureBenchmarkAssets(),/参考图库加载失败/);
+  fetchHandler=async()=>referenceResponse({assets:[{id:"retry-reference",cat:"props",name_zh:"Retry"}]});
+  await api.ensureBenchmarkAssets();
+  assert(api.getReferenceAssets().some(item=>item.id==="retry-reference"));
+
+  console.log("All studio generation, document isolation, save and history tests passed (37/37).");
 })().catch((err) => {
   console.error(err);
   process.exit(1);

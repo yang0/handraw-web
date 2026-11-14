@@ -1772,10 +1772,14 @@ def compute_public_asset_counts_and_creators(conn: PgConnection) -> tuple[dict[s
     return asset_counts, total_works, total_cheers, list(creator_stats.values())
 
 
-def build_boot_payload(db: Database, current_user: dict[str, Any] | None) -> dict[str, Any]:
+def build_boot_payload(db: Database, current_user: dict[str, Any] | None, *, surface: str = "full") -> dict[str, Any]:
     conn = db.get_conn()
     settings = get_site_settings(conn)
-    asset_counts, total_works_count, total_cheers_count, public_creators = compute_public_asset_counts_and_creators(conn)
+    studio = surface == "studio"
+    if studio:
+        asset_counts, total_works_count, total_cheers_count, public_creators = {}, 0, 0, []
+    else:
+        asset_counts, total_works_count, total_cheers_count, public_creators = compute_public_asset_counts_and_creators(conn)
 
     unlocked_set: set[str] = set()
     collections: dict[str, list[str]] = {"styles": [], "layouts": [], "works": [], "topics": [], "generations": []}
@@ -2011,103 +2015,106 @@ def build_boot_payload(db: Database, current_user: dict[str, Any] | None) -> dic
                     },
                 })
 
-    # Forum topics & replies (publicly visible, paid lockedBody masked unless unlocked!)
-    replies_by_topic: dict[str, list[dict[str, Any]]] = {}
-    reply_filter, reply_ids = _seed_filter("id", "forum_replies")
-    reply_topic_filter, reply_topic_ids = _seed_filter("topic_id", "topics")
-    for rp in conn.execute(
-        f"SELECT * FROM forum_replies WHERE status = 'published' AND {reply_filter} AND {reply_topic_filter} ORDER BY created_at ASC, id ASC",
-        (*reply_ids, *reply_topic_ids),
-    ).fetchall():
-        replies_by_topic.setdefault(rp["topic_id"], []).append(
-            {
-                "id": rp["id"],
-                "user": rp["author_username"],
-                "name": rp["author_name"],
-                "time": rp["time_label"] or format_short_time(rp["created_at"]),
-                "text": rp["text"],
-                "mountedStyle": rp["mounted_style"] or "",
-                "mountedLayout": rp["mounted_layout"] or "",
-                "likes": int(rp["likes"]),
-                "accepted": bool(rp["accepted"]),
-            }
-        )
+    topics_out = []
+    works_out = []
+    if not studio:
+        # Forum topics & replies (publicly visible, paid lockedBody masked unless unlocked!)
+        replies_by_topic: dict[str, list[dict[str, Any]]] = {}
+        reply_filter, reply_ids = _seed_filter("id", "forum_replies")
+        reply_topic_filter, reply_topic_ids = _seed_filter("topic_id", "topics")
+        for rp in conn.execute(
+            f"SELECT * FROM forum_replies WHERE status = 'published' AND {reply_filter} AND {reply_topic_filter} ORDER BY created_at ASC, id ASC",
+            (*reply_ids, *reply_topic_ids),
+        ).fetchall():
+            replies_by_topic.setdefault(rp["topic_id"], []).append(
+                {
+                    "id": rp["id"],
+                    "user": rp["author_username"],
+                    "name": rp["author_name"],
+                    "time": rp["time_label"] or format_short_time(rp["created_at"]),
+                    "text": rp["text"],
+                    "mountedStyle": rp["mounted_style"] or "",
+                    "mountedLayout": rp["mounted_layout"] or "",
+                    "likes": int(rp["likes"]),
+                    "accepted": bool(rp["accepted"]),
+                }
+            )
 
-    from .resource_discussions import topic_visibility_sql
-    topic_filter, topic_ids = _seed_filter("id", "topics")
-    reply_seed_filter, reply_seed_ids = _seed_filter("r.id", "forum_replies")
-    topic_vis_filter = topic_visibility_sql(reply_filter=reply_seed_filter, admin=False)
-    topic_rows = conn.execute(
-        f"SELECT * FROM forum_topics WHERE status = 'published' AND {topic_filter} AND {topic_vis_filter} ORDER BY pinned DESC, COALESCE(listed_at_ms, published_at_ms) DESC, id DESC",
-        (*topic_ids, *reply_seed_ids),
-    ).fetchall()
-    try:
-        tips_by_topic = {
-            str(r["ref_id"]): int(r["total"] or 0)
+        from .resource_discussions import topic_visibility_sql
+        topic_filter, topic_ids = _seed_filter("id", "topics")
+        reply_seed_filter, reply_seed_ids = _seed_filter("r.id", "forum_replies")
+        topic_vis_filter = topic_visibility_sql(reply_filter=reply_seed_filter, admin=False)
+        topic_rows = conn.execute(
+            f"SELECT * FROM forum_topics WHERE status = 'published' AND {topic_filter} AND {topic_vis_filter} ORDER BY pinned DESC, COALESCE(listed_at_ms, published_at_ms) DESC, id DESC",
+            (*topic_ids, *reply_seed_ids),
+        ).fetchall()
+        try:
+            tips_by_topic = {
+                str(r["ref_id"]): int(r["total"] or 0)
+                for r in conn.execute(
+                    "SELECT ref_id, COALESCE(SUM(delta), 0) AS total FROM ledgers WHERE kind = 'tip_in' AND ref_type = 'topic' GROUP BY ref_id"
+                ).fetchall()
+            }
+        except Exception:
+            tips_by_topic = {}
+        topics_out = [_serialize_topic(r, replies_by_topic, unlocked_set, current_user, conn=conn, tips_by_topic=tips_by_topic) for r in topic_rows]
+
+        # A work's discussion topic reports the work's counters.  Without this the
+        # same piece shows one number in the square (works.likes) and another in the
+        # forum (forum_topics.likes).  The topic's own columns stay untouched.
+        work_primary_topic = {
+            str(r["topic_id"]): str(r["target_id"])
             for r in conn.execute(
-                "SELECT ref_id, COALESCE(SUM(delta), 0) AS total FROM ledgers WHERE kind = 'tip_in' AND ref_type = 'topic' GROUP BY ref_id"
+                "SELECT target_id, topic_id FROM curation_resource_topics WHERE kind = 'work'"
             ).fetchall()
         }
-    except Exception:
-        tips_by_topic = {}
-    topics_out = [_serialize_topic(r, replies_by_topic, unlocked_set, current_user, conn=conn, tips_by_topic=tips_by_topic) for r in topic_rows]
-
-    # A work's discussion topic reports the work's counters.  Without this the
-    # same piece shows one number in the square (works.likes) and another in the
-    # forum (forum_topics.likes).  The topic's own columns stay untouched.
-    work_primary_topic = {
-        str(r["topic_id"]): str(r["target_id"])
-        for r in conn.execute(
-            "SELECT target_id, topic_id FROM curation_resource_topics WHERE kind = 'work'"
-        ).fetchall()
-    }
-    if work_primary_topic:
-        work_counters = {
-            str(r["id"]): (int(r["likes"] or 0), int(r["favorites"] or 0), int(r["tips"] or 0))
-            for r in conn.execute("SELECT id, likes, favorites, tips FROM works").fetchall()
-        }
-        for topic in topics_out:
-            work_id = work_primary_topic.get(topic["id"])
-            if not work_id:
-                continue
-            likes, favorites, w_tips = work_counters.get(work_id, (0, 0, 0))
-            topic["likes"] = likes
-            topic["favorites"] = favorites
-            topic["tips"] = w_tips
-            topic["workId"] = work_id
-
-    # PUBLIC SEO-FRIENDLY WORKS SQUARE:
-    # Published works are visible to both anonymous visitors & crawlers; paid prompts (price > 0) remain masked unless unlocked.
-    comments_by_work: dict[str, list[dict[str, Any]]] = {}
-    comment_filter, comment_ids = _seed_filter("id", "work_comments")
-    comment_work_filter, comment_work_ids = _seed_filter("work_id", "works")
-    for cm in conn.execute(
-        f"SELECT * FROM work_comments WHERE status = 'published' AND {comment_filter} AND {comment_work_filter} ORDER BY created_at ASC, id ASC",
-        (*comment_ids, *comment_work_ids),
-    ).fetchall():
-        comments_by_work.setdefault(cm["work_id"], []).append(
-            {
-                "id": cm["id"],
-                "user": cm["author_username"],
-                "name": cm["author_name"],
-                "text": cm["text"],
-                "time": cm["time_label"] or format_short_time(cm["created_at"]),
+        if work_primary_topic:
+            work_counters = {
+                str(r["id"]): (int(r["likes"] or 0), int(r["favorites"] or 0), int(r["tips"] or 0))
+                for r in conn.execute("SELECT id, likes, favorites, tips FROM works").fetchall()
             }
-        )
-    work_filter, work_ids = _seed_filter("w.id", "works")
-    work_rows = conn.execute(
-        f"""
-        SELECT w.* FROM works w
-        WHERE w.status = 'published'
-              AND w.images_json IS NOT NULL
-              AND TRIM(w.images_json) NOT IN ('', '[]', 'null')
-              AND (w.images_json IS JSON ARRAY)
-              AND {work_filter}
-        ORDER BY featured DESC, published_at_ms DESC, id DESC
-        """,
-        work_ids,
-    ).fetchall()
-    works_out: list[dict[str, Any]] = [_serialize_work(w, comments_by_work, unlocked_set, current_user, conn=conn) for w in work_rows]
+            for topic in topics_out:
+                work_id = work_primary_topic.get(topic["id"])
+                if not work_id:
+                    continue
+                likes, favorites, w_tips = work_counters.get(work_id, (0, 0, 0))
+                topic["likes"] = likes
+                topic["favorites"] = favorites
+                topic["tips"] = w_tips
+                topic["workId"] = work_id
+
+        # PUBLIC SEO-FRIENDLY WORKS SQUARE:
+        # Published works are visible to both anonymous visitors & crawlers; paid prompts (price > 0) remain masked unless unlocked.
+        comments_by_work: dict[str, list[dict[str, Any]]] = {}
+        comment_filter, comment_ids = _seed_filter("id", "work_comments")
+        comment_work_filter, comment_work_ids = _seed_filter("work_id", "works")
+        for cm in conn.execute(
+            f"SELECT * FROM work_comments WHERE status = 'published' AND {comment_filter} AND {comment_work_filter} ORDER BY created_at ASC, id ASC",
+            (*comment_ids, *comment_work_ids),
+        ).fetchall():
+            comments_by_work.setdefault(cm["work_id"], []).append(
+                {
+                    "id": cm["id"],
+                    "user": cm["author_username"],
+                    "name": cm["author_name"],
+                    "text": cm["text"],
+                    "time": cm["time_label"] or format_short_time(cm["created_at"]),
+                }
+            )
+        work_filter, work_ids = _seed_filter("w.id", "works")
+        work_rows = conn.execute(
+            f"""
+            SELECT w.* FROM works w
+            WHERE w.status = 'published'
+                  AND w.images_json IS NOT NULL
+                  AND TRIM(w.images_json) NOT IN ('', '[]', 'null')
+                  AND (w.images_json IS JSON ARRAY)
+                  AND {work_filter}
+            ORDER BY featured DESC, published_at_ms DESC, id DESC
+            """,
+            work_ids,
+        ).fetchall()
+        works_out: list[dict[str, Any]] = [_serialize_work(w, comments_by_work, unlocked_set, current_user, conn=conn) for w in work_rows]
 
     # Active Official Studio Presets
     preset_rows = conn.execute(
@@ -2115,53 +2122,58 @@ def build_boot_payload(db: Database, current_user: dict[str, Any] | None) -> dic
     ).fetchall()
     official_presets = [dict(r) for r in preset_rows]
 
-    # Asset Comments, Seeded Baselines & Live Likes/Favorites for ALL Styles & Layouts
-    asset_comments: dict[str, list[dict[str, Any]]] = {}
-    asset_comment_filter, asset_comment_ids = _seed_filter("id", "asset_comments")
-    asset_comment_asset_filter, asset_comment_asset_ids = _seed_filter("asset_code", "assets")
-    for ac in conn.execute(
-        f"SELECT * FROM asset_comments WHERE status = 'published' AND {asset_comment_filter} AND {asset_comment_asset_filter} ORDER BY created_at ASC, id ASC",
-        (*asset_comment_ids, *asset_comment_asset_ids),
-    ).fetchall():
-        asset_comments.setdefault(ac["asset_code"], []).append(
-            {
-                "id": ac["id"],
-                "user": ac["author_username"],
-                "name": ac["author_name"],
-                "text": ac["text"],
-                "time": ac["time_label"] or format_short_time(ac["created_at"]),
-            }
-        )
-
-    # ``asset_social_seeds`` is synthetic by construction: every row in it is a
-    # fabricated baseline, independent of whether the code happens to be listed
-    # in the demo seed registry.  In normal mode it must contribute nothing, so
-    # running a demo seed once can never leak fake likes into a real library.
+    asset_comments = {}
     asset_seed_metrics = {}
-    if is_demo_mode():
-        asset_seed_filter, asset_seed_ids = _seed_filter("asset_code", "assets")
-        asset_seed_metrics = {
-            r["asset_code"]: {"likes": int(r["base_likes"]), "favorites": int(r["base_favorites"])}
+    asset_live_likes = {}
+    asset_live_favorites = {}
+    if not studio:
+        # Asset Comments, Seeded Baselines & Live Likes/Favorites for ALL Styles & Layouts
+        asset_comments: dict[str, list[dict[str, Any]]] = {}
+        asset_comment_filter, asset_comment_ids = _seed_filter("id", "asset_comments")
+        asset_comment_asset_filter, asset_comment_asset_ids = _seed_filter("asset_code", "assets")
+        for ac in conn.execute(
+            f"SELECT * FROM asset_comments WHERE status = 'published' AND {asset_comment_filter} AND {asset_comment_asset_filter} ORDER BY created_at ASC, id ASC",
+            (*asset_comment_ids, *asset_comment_asset_ids),
+        ).fetchall():
+            asset_comments.setdefault(ac["asset_code"], []).append(
+                {
+                    "id": ac["id"],
+                    "user": ac["author_username"],
+                    "name": ac["author_name"],
+                    "text": ac["text"],
+                    "time": ac["time_label"] or format_short_time(ac["created_at"]),
+                }
+            )
+
+        # ``asset_social_seeds`` is synthetic by construction: every row in it is a
+        # fabricated baseline, independent of whether the code happens to be listed
+        # in the demo seed registry.  In normal mode it must contribute nothing, so
+        # running a demo seed once can never leak fake likes into a real library.
+        asset_seed_metrics = {}
+        if is_demo_mode():
+            asset_seed_filter, asset_seed_ids = _seed_filter("asset_code", "assets")
+            asset_seed_metrics = {
+                r["asset_code"]: {"likes": int(r["base_likes"]), "favorites": int(r["base_favorites"])}
+                for r in conn.execute(
+                    f"SELECT asset_code, base_likes, base_favorites FROM asset_social_seeds WHERE {asset_seed_filter}",
+                    asset_seed_ids,
+                ).fetchall()
+            }
+        live_asset_filter, live_asset_ids = _seed_filter("target_id", "assets")
+        asset_live_likes = {
+            r["target_id"]: int(r["cnt"])
             for r in conn.execute(
-                f"SELECT asset_code, base_likes, base_favorites FROM asset_social_seeds WHERE {asset_seed_filter}",
-                asset_seed_ids,
+                f"SELECT target_id, COUNT(*) AS cnt FROM interactions WHERE target_type IN ('like_style', 'like_layout') AND {live_asset_filter} GROUP BY target_id",
+                live_asset_ids,
             ).fetchall()
         }
-    live_asset_filter, live_asset_ids = _seed_filter("target_id", "assets")
-    asset_live_likes = {
-        r["target_id"]: int(r["cnt"])
-        for r in conn.execute(
-            f"SELECT target_id, COUNT(*) AS cnt FROM interactions WHERE target_type IN ('like_style', 'like_layout') AND {live_asset_filter} GROUP BY target_id",
-            live_asset_ids,
-        ).fetchall()
-    }
-    asset_live_favorites = {
-        r["target_id"]: int(r["cnt"])
-        for r in conn.execute(
-            f"SELECT target_id, COUNT(*) AS cnt FROM collections WHERE bucket IN ('styles', 'layouts') AND {live_asset_filter} GROUP BY target_id",
-            live_asset_ids,
-        ).fetchall()
-    }
+        asset_live_favorites = {
+            r["target_id"]: int(r["cnt"])
+            for r in conn.execute(
+                f"SELECT target_id, COUNT(*) AS cnt FROM collections WHERE bucket IN ('styles', 'layouts') AND {live_asset_filter} GROUP BY target_id",
+                live_asset_ids,
+            ).fetchall()
+        }
 
     # Active Forum Board Moderators (publicly displayed on boards & author badges)
     if is_demo_mode():
@@ -2366,12 +2378,13 @@ def build_boot_payload(db: Database, current_user: dict[str, Any] | None) -> dic
 
     from .resource_discussions import apply_boot
     from .curation import public_submissions, review_access
-    payload=apply_boot(db,payload,current_user)
-    grouped={}
-    for item in public_submissions(db,[t['id'] for t in payload['topics']]):
-        grouped.setdefault(item['topicId'],[]).append(item)
-    for topic in payload['topics']:
-        topic['submissions']=grouped.get(topic['id'],[])
+    if not studio:
+        payload=apply_boot(db,payload,current_user)
+        grouped={}
+        for item in public_submissions(db,[t['id'] for t in payload['topics']]):
+            grouped.setdefault(item['topicId'],[]).append(item)
+        for topic in payload['topics']:
+            topic['submissions']=grouped.get(topic['id'],[])
     payload["billing"] = get_public_billing_summary()
     if current_user:
         payload['user']['reviewAccess']=review_access(db,current_user)

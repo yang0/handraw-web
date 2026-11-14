@@ -40,6 +40,14 @@ from tests.economy_support import prepare_cloud_generation
 
 
 class TestDefinitionVisibility(TestCase):
+    def test_studio_boot_keeps_the_full_resource_permission_matrix(self):
+        for user in (None, self.author, self.buyer, self.visitor, self.staff):
+            with self.subTest(user=user['username'] if user else 'guest'):
+                full = S.build_boot_payload(self.db, user)
+                studio = S.build_boot_payload(self.db, user, surface='studio')
+                for key in ('exclusiveResources', 'communityResources', 'officialResources', 'officialOverrides', 'myResources', 'pendingResources', 'unlockedIds'):
+                    self.assertEqual(studio[key], full[key], key)
+
     def setUp(self) -> None:
         self.temp_dir = tempfile.TemporaryDirectory()
         root = Path(self.temp_dir.name)

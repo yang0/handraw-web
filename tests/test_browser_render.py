@@ -171,6 +171,30 @@ class BrowserRenderTests(unittest.TestCase):
         )
         self.assertEqual(self.js_errors, [], f"JS errors on home: {self.js_errors}")
 
+    def test_studio_is_usable_while_workspace_is_pending_and_hydration_preserves_typing(self):
+        self.enterContext(patch.dict(os.environ, {"HANDRAW_ALLOWED_ORIGINS": self.base}))
+        response = self.page.request.post(self.base + '/api/auth/login', data={"account":"br_author","password":"password-a"}, headers={"Origin":self.base})
+        self.assertEqual(response.status, 200)
+        waiting = []
+        requested = []
+        self.page.on('request', lambda request: requested.append(request.url))
+        self.page.route('**/api/studio/workspace?bootstrap=1', lambda route: waiting.append(route))
+        self.page.goto(self.base + '/studio/', wait_until='domcontentloaded')
+        subject = self.page.locator('#make-image-subject')
+        subject.wait_for(state='visible')
+        self.assertEqual(len(waiting), 1, 'One startup hydration, without an aborted duplicate')
+        self.assertFalse(any('benchmark-assets' in url for url in requested))
+        self.assertTrue(any('/api/boot?surface=studio' in url for url in requested))
+        subject.fill('工作区加载期间输入的主题不能丢失')
+        with self.page.expect_response('**/api/studio/workspace?bootstrap=1'):
+            waiting.pop().continue_()
+        self.page.wait_for_load_state('networkidle')
+        self.assertEqual(subject.input_value(), '工作区加载期间输入的主题不能丢失')
+        for width in (1440, 820, 390):
+            self.page.set_viewport_size({"width":width,"height":900})
+            self.assertLessEqual(self.page.evaluate('document.documentElement.scrollWidth-innerWidth'), 1)
+        self.assertEqual(self.js_errors, [])
+
     def test_work_topic_page_shows_title_and_prompt(self):
         body = self._load(f"/forum/?view=topic&id={self.work['topicId']}", wait_text=WORK_TITLE)
         self.assertIn(WORK_TITLE, body, "the topic page must show the work title")

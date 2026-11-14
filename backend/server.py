@@ -2548,6 +2548,27 @@ class HandrawRequestHandler(BaseHTTPRequestHandler):
         except (ConnectionResetError, ConnectionAbortedError, BrokenPipeError):
             pass
 
+    def _send_public_representation(self, representation, content_type, cache):
+        body, encoding, etag = representation
+        unchanged = etag in [tag.strip() for tag in self.headers.get("If-None-Match", "").split(",")]
+        self.send_response(304 if unchanged else 200)
+        self.send_header("Content-Type", content_type)
+        self.send_header("X-Content-Type-Options", "nosniff")
+        self.send_header("Cache-Control", cache)
+        self.send_header("Vary", "Accept-Encoding")
+        self.send_header("ETag", etag)
+        if encoding:
+            self.send_header("Content-Encoding", encoding)
+        self._cors_headers()
+        if not unchanged:
+            self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        if not unchanged and self.command != "HEAD":
+            try:
+                self.wfile.write(body)
+            except (ConnectionResetError, ConnectionAbortedError, BrokenPipeError):
+                pass
+
     def _send_cached_json(
         self,
         obj: dict[str, Any],
@@ -2900,7 +2921,7 @@ class HandrawRequestHandler(BaseHTTPRequestHandler):
             if user and user.get("status") == "active":
                 from .p2_growth import record_visit
                 record_visit(self.db, user)
-            self._send_json(build_boot_payload(self.db, user))
+            self._send_json(build_boot_payload(self.db, user, surface="studio" if q1("surface") == "studio" else "full"))
             return
 
         # Public Works Feed & Detail
@@ -3376,11 +3397,13 @@ class HandrawRequestHandler(BaseHTTPRequestHandler):
 
         # Static Data JSON & Media Serving
         if req_path == "/data/catalog.json":
-            self._send_bytes(load_localized_json("catalog.json"), "application/json; charset=utf-8", cache="public, max-age=300")
+            from .static_assets import data_representation
+            self._send_public_representation(data_representation(load_localized_json("catalog.json"), self.headers.get("Accept-Encoding", "")), "application/json; charset=utf-8", "public, max-age=300")
             return
 
         if req_path == "/data/options.json":
-            self._send_bytes(load_localized_json("studio-options.json"), "application/json; charset=utf-8", cache="public, max-age=300")
+            from .static_assets import data_representation
+            self._send_public_representation(data_representation(load_localized_json("studio-options.json"), self.headers.get("Accept-Encoding", "")), "application/json; charset=utf-8", "public, max-age=300")
             return
 
         if req_path == "/data/benchmark-assets.json":
@@ -3514,6 +3537,12 @@ class HandrawRequestHandler(BaseHTTPRequestHandler):
         ctype = mimetypes.guess_type(str(file_path))[0] or "text/html"
         if ctype.startswith("text/") or ctype in ("application/javascript", "text/javascript"):
             ctype += "; charset=utf-8"
+        # Only public frontend code uses this cache. Private media and API
+        # responses keep their own authorization and no-store policies.
+        if req_path.startswith("/assets/") and file_path.suffix in (".js", ".css", ".svg"):
+            from .static_assets import file_representation
+            self._send_public_representation(file_representation(file_path, self.headers.get("Accept-Encoding", "")), ctype, "public, max-age=3600" if q1("v") else "public, no-cache")
+            return
         self._send_bytes(file_path.read_bytes(), ctype, cache="no-cache")
 
     def do_POST(self) -> None:
