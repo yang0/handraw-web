@@ -68,4 +68,20 @@ for (const rawItem of catalog.resources.filter(r=>["style","layout"].includes(r.
   assert.equal(shown.definition,rawItem.definition,rawItem.id);
   assert.equal(shown.image,rawItem.image,rawItem.id);
 }
+// Gallery category order must not depend on API/database row order.
+favorites.clear();
+vm.runInContext(shared.slice(shared.indexOf("  const STYLE_GROUPS = ["), shared.indexOf("  const SAMPLE_UPLOAD_IMAGES"))
+  .replaceAll("const STYLE_GROUPS", "STYLE_GROUPS").replaceAll("const LAYOUT_GROUPS", "LAYOUT_GROUPS"), context);
+for (const name of ["resourcePickerGroups", "sortResourcesByGroup"]) vm.runInContext(fn(shared, name), context);
+context.layoutPool = [...catalog.resources.filter(r => r.kind === "layout")].reverse();
+const layoutTabs = JSON.parse(vm.runInContext('JSON.stringify(visibleResourceGroups(layoutPool, resourcePickerGroups(layoutPool,"layout")))', context));
+assert.deepEqual(layoutTabs.map(g => g.label), ["全部图型", "社媒卡", "信息图", "漫画分镜", "IP设计", "电商"]);
+assert.equal(vm.runInContext('sortResourcesByGroup(layoutPool,"layout")[0].group',context), "social-card");
+context.stylePool = [...catalog.resources.filter(r => r.kind === "style")].reverse();
+const styleTabs = JSON.parse(vm.runInContext('JSON.stringify(visibleResourceGroups(stylePool, resourcePickerGroups(stylePool,"style")))',context));
+assert.deepEqual(styleTabs.map(g=>g.label), ["全部画风","国际社论","经典绘本","现代平面","日本当代","新国风非遗","3D黏土纸雕","动漫和赛璐璐","先锋综合","写实摄影"]);
+assert.equal(new Set(styleTabs.map(g=>g.key)).size,styleTabs.length,"long catalog group names must not duplicate category tabs");
+assert.equal(vm.runInContext('sortResourcesByGroup(stylePool,"style")[0].id.startsWith("FA-")',context),true);
+context.customPool = [{id:"USR-S99",kind:"style",group:"私人 分组"}];
+assert.equal(vm.runInContext('visibleResourceGroups(customPool, resourcePickerGroups(customPool,"style"))[1].key',context),"私人 分组","custom category keys are preserved");
 console.log("Resource presentation: Chinese display, unchanged definitions, dynamic groups and image selections passed");

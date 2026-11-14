@@ -334,32 +334,32 @@
 
   const STYLE_GROUPS = [
     { key: "ALL", label: "全部画风" },
+    { key: "FA", label: "国际社论" },
+    { key: "FB", label: "经典绘本" },
+    { key: "FC", label: "现代平面" },
+    { key: "FD", label: "日本当代" },
+    { key: "FE", label: "新国风非遗" },
+    { key: "FF", label: "3D黏土纸雕" },
+    { key: "FG", label: "动漫和赛璐璐" },
+    { key: "FH", label: "先锋综合" },
+    { key: "FI", label: "写实摄影" },
     { key: "NEW_RELEASE", label: "🌱 新发扶持" },
     { key: "COMMUNITY", label: "✨ 社区共创" },
     { key: "EXCLUSIVE", label: "🔒 在线独占" },
-    { key: "HAS_WORKS", label: "🔥 有作品" },
-    { key: "FA", label: "FA 社论幽默" },
-    { key: "FB", label: "FB 绘本水彩" },
-    { key: "FC", label: "FC 现代几何" },
-    { key: "FD", label: "FD 日系插画" },
-    { key: "FE", label: "FE 概念厚涂" },
-    { key: "FF", label: "FF 潮玩立体手作" },
-    { key: "FG", label: "FG 动漫分镜" },
-    { key: "FH", label: "FH 独立印刷媒介" },
-    { key: "FI", label: "FI 大师摄影电影" }
+    { key: "HAS_WORKS", label: "🔥 有作品" }
   ];
 
   const LAYOUT_GROUPS = [
     { key: "ALL", label: "全部图型" },
+    { key: "social-card", label: "社媒卡" },
+    { key: "infographic", label: "信息图" },
+    { key: "comic-storyboard", label: "漫画分镜" },
+    { key: "ip-character", label: "IP设计" },
+    { key: "ecommerce", label: "电商" },
     { key: "NEW_RELEASE", label: "🌱 新发扶持" },
     { key: "COMMUNITY", label: "✨ 社区共创" },
     { key: "EXCLUSIVE", label: "🔒 在线独占" },
-    { key: "HAS_WORKS", label: "🔥 有作品" },
-    { key: "social-card", label: "SC 小红书社媒卡" },
-    { key: "infographic", label: "IG 知识信息图" },
-    { key: "comic-storyboard", label: "SB 漫画分镜" },
-    { key: "ip-character", label: "IP 角色设定" },
-    { key: "ecommerce", label: "EC 商业电商" }
+    { key: "HAS_WORKS", label: "🔥 有作品" }
   ];
 
   const SAMPLE_UPLOAD_IMAGES = [
@@ -604,6 +604,23 @@
     const found = groups.find(g => g.key === key || (kind === "style" && key.startsWith(g.key + " ")));
     const plain = String(key).split("/")[0].trim();
     return found ? found.label : /[\u3400-\u9fff]/.test(plain) ? plain : kind === "layout" ? "其他图型" : "其他画风";
+  }
+
+  // Official names/order mirror the Skill gallery navigation; keep counts live.
+  function resourcePickerGroups(list, kind) {
+    const official = (kind === "layout" ? LAYOUT_GROUPS : STYLE_GROUPS)
+      .filter(g => !["ALL", "NEW_RELEASE", "COMMUNITY", "EXCLUSIVE", "HAS_WORKS"].includes(g.key));
+    const known = new Set(official.map(g => g.key));
+    const extra = [...new Set(list.map(item => kind === "style" && /^F[A-I](?: |$)/.test(item.group || "") ? item.group.slice(0, 2) : item.group).filter(Boolean))]
+      .filter(key => !known.has(key)).map(key => ({ key, label: resourceGroupLabel(key, kind) }));
+    return [{ key: "ALL", label: kind === "layout" ? "全部图型" : "全部画风" },
+      { key: "FAV", label: "我的收藏" }, ...official, ...extra];
+  }
+
+  function sortResourcesByGroup(list, kind) {
+    const order = new Map(resourcePickerGroups(list, kind).map((g, i) => [g.key, i]));
+    const key = item => kind === "style" && /^F[A-I](?: |$)/.test(item.group || "") ? item.group.slice(0, 2) : item.group;
+    return [...list].sort((a, b) => (order.get(key(a)) ?? 999) - (order.get(key(b)) ?? 999));
   }
 
   function visibleResourceGroups(list, groups, query = "") {
@@ -3765,22 +3782,19 @@
   function openAssetPickerModal({ kind = "style", currentId = "", onSelect }) {
     const isStyle = kind === "style";
     const isLayout = kind === "layout";
-    const list = isStyle ? App.styles : isLayout ? App.layouts : App.colors;
-    const groups = isStyle
-      ? [{ key: "FAV", label: "♥ 我的收藏" }, ...STYLE_GROUPS]
-      : isLayout
-      ? [{ key: "FAV", label: "♥ 我的收藏" }, ...LAYOUT_GROUPS]
-      : [{ key: "ALL", label: "全部 36 色" }];
+    const list = isStyle || isLayout ? sortResourcesByGroup(isStyle ? App.styles : App.layouts, kind) : App.colors;
+    const groups = isStyle || isLayout ? resourcePickerGroups(list, kind) : [{ key: "ALL", label: "全部主题色" }];
 
     let activeGroup = "ALL";
     let query = "";
 
     openModal({
+      sizeClass: "hw-resource-picker",
       title: isStyle ? "🎨 选择画风（可随时清空，支持官方 / 独占 / 社区）" : isLayout ? "📐 选择图型（可随时清空）" : "🎨 选择主题色",
       html: `
         <div style="display:flex;flex-direction:column;gap:12px;">
           <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;justify-content:space-between;">
-            <input class="hw-input" id="picker-search-input" style="min-width:260px;" placeholder="搜索编号（如 FA-001 / SC-021）或中文关键词…" />
+            <input class="hw-input" id="picker-search-input" style="flex:1;min-width:min(260px,100%);" placeholder="搜索编号（如 FA-001 / SC-021）或中文关键词…" />
             <button type="button" class="btn btn-sm" id="picker-clear-slot">× 不指定此项（留空）</button>
           </div>
           <div class="hw-pills-row" id="picker-group-pills"></div>
@@ -5307,6 +5321,8 @@
     resourceMatchesGroup,
     resourceGroupLabel,
     visibleResourceGroups,
+    resourcePickerGroups,
+    sortResourcesByGroup,
     toast,
     apiJson,
     channelUrl,

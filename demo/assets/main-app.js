@@ -757,7 +757,6 @@
               <div class="hw-card-body">
                 <div class="hw-card-code-row">
                   <span class="hw-card-code">${esc(item.id)}</span>
-                  <span class="hw-card-group-tag">${esc(S.groupShortLabel(item))}</span>
                 </div>
                 <h3 class="hw-card-title" data-open-asset="${esc(item.id)}">${esc(item.name)}</h3>
                 <p class="hw-card-desc">${esc(item.description || "")}</p>

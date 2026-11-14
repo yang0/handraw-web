@@ -1989,7 +1989,7 @@
 
       S.openModal({
         title: "✨ 选择情绪（支持多选 + 自定义补充情绪）",
-        sizeClass: "modal-medium",
+        sizeClass: "modal-medium hw-resource-picker",
         html: `
           <div style="display:grid;gap:14px;">
             <div style="font-size:12.5px;color:var(--ink-muted);">可勾选多个情绪关键词叠加画面氛围，不选则不限制：</div>
@@ -2014,9 +2014,7 @@
               .map((m) => {
                 const on = selected.has(m);
                 return `
-                  <button type="button" data-mood-val="${esc(m)}" style="padding:7px 14px;border-radius:999px;font-size:13px;font-weight:800;cursor:pointer;border:1.5px solid ${
-                  on ? "var(--vermilion)" : "var(--line-strong)"
-                };background:${on ? "var(--vermilion)" : "#fff"};color:${on ? "#fff" : "var(--ink-main)"};">
+                  <button type="button" class="hw-pill ${on ? "is-active" : ""}" data-mood-val="${esc(m)}">
                     ${on ? "✓ " : ""}${esc(m)}
                   </button>
                 `;
@@ -2084,7 +2082,7 @@
 
     S.openModal({
       title: modalTitle,
-      sizeClass: "modal-wide",
+      sizeClass: "modal-wide hw-resource-picker",
       html: `
         <div style="display:flex;flex-direction:column;gap:12px;min-height:540px;">
           <div style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;">
@@ -2198,8 +2196,7 @@
           if (["style1", "style2", "layout"].includes(field)) {
             const kind = field === "layout" ? "layout" : "style";
             const pool = kind === "style" ? Catalog.styles : Catalog.layouts;
-            const groups = [{ key: "ALL", label: kind === "style" ? "全部画风" : "全部图型" }, { key: "FAV", label: "⭐ 收藏" },
-              ...[...new Set(pool.map(x => x.group).filter(Boolean))].map(g => ({ key: g, label: S.resourceGroupLabel(g, kind) }))];
+            const groups = S.resourcePickerGroups(pool, kind);
             return S.visibleResourceGroups(pool, groups, searchQuery).map(g => ({ ...g, label: `${g.label} (${g.count})` }));
           }
           if (field === "colors") {
@@ -2219,7 +2216,7 @@
           groupsEl.innerHTML = tabs
             .map(
               (g) => `
-              <button type="button" class="ic-shelf-group-chip ${activeGroup === g.key ? "is-active" : ""}" data-grp-k="${esc(g.key)}" style="padding:5px 11px;font-size:12px;">
+              <button type="button" class="hw-pill ${activeGroup === g.key ? "is-active" : ""}" data-grp-k="${esc(g.key)}" style="padding:5px 11px;font-size:12px;">
                 ${esc(g.label)}
               </button>
             `
@@ -2278,7 +2275,7 @@
                   <div style="padding:8px 10px;display:flex;flex-direction:column;gap:2px;">
                     <div style="font-family:var(--font-mono, monospace);font-size:11px;font-weight:700;color:var(--ink-muted, #786f65);">${esc(id)}</div>
                     <div style="font-size:12.5px;font-weight:800;color:#221d18;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${esc(title)}</div>
-                    <div style="font-size:11px;color:#786f65;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${esc(["style1", "style2", "layout"].includes(field) ? S.resourceGroupLabel(it.group, it.kind) : it.category || it.desc_zh || it.description || "点击选用")}</div>
+                    ${!["style1", "style2", "layout"].includes(field) ? `<div class="hw-resource-description">${esc(it.desc_zh || it.description || "")}</div>` : ""}
                   </div>
                 </div>
               `;
@@ -3530,7 +3527,7 @@
                     (st) => `
                     <button
                       type="button"
-                      class="ic-shelf-group-chip ${!curCustomStrat && curStrat === st.id ? "is-active" : ""}"
+                      class="hw-pill ${!curCustomStrat && curStrat === st.id ? "is-active" : ""}"
                       data-fis-m-strat="${esc(st.id)}"
                       style="padding:4px 10px;font-size:12px;"
                     >${esc(st.label)}</button>
@@ -3749,7 +3746,7 @@
       title: isStyle
         ? "🔁 选择循环画风列表（按勾选顺序逐款横评批量出图）"
         : "🔁 选择循环图型列表（按勾选顺序逐款版式批量出图）",
-      sizeClass: "modal-wide",
+      sizeClass: "modal-wide hw-resource-picker",
       html: `
         <div style="display:flex;flex-direction:column;gap:12px;min-height:540px;">
           <div style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;">
@@ -3822,20 +3819,12 @@
         }
 
         function renderGroups() {
-          const grpSet = new Set();
-          pool.forEach((x) => {
-            if (x.group) grpSet.add(x.group);
-          });
-          const tabs = S.visibleResourceGroups(pool, [
-            { key: "ALL", label: `全部${isStyle ? "画风" : "图型"}` },
-            { key: "FAV", label: "⭐ 收藏" },
-            ...[...grpSet].map((g) => ({ key: g, label: S.resourceGroupLabel(g, isStyle ? "style" : "layout") }))
-          ], searchQuery);
+          const tabs = S.visibleResourceGroups(pool, S.resourcePickerGroups(pool, isStyle ? "style" : "layout"), searchQuery);
           if (!tabs.some(g => g.key === activeGroup)) activeGroup = "ALL";
           groupsEl.innerHTML = tabs
             .map(
               (g) => `
-              <button type="button" class="ic-shelf-group-chip ${activeGroup === g.key ? "is-active" : ""}" data-lp-grp="${esc(g.key)}" style="padding:5px 11px;font-size:12px;">
+              <button type="button" class="hw-pill ${activeGroup === g.key ? "is-active" : ""}" data-lp-grp="${esc(g.key)}" style="padding:5px 11px;font-size:12px;">
                 ${esc(g.label)}${g.count !== undefined ? ` (${g.count})` : ""}
               </button>
             `
@@ -3870,22 +3859,21 @@
               const isSel = orderIdx >= 0;
               return `
                 <div class="ic-picker-card ${isSel ? "is-selected" : ""}" data-lp-id="${esc(id)}" style="border:1.5px solid ${
-                isSel ? "#0d9488" : "var(--line-soft)"
+                isSel ? "var(--vermilion)" : "var(--line-soft)"
               };border-radius:11px;overflow:hidden;background:#fff;cursor:pointer;display:flex;flex-direction:column;box-shadow:${
-                isSel ? "0 0 0 3px rgba(13,148,136,0.2)" : "0 2px 6px rgba(24,20,17,0.04)"
+                isSel ? "0 0 0 3px var(--vermilion-border)" : "0 2px 6px rgba(24,20,17,0.04)"
               };">
                   <div style="position:relative;aspect-ratio:4/3;background:#f3ede3;overflow:hidden;display:flex;align-items:center;justify-content:center;">
                     <img data-hw-src="${esc(it.image)}" alt="${esc(title)}" loading="lazy" style="width:100%;height:100%;object-fit:contain;display:block;" />
                     ${
                       isSel
-                        ? `<span style="position:absolute;right:6px;top:6px;padding:2px 8px;border-radius:999px;background:#0d9488;color:#fff;font-size:10.5px;font-weight:850;">循环 #${orderIdx + 1}</span>`
+                        ? `<span style="position:absolute;right:6px;top:6px;padding:2px 8px;border-radius:999px;background:var(--vermilion);color:#fff;font-size:10.5px;font-weight:850;">循环 #${orderIdx + 1}</span>`
                         : ""
                     }
                   </div>
                   <div style="padding:8px 10px;display:flex;flex-direction:column;gap:2px;">
                     <div style="font-family:var(--font-mono, monospace);font-size:11px;font-weight:700;color:var(--ink-muted, #786f65);">${esc(id)}</div>
                     <div style="font-size:12.5px;font-weight:800;color:#221d18;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${esc(title)}</div>
-                    <div style="font-size:11px;color:#786f65;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${esc(S.resourceGroupLabel(it.group, it.kind))}</div>
                   </div>
                 </div>
               `;
@@ -17372,8 +17360,8 @@
 
   function syncCatalogFromShared() {
     Catalog.resourceMap = App.resourceMap;
-    Catalog.styles = App.styles;
-    Catalog.layouts = App.layouts;
+    Catalog.styles = S.sortResourcesByGroup(App.styles, "style");
+    Catalog.layouts = S.sortResourcesByGroup(App.layouts, "layout");
     Catalog.colors = App.colors;
     Catalog.tones = App.options?.tones || [];
     Catalog.modes = (App.options?.modes || []).filter((m) => m.id !== "photo");
