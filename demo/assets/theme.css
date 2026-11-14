@@ -4132,3 +4132,18 @@ img[data-hw-src].hw-img-failed {
 .hw-order-status.is-pending { background: rgba(184, 134, 11, 0.14); color: #8c6300; }
 .hw-order-status.is-failed { background: rgba(183, 66, 39, 0.12); color: var(--vermilion); }
 .hw-order-status.is-refunded { background: rgba(90, 86, 80, 0.14); color: var(--ink-muted); }
+/* Resource dialogs reuse channel filters and form actions. */
+.hw-resource-picker .hw-pill{cursor:pointer;font-family:var(--font-sans)}
+.hw-resource-picker .hw-resource-description{font-size:11px;color:var(--ink-muted);overflow-wrap:anywhere}
+.hw-resource-picker [role="button"]:focus-visible{outline:2px solid var(--vermilion);outline-offset:2px}
+.hw-resource-picker .hw-modal-body>div{min-width:0}
+.hw-resource-picker input.hw-input{max-width:100%;box-sizing:border-box}
+@media(max-width:600px){
+  .hw-resource-picker .hw-modal-header{padding:12px}
+  .hw-resource-picker .hw-modal-header h2{font-size:16px;overflow-wrap:anywhere}
+  .hw-resource-picker .hw-modal-body{padding:12px}
+  .hw-resource-picker .hw-modal-body>div{min-height:0!important}
+  .hw-resource-picker input.hw-input{min-width:0!important;width:100%;flex-basis:100%!important}
+  .hw-resource-picker #sp-picker-grid,.hw-resource-picker #loop-pick-grid,.hw-resource-picker #picker-grid{grid-template-columns:repeat(2,minmax(0,1fr))!important}
+  .hw-resource-picker #sp-picker-count,.hw-resource-picker #loop-pick-count{overflow-wrap:anywhere}
+}

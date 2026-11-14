@@ -1057,7 +1057,7 @@
 
       S.openModal({
         title: "选择影调（支持多选）",
-        sizeClass: "modal-medium",
+        sizeClass: "modal-medium hw-resource-picker",
         html: `
           <div style="display:flex;flex-direction:column;gap:14px;">
             <div style="font-size:12px;color:var(--ink-muted);">可多选多个影调，系统将融合光影氛围（点击卡片勾选/取消）：</div>
@@ -1075,7 +1075,7 @@
             grid.innerHTML = allTones.map((t) => {
               const on = current.has(t.id);
               return `
-                <div class="ic-picker-card ${on ? "is-selected" : ""}" data-tone-id="${esc(t.id)}" style="cursor:pointer;border:1.5px solid ${on ? "var(--vermilion)" : "var(--line-soft)"};border-radius:9px;padding:6px;background:${on ? "var(--vermilion-surface)" : "#fff"};display:flex;gap:8px;align-items:center;">
+                <div class="ic-picker-card ${on ? "is-selected" : ""}" data-tone-id="${esc(t.id)}" style="cursor:pointer;border:1.5px solid ${on ? "var(--vermilion)" : "var(--line-soft)"};border-radius:9px;padding:6px;background:${on ? "var(--vermilion-wash)" : "#fff"};display:flex;gap:8px;align-items:center;">
                   <img data-hw-src="${esc(t.image || `/images/individual/TONES/${t.id}.webp`)}" alt="${esc(t.name_zh || t.name)}" style="width:40px;height:40px;object-fit:cover;border-radius:6px;" />
                   <div style="min-width:0;flex:1;">
                     <div style="font-size:10px;font-family:var(--font-mono);font-weight:700;color:var(--ink-muted);">${esc(t.id)}</div>
@@ -1125,7 +1125,7 @@
 
       S.openModal({
         title: "选择情绪（支持多选）",
-        sizeClass: "modal-medium",
+        sizeClass: "modal-medium hw-resource-picker",
         html: `
           <div style="display:flex;flex-direction:column;gap:14px;">
             <div style="font-size:12px;color:var(--ink-muted);">可多选多个情绪词，提升画面氛围传达（点击标签勾选/取消）：</div>
