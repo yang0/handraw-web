@@ -3014,6 +3014,7 @@
     const forkItemId = params.get("forkItem") || "";
     const styleParam = params.get("style");
     const layoutParam = params.get("layout");
+    const colorParam = params.get("color");
 
     const storedOpen = readJsonStorage(OPEN_TABS_KEY, null);
     if (storedOpen && Array.isArray(storedOpen.tabs) && storedOpen.tabs.length > 0) {
@@ -3223,11 +3224,12 @@
         const created = createWorkflowTab({ title: `💬 帖子配方 · ${t.title.slice(0, 9)}`, blueprint: fg.blueprint, graph: fg, makeActive: false });
         CS.activeTabId = created.id;
       }
-    } else if (styleParam !== null || layoutParam !== null) {
+    } else if (styleParam !== null || layoutParam !== null || colorParam !== null) {
       // Resource links start with a clean, form-compatible graph, never a preset.
       const code = value => String(value || "").trim().replace(/^#\s*/, "").toUpperCase();
       const styleCode = code(styleParam);
       const layoutCode = code(layoutParam);
+      const colorCode = code(colorParam);
 
       const ensureResourceLoaded = async (c) => {
         if (!c || Catalog.resourceMap.has(c)) return;
@@ -3255,6 +3257,8 @@
                 if (!Catalog.styles.some(s => s.id === item.id)) Catalog.styles.push(item);
               } else if (item.kind === "layout") {
                 if (!Catalog.layouts.some(l => l.id === item.id)) Catalog.layouts.push(item);
+              } else if (item.kind === "color") {
+                if (!Catalog.colors.some(cl => cl.id === item.id)) Catalog.colors.push(item);
               }
             }
           }
@@ -3269,18 +3273,23 @@
       if (layoutCode && !Catalog.resourceMap.has(layoutCode)) {
         await ensureResourceLoaded(layoutCode);
       }
+      if (colorCode && !Catalog.resourceMap.has(colorCode) && !Catalog.colors.some(cl => cl.id === colorCode)) {
+        await ensureResourceLoaded(colorCode);
+      }
 
       const validStyle = Catalog.resourceMap.get(styleCode)?.kind === "style" ? styleCode : "";
       const validLayout = Catalog.resourceMap.get(layoutCode)?.kind === "layout" ? layoutCode : "";
+      const validColor = (Catalog.resourceMap.get(colorCode)?.kind === "color" || Catalog.colors.some(cl => cl.id === colorCode)) ? colorCode : "";
       const warnings = [];
       if (styleParam !== null && !validStyle) warnings.push("链接中的画风不存在或尚未收录，请重新选择");
       if (layoutParam !== null && !validLayout) warnings.push("链接中的图型不存在或尚未收录，请重新选择");
+      if (colorParam !== null && !validColor) warnings.push("链接中的主题色不存在或尚未收录，请重新选择");
       CS.resourceEntryWarning = warnings.join("；");
       const g = buildForkGraphFromWork({
-        styles: validStyle ? [validStyle] : [], layout: validLayout,
+        styles: validStyle ? [validStyle] : [], layout: validLayout, color: validColor,
         mode: "graphic-text", ratio: "3:4", prompt: "", title: ""
       });
-      const label = validStyle ? `🎨 试用 #${validStyle}` : validLayout ? `📐 试用 ${validLayout}` : "快速创作";
+      const label = validStyle ? `🎨 试用 #${validStyle}` : validLayout ? `📐 试用 ${validLayout}` : validColor ? `🎨 试用 ${validColor}` : "快速创作";
       const created = createWorkflowTab({ title: label, blueprint: "single", graph: g, makeActive: false });
       CS.activeTabId = created.id;
     }
@@ -3333,7 +3342,7 @@
       } else if (entryParam === "article") {
         routeArticleEntryFromUrl(params, { renderNow: false });
       } else {
-        if (!forkId && !forkTopicId && styleParam === null && layoutParam === null) ensureQuickTab();
+        if (!forkId && !forkTopicId && styleParam === null && layoutParam === null && colorParam === null) ensureQuickTab();
         CS.stageView = "quick";
       }
     }

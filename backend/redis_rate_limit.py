@@ -13,6 +13,7 @@ from functools import lru_cache
 
 
 _LIMITS = {
+    "fulltext-search": (120, 60),
     "planning": (12, 60),
     "client_error": (20, 60),
     "login": (8, 300),

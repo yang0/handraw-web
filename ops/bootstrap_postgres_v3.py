@@ -36,6 +36,7 @@ MIGRATIONS = (
     ROOT / "backend" / "postgres_120_contribution_guards.sql",
     ROOT / "backend" / "postgres_121_reward_promotions.sql",
     ROOT / "backend" / "postgres_122_forum_boards.sql",
+    ROOT / "backend" / "postgres_123_search.sql",
 )
 
 

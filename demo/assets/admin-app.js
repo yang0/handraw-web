@@ -4,6 +4,7 @@
 
   const ROLE_MODULES = {
     admin: [
+      { id: "search", icon: "🔎", label: "搜索索引", desc: "增量同步状态、失败重试及按频道全量重建" },
       { id: "dashboard", icon: "📊", label: "数据总览", desc: "全站核心指标、366+168 目录覆盖度、积分铸造消耗与审计轨迹" },
       { id: "scenarios", icon: "🎯", label: "首页场景", desc: "配置首页 8 大场景、文案、创作台入口、匹配规则与精选置顶作品" },
       { id: "users", icon: "👥", label: "用户与权限管理", desc: "新建/移除账号、重置密码、RBAC 四级角色、论坛版主任命、积分调账与老站迁移" },
@@ -341,6 +342,7 @@
   }
 
   async function loadModuleData(mod) {
+    if(mod === "search")return;
     sanitizeSubtabsForRole();
     if (mod.startsWith("mod_")) {
       state.data.modConsole = await api(
@@ -1780,7 +1782,8 @@
         : (state.data.dashboard ? state.data.dashboard.kpis.openReportsCount : 0);
 
     let bodyHtml = "";
-    if (state.module === "mod_overview") bodyHtml = renderModeratorOverviewSection();
+    if (state.module === "search") bodyHtml = '<div data-search-admin></div>';
+    else if (state.module === "mod_overview") bodyHtml = renderModeratorOverviewSection();
     else if (state.module === "mod_topics") bodyHtml = renderModeratorTopicsSection();
     else if (state.module === "mod_replies") bodyHtml = renderModeratorRepliesSection();
     else if (state.module === "mod_reports") bodyHtml = renderModeratorReportsSection();
@@ -1862,6 +1865,8 @@
     bindConsoleEvents();
     const economyRoot=root.querySelector('[data-economy-admin]');
     if(economyRoot)window.HandrawEconomy?.mountAdmin(economyRoot);
+    const searchRoot=root.querySelector('[data-search-admin]');
+    if(searchRoot)window.HandrawSearchAdmin?.mount(searchRoot);
   }
 
   /* ======================== MODALS (CREATE USER, USER DETAIL, MODERATORS, CATALOG, BOUNTY) ======================== */

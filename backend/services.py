@@ -3833,18 +3833,22 @@ def publish_forum_topic_post(db: Database, user: dict[str, Any], body: dict[str,
 
     from .points import validate_price
     validate_price(db.get_conn(),"topic",price)
+    before_part = ""
     if price > 0:
         if "hw-paywall-divider" not in raw_body and "hw-paywall-divider" not in clean_body:
             raise ServiceError("付费帖子缺少付费分界线", status=400)
+        divider_source = clean_body if "hw-paywall-divider" in clean_body else raw_body
         divider_match = re.search(
             r"<div[^>]*class=[\"'][^\"']*hw-paywall-divider[^\"']*[\"'][^>]*>.*?</div>\s*</div>|<(?:div|hr)[^>]*class=[\"'][^\"']*hw-paywall-divider[^\"']*[\"'][^>]*>(?:.*?</div>)?|<[^>]*hw-paywall-divider[^>]*>",
-            clean_body if "hw-paywall-divider" in clean_body else raw_body,
+            divider_source,
             flags=re.DOTALL,
         )
         if divider_match:
-            after_part = (clean_body if "hw-paywall-divider" in clean_body else raw_body)[divider_match.end():]
+            before_part = divider_source[:divider_match.start()]
+            after_part = divider_source[divider_match.end():]
         else:
-            parts = (clean_body if "hw-paywall-divider" in clean_body else raw_body).split("hw-paywall-divider", 1)
+            parts = divider_source.split("hw-paywall-divider", 1)
+            before_part = parts[0]
             after_part = parts[1] if len(parts) > 1 else ""
         after_text = re.sub(r"<[^>]+>", " ", after_part).strip()
         has_media = any(tag in after_part for tag in ("<img", "hw-intext-media", "hw-intext-card"))
@@ -3902,11 +3906,18 @@ def publish_forum_topic_post(db: Database, user: dict[str, Any], body: dict[str,
     tid = f"topic_{now_ms}_{uuid.uuid4().hex[:4]}"
 
     incoming_summary = str(body.get("summary") or "").strip()
+    if price > 0 and "hw-paywall-divider" in incoming_summary:
+        incoming_summary = re.split(
+            r"<div[^>]*class=[\"'][^\"']*hw-paywall-divider[^\"']*[\"'][^>]*>.*?</div>\s*</div>|<(?:div|hr)[^>]*class=[\"'][^\"']*hw-paywall-divider[^\"']*[\"'][^>]*>(?:.*?</div>)?|<[^>]*hw-paywall-divider[^>]*>",
+            incoming_summary,
+            maxsplit=1,
+            flags=re.DOTALL,
+        )[0].strip()
     if incoming_summary:
         summary = sanitize_rich_html(incoming_summary, max_chars=60000)
-    elif price > 0 and len(clean_body) > 60:
-        clean_text = re.sub(r"<[^>]+>", " ", clean_body).strip()
-        summary = (clean_text[:120] if len(clean_text) > 120 else clean_text) + "……（以下为核心实战干货，需付费解锁查看）"
+    elif price > 0:
+        clean_before = sanitize_rich_html(before_part, max_chars=60000).strip()
+        summary = clean_before if clean_before else "（以下为核心实战干货，需付费解锁查看）"
     else:
         summary = clean_body
     locked_raw = (str(body.get("lockedBody") or raw_body)).strip()[:60000] if price > 0 else ""

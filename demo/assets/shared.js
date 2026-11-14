@@ -2943,7 +2943,8 @@
 
         <div class="hw-topbar-right">
           <form class="hw-global-search" id="hw-global-search-form">
-            <input type="search" id="hw-global-search-input" placeholder="搜索画风/图型编号或关键词…" />
+            <select id="hw-global-search-channel" aria-label="搜索范围"><option value="all">全站</option><option value="styles">画风</option><option value="layouts">图型</option><option value="colors">主题色</option><option value="works">作品</option><option value="forum">社区</option></select>
+            <input type="search" id="hw-global-search-input" maxlength="200" placeholder="搜索全站正文与资源…" />
           </form>
 
           ${
@@ -3114,16 +3115,10 @@
       e.preventDefault();
       const q = document.getElementById("hw-global-search-input").value.trim();
       if (!q) return;
-      const upper = q.toUpperCase().replace(/^#/, "");
-      if (App.resourceMap.has(upper)) {
-        goToAssetPage(upper);
-        return;
-      }
-      if (App.channel === "main" && window.HANDRAW_MAIN_GLOBAL_SEARCH) {
-        window.HANDRAW_MAIN_GLOBAL_SEARCH(q);
-      } else {
-        window.location.href = channelUrl("main", { view: "styles", q });
-      }
+      const channel = document.getElementById("hw-global-search-channel").value;
+      const target = new URL(channelUrl("main"),location.href);
+      target.pathname='/search/';target.search=new URLSearchParams({q,channel}).toString();
+      window.location.href=target.href;
     };
 
     // User Avatar Dropdown Toggle (Folded Personal Info)

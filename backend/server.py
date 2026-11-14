@@ -2374,6 +2374,9 @@ class HandrawRequestHandler(BaseHTTPRequestHandler):
             raise ServiceError("请求过于频繁，请稍后再试", status=429, code="rate_limited")
 
     def _feature_get(self, req_path: str, qs: dict[str, list[str]]) -> bool:
+        from .search_routes import handle_get as search_get
+        if search_get(self, req_path, qs):
+            return True
         from .economy_routes import handle_get
         if handle_get(self,req_path,qs):
             return True
@@ -2384,6 +2387,9 @@ class HandrawRequestHandler(BaseHTTPRequestHandler):
         return bool(handle_feature_get(self, req_path, qs))
 
     def _feature_post(self, req_path: str, body: dict[str, Any]) -> bool:
+        from .search_routes import handle_post as search_post
+        if search_post(self, req_path, body):
+            return True
         from .economy_routes import handle_post
         if handle_post(self,req_path,body):
             return True
@@ -3486,6 +3492,8 @@ class HandrawRequestHandler(BaseHTTPRequestHandler):
             file_path = DEMO_DIR / "index.html"
             if "view" not in qs:
                 qs = {"view": ["orders"], **qs}
+        elif req_path in ("/search", "/search/"):
+            file_path = DEMO_DIR / "search.html"
         elif req_path in ("/checkout", "/checkout/"):
             file_path = DEMO_DIR / "checkout.html"
         elif req_path in ("/forum", "/forum/"):

@@ -157,6 +157,7 @@ class _TokenBucketLimiter:
 
 
 _AUTH_LIMITERS = {
+    "fulltext-search": _TokenBucketLimiter(120, 60),
     "planning": _TokenBucketLimiter(8, 5),
     "client_error": _TokenBucketLimiter(20, 3),
     "login": _TokenBucketLimiter(8, 300),

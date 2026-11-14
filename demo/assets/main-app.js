@@ -525,13 +525,7 @@
   window.HANDRAW_MAIN_OPEN_PROFILE = openProfilePage;
   window.HANDRAW_MAIN_OPEN_AUTH = openAuthPage;
   window.HANDRAW_MAIN_GLOBAL_SEARCH = (q) => {
-    UI.assetQuery = q;
-    UI.workQuery = q;
-    if (!["styles", "layouts", "works"].includes(App.view)) {
-      App.view = "styles";
-      syncUrl(true);
-    }
-    renderMain();
+    window.location.href='/search/?'+new URLSearchParams({q,channel:'all'});
   };
 
   function openCreatorCard(username) {
@@ -940,6 +934,8 @@
         <div class="hw-controls-row">
           <div class="hw-controls-left">
             <input type="search" class="hw-input" id="catalog-search" style="width:248px;" value="${esc(UI.assetQuery)}" placeholder="过滤编号（如 ${isStyle ? "FA-001 / USR-S05 / FX-001" : "SC-021 / USR-L04 / LX-001"}）或作者…" />
+            <button type="button" class="btn btn-sm hw-fulltext-button" id="catalog-fulltext">频道全文搜索</button>
+            <button type="button" class="btn btn-sm hw-fulltext-button" id="catalog-fulltext-all">搜索全站</button>
             <select class="hw-select" id="catalog-sort">
               <option value="recommended" ${UI.assetSort === "recommended" ? "selected" : ""}>🔥 热门（被作品采用最多）</option>
               <option value="newest" ${UI.assetSort === "newest" ? "selected" : ""}>🌱 最新入库优先</option>
@@ -1022,6 +1018,20 @@
     });
 
     const searchInput = root.querySelector("#catalog-search");
+    const openCatalogFulltext = (ch) => {
+      const p = new URLSearchParams({ channel: ch });
+      const q = searchInput.value.trim();
+      if (q) p.set("q", q);
+      location.href = "/search/?" + p.toString();
+    };
+    root.querySelector("#catalog-fulltext").onclick = () => openCatalogFulltext(isStyle ? "styles" : "layouts");
+    root.querySelector("#catalog-fulltext-all").onclick = () => openCatalogFulltext("all");
+    searchInput.addEventListener("keydown", (e) => {
+      if (e.key === "Enter" && !e.isComposing && searchInput.value.trim()) {
+        e.preventDefault();
+        openCatalogFulltext(isStyle ? "styles" : "layouts");
+      }
+    });
     let catalogSearchTimer = null;
     let catalogComposing = false;
     const scheduleCatalogSearch = () => {
@@ -1422,6 +1432,33 @@
     };
 
     const search = root.querySelector("#hw-wb-search");
+    if (search) {
+      const goWorkFulltext = (ch) => {
+        const p = new URLSearchParams({ channel: ch });
+        const q = search.value.trim();
+        if (q) p.set("q", q);
+        location.assign("/search/?" + p.toString());
+      };
+      const button = document.createElement("button");
+      button.type = "button";
+      button.className = "btn btn-sm hw-fulltext-button";
+      button.id = "hw-wb-fulltext";
+      button.textContent = "作品全文搜索";
+      button.onclick = () => goWorkFulltext("works");
+      const allButton = document.createElement("button");
+      allButton.type = "button";
+      allButton.className = "btn btn-sm hw-fulltext-button";
+      allButton.id = "hw-wb-fulltext-all";
+      allButton.textContent = "搜索全站";
+      allButton.onclick = () => goWorkFulltext("all");
+      search.parentElement.after(button, allButton);
+      search.addEventListener("keydown", (e) => {
+        if (e.key === "Enter" && !e.isComposing && search.value.trim()) {
+          e.preventDefault();
+          goWorkFulltext("works");
+        }
+      });
+    }
     if (search) {
       let timer = null;
       let composing = false;

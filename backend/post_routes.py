@@ -201,6 +201,10 @@ def _handle_t_redirect(handler: Any, ref: str, qs: dict[str, list[str]] | None =
         focus_vals = qs.get("focus") or []
         if focus_vals and focus_vals[0] == "comment":
             extra["focus"] = "comment"
+    if qs and qs.get("reply"):
+        reply_val = str((qs.get("reply") or [""])[0]).strip()
+        if reply_val and re.fullmatch(r"[A-Za-z0-9_.-]{1,80}", reply_val):
+            extra["reply"] = reply_val
     if qs and qs.get("panel"):
         panel_vals = qs.get("panel") or []
         if panel_vals and panel_vals[0] == "report":

@@ -1844,7 +1844,7 @@
           return;
         }
 
-        summaryHtml = (window.HandrawImages?.originalHtml(beforeWrap.innerHTML) || beforeWrap.innerHTML).trim() || cleanHtml;
+        summaryHtml = (window.HandrawImages?.originalHtml(beforeWrap.innerHTML) || beforeWrap.innerHTML).trim();
         lockedHtml = cleanHtml;
       }
 
@@ -3727,9 +3727,29 @@
       });
     }
 
-    // Check focus=comment query parameter on load
+    // Check focus=comment or reply=<id> query parameter on load
     const searchParams = new URLSearchParams(window.location.search);
-    if (searchParams.get("focus") === "comment") {
+    const targetReplyId = String(searchParams.get("reply") || "").trim();
+    if (targetReplyId) {
+      setTimeout(() => {
+        const cards = root.querySelectorAll(".forum-reply-card[data-reply-id]");
+        let targetEl = null;
+        for (const card of cards) {
+          if (card.getAttribute("data-reply-id") === targetReplyId) {
+            targetEl = card;
+            break;
+          }
+        }
+        if (targetEl) {
+          root.querySelectorAll(".forum-reply-card.is-target-reply").forEach((el) => el.classList.remove("is-target-reply"));
+          targetEl.classList.add("is-target-reply");
+          targetEl.scrollIntoView({ behavior: getScrollBehavior(), block: "center" });
+        } else {
+          const sec = root.querySelector("#topic-replies-section");
+          if (sec) sec.scrollIntoView({ behavior: getScrollBehavior(), block: "start" });
+        }
+      }, 120);
+    } else if (searchParams.get("focus") === "comment") {
       setTimeout(() => {
         const sec = root.querySelector("#topic-replies-section");
         if (sec) sec.scrollIntoView({ behavior: getScrollBehavior(), block: "start" });
@@ -4208,6 +4228,33 @@
     });
 
     const searchInput = root.querySelector("#forum-search-input");
+    if (searchInput) {
+      const goSearch = (ch) => {
+        const params = new URLSearchParams({ channel: ch });
+        const q = searchInput.value.trim();
+        if (q) params.set("q", q);
+        location.assign(new URL("/search/?" + params.toString(), S.channelUrl("main")));
+      };
+      const button = document.createElement("button");
+      button.type = "button";
+      button.className = "btn btn-sm hw-fulltext-button";
+      button.id = "forum-fulltext";
+      button.textContent = "社区全文搜索";
+      button.onclick = () => goSearch("forum");
+      const allButton = document.createElement("button");
+      allButton.type = "button";
+      allButton.className = "btn btn-sm hw-fulltext-button";
+      allButton.id = "forum-fulltext-all";
+      allButton.textContent = "搜索全站";
+      allButton.onclick = () => goSearch("all");
+      searchInput.after(button, allButton);
+      searchInput.addEventListener("keydown", (e) => {
+        if (e.key === "Enter" && !e.isComposing) {
+          e.preventDefault();
+          button.click();
+        }
+      });
+    }
     searchInput.oninput = (e) => {
       FUI.query = e.target.value;
       renderForum();
