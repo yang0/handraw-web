@@ -267,8 +267,11 @@ def account_status(db: Any, user: dict) -> dict:
 
 
 def list_notifications(db: Any, user: dict, before: int = 0) -> dict:
-    rows = db.get_conn().execute("SELECT * FROM notifications WHERE user_id=? AND (?=0 OR id<?) ORDER BY id DESC LIMIT 40", (user["id"],before,before)).fetchall()
-    unread = db.get_conn().execute("SELECT count(*) FROM notifications WHERE user_id=? AND read_at IS NULL", (user["id"],)).fetchone()[0]
+    from .forum_boards import access_sql
+    policy = f"(target_type<>'topic' OR EXISTS(SELECT 1 FROM forum_topics t WHERE t.id=notifications.target_id AND {access_sql('t.category',user)}))"
+    policy += f" AND (target_type NOT IN ('reply','forum_reply') OR EXISTS(SELECT 1 FROM forum_replies r JOIN forum_topics t ON t.id=r.topic_id WHERE r.id=notifications.target_id AND {access_sql('t.category',user)}))"
+    rows = db.get_conn().execute(f"SELECT * FROM notifications WHERE user_id=? AND {policy} AND (?=0 OR id<?) ORDER BY id DESC LIMIT 40", (user["id"],before,before)).fetchall()
+    unread = db.get_conn().execute(f"SELECT count(*) FROM notifications WHERE user_id=? AND {policy} AND read_at IS NULL", (user["id"],)).fetchone()[0]
     return {"ok":True,"items":[dict(r) for r in rows],"unread":unread,"nextBefore":rows[-1]["id"] if len(rows)==40 else 0}
 
 
@@ -283,6 +286,9 @@ def _owned_content(db: Any, user: dict, kind: str, item_id: str) -> dict:
     row = db.get_conn().execute(f"SELECT * FROM {table} WHERE id=?", (item_id,)).fetchone()
     if not row or row["status"] == "deleted":
         raise ServiceError("内容不存在",status=404)
+    if kind == "topics":
+        from .forum_boards import require_topic
+        require_topic(db.get_conn(), item_id, user)
     if row["author_username"] != user["username"]:
         raise ServiceError("只能编辑自己发布的内容",status=403)
     result = dict(row)
@@ -330,6 +336,9 @@ def edit_owned_content(db: Any, user: dict, kind: str, item_id: str, body: dict)
         raise ServiceError("标题需为 4～140 个字")
     now = utc_now_iso()
     with db.transaction() as tx:
+        if kind == "topics":
+            from .forum_boards import require_topic
+            require_topic(tx, item_id, user, write=True)
         if kind == "works":
             if "price" in body:
                 raw_price = body.get("price")
@@ -487,13 +496,14 @@ def handle_feature_get(handler: Any, req_path: str, qs: dict) -> bool:
             # Request one extra row so the client can retrieve all pages.
             return [dict(r) for r in db.execute(sql + " LIMIT ? OFFSET ?",
                                                   args + (page_size + 1, offset)).fetchall()]
+        from .forum_boards import access_sql
         resources = {
             "works": rows(
                 """SELECT id,title,status,created_at,updated_at,prompt,notes
                    FROM works WHERE author_username=? ORDER BY created_at,id""", (username,)),
             "forumTopics": rows(
-                """SELECT id,title,status,summary,locked_body,created_at,updated_at
-                   FROM forum_topics WHERE author_username=? ORDER BY created_at,id""", (username,)),
+                f"""SELECT id,title,status,summary,locked_body,created_at,updated_at
+                   FROM forum_topics WHERE author_username=? AND {access_sql(viewer=user)} ORDER BY created_at,id""", (username,)),
             "collections": rows(
                 """SELECT bucket,target_id,created_at FROM collections
                    WHERE user_id=? ORDER BY created_at,bucket,target_id""", (uid,)),
@@ -504,8 +514,8 @@ def handle_feature_get(handler: Any, req_path: str, qs: dict) -> bool:
                 """SELECT kind,reason,delta,balance_after,created_at,ref_type,ref_id
                    FROM ledgers WHERE user_id=? ORDER BY created_at,id""", (uid,)),
             "notifications": rows(
-                """SELECT kind,title,target_type,target_id,created_at,read_at
-                   FROM notifications WHERE user_id=? ORDER BY id""", (uid,)),
+                f"""SELECT kind,title,target_type,target_id,created_at,read_at
+                   FROM notifications WHERE user_id=? AND (target_type<>'topic' OR EXISTS(SELECT 1 FROM forum_topics t WHERE t.id=notifications.target_id AND {access_sql('t.category',user)})) ORDER BY id""", (uid,)),
         }
         more = {key: len(items) > page_size for key, items in resources.items()}
         data = {key: items[:page_size] for key, items in resources.items()}

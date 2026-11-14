@@ -95,7 +95,7 @@ class TestDefinitionVisibility(TestCase):
             tx.execute(
                 """
                 INSERT INTO forum_topics (id, category, category_label, title, author_username, author_name, price, summary, status, published_at_ms, created_at, updated_at)
-                VALUES ('t_free_pend', 'style', '画风', '免费待审画风帖', ?, ?, 0, '摘要', 'published', 1000, ?, ?)
+                VALUES ('t_free_pend', 'assets', '画风', '免费待审画风帖', ?, ?, 0, '摘要', 'published', 1000, ?, ?)
                 """,
                 (self.author["username"], self.author["display_name"], now, now),
             )
@@ -136,7 +136,7 @@ class TestDefinitionVisibility(TestCase):
             tx.execute(
                 """
                 INSERT INTO forum_topics (id, category, category_label, title, author_username, author_name, price, summary, status, published_at_ms, created_at, updated_at)
-                VALUES ('t_paid_pend', 'style', '画风', '付费待审画风帖', ?, ?, 0, '摘要', 'published', 1000, ?, ?)
+                VALUES ('t_paid_pend', 'assets', '画风', '付费待审画风帖', ?, ?, 0, '摘要', 'published', 1000, ?, ?)
                 """,
                 (self.author["username"], self.author["display_name"], now, now),
             )
@@ -185,7 +185,7 @@ class TestDefinitionVisibility(TestCase):
             tx.execute(
                 """
                 INSERT INTO forum_topics (id, category, category_label, title, author_username, author_name, price, summary, status, published_at_ms, created_at, updated_at)
-                VALUES ('t_paid_pub', 'style', '画风', '付费已收录帖', ?, ?, 0, '摘要', 'published', 1000, ?, ?)
+                VALUES ('t_paid_pub', 'assets', '画风', '付费已收录帖', ?, ?, 0, '摘要', 'published', 1000, ?, ?)
                 """,
                 (self.author["username"], self.author["display_name"], now, now),
             )

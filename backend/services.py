@@ -16,6 +16,7 @@ from pathlib import Path
 from typing import Any
 
 from .postgres_db import PgConnection
+from .forum_boards import access_sql as forum_access_sql, require_topic as require_forum_topic, require_board as require_forum_board, list_boards as visible_forum_boards
 
 logger = logging.getLogger("backend.services")
 
@@ -2043,7 +2044,7 @@ def build_boot_payload(db: Database, current_user: dict[str, Any] | None, *, sur
         from .resource_discussions import topic_visibility_sql
         topic_filter, topic_ids = _seed_filter("id", "topics")
         reply_seed_filter, reply_seed_ids = _seed_filter("r.id", "forum_replies")
-        topic_vis_filter = topic_visibility_sql(reply_filter=reply_seed_filter, admin=False)
+        topic_vis_filter = topic_visibility_sql(reply_filter=reply_seed_filter, admin=False, viewer=current_user)
         topic_rows = conn.execute(
             f"SELECT * FROM forum_topics WHERE status = 'published' AND {topic_filter} AND {topic_vis_filter} ORDER BY pinned DESC, COALESCE(listed_at_ms, published_at_ms) DESC, id DESC",
             (*topic_ids, *reply_seed_ids),
@@ -2188,7 +2189,7 @@ def build_boot_payload(db: Database, current_user: dict[str, Any] | None, *, sur
                u.display_name, u.role
         FROM forum_moderators fm
         JOIN users u ON u.id = fm.user_id
-        WHERE u.status = 'active' AND {moderator_seed_clause}
+        WHERE u.status = 'active' AND {moderator_seed_clause} AND (fm.category='all' OR {forum_access_sql('fm.category', current_user)})
         ORDER BY CASE fm.category WHEN 'all' THEN 0 ELSE 1 END, fm.id ASC
         """,
         moderator_seed_params,
@@ -2349,7 +2350,7 @@ def build_boot_payload(db: Database, current_user: dict[str, Any] | None, *, sur
             if r["username"] in visible_avatar_users
         },
         "topics": topics_out,
-        "forumBoards": FORUM_BOARDS,
+        "forumBoards": visible_forum_boards(conn, current_user),
         "forumModerators": forum_moderators,
         "exclusiveResources": exclusive_resources,
         "communityResources": community_resources,
@@ -2385,6 +2386,14 @@ def build_boot_payload(db: Database, current_user: dict[str, Any] | None, *, sur
             grouped.setdefault(item['topicId'],[]).append(item)
         for topic in payload['topics']:
             topic['submissions']=grouped.get(topic['id'],[])
+    # Persisted collections and entitlements remain in the ledger, but revoked
+    # forum permissions must not continue exposing their navigation receipts.
+    candidates = set(payload["collections"].get("topics",[])) | set(payload.get("unlockedIds",[]))
+    if candidates:
+        ph = ",".join("?" for _ in candidates)
+        forbidden = {str(r["id"]) for r in conn.execute(f"SELECT id FROM forum_topics WHERE id IN ({ph}) AND NOT ({forum_access_sql(viewer=current_user)})", tuple(candidates)).fetchall()}
+        payload["collections"]["topics"] = [tid for tid in payload["collections"].get("topics",[]) if tid not in forbidden]
+        payload["unlockedIds"] = [tid for tid in payload.get("unlockedIds",[]) if tid not in forbidden]
     payload["billing"] = get_public_billing_summary()
     if current_user:
         payload['user']['reviewAccess']=review_access(db,current_user)
@@ -2641,6 +2650,10 @@ def toggle_user_collection(
             raise ServiceError("未找到目标内容", status=404)
         tid = resource_entry["code"]
 
+    forum_tid = tid if bucket == "topics" else None
+    if forum_tid:
+        require_forum_topic(db.get_conn(), forum_tid, user)
+
     # Favouriting a work's discussion topic means favouriting the work, so the
     # square and the forum cannot report different favourite counts.
     if bucket == "topics":
@@ -2663,6 +2676,8 @@ def toggle_user_collection(
         tid = _generation_work_id(db.get_conn(), tid)
 
     with db.transaction() as tx:
+        if forum_tid:
+            require_forum_topic(tx, forum_tid, user, write=True)
         bal = _lock_social_wallet(tx, uid)
         existing = tx.execute(
             "SELECT 1 FROM collections WHERE user_id = ? AND bucket = ? AND target_id = ?",
@@ -3096,7 +3111,9 @@ def toggle_user_like(
     # A work's discussion topic is a view of the work, not a second object.
     # Liking it must record against the work so the square and the forum show
     # the same number.
-    if norm_type == "topic":
+    forum_tid = tid if norm_type == "topic" else None
+    if forum_tid:
+        require_forum_topic(db.get_conn(), forum_tid, user)
         primary = db.get_conn().execute(
             "SELECT target_id FROM curation_resource_topics WHERE kind = 'work' AND topic_id = ?",
             (tid,),
@@ -3107,6 +3124,8 @@ def toggle_user_like(
             itype = "like_work"
 
     with db.transaction() as tx:
+        if forum_tid:
+            require_forum_topic(tx, forum_tid, user, write=True)
         bal = _lock_social_wallet(tx, uid)
         if norm_type == "work":
             w_row = tx.execute("SELECT title, author_username, run_id, status FROM works WHERE id = ?", (tid,)).fetchone()
@@ -3320,6 +3339,8 @@ def send_encourage_tip(
     clean_req_id = str(request_id or "").strip() or None
 
     with db.transaction() as tx:
+        if raw_type == "topic":
+            require_forum_topic(tx, tid, user, write=True)
         viewer_balance = _lock_social_wallet(tx, uid)
         # Resolve binding if target is topic
         if raw_type == "topic":
@@ -3606,6 +3627,7 @@ def unlock_paid_item(db: Database, user: dict[str, Any], target_type: str, targe
             (tid,),
         ).fetchone()
         if resource_topic:
+            require_forum_topic(tx, tid, user, write=True)
             if resource_topic["kind"] == "work":
                 raise ServiceError("作品无需付费解锁", status=400, code="work_not_unlockable")
             if resource_topic["status"] != "published":
@@ -3625,6 +3647,7 @@ def unlock_paid_item(db: Database, user: dict[str, Any], target_type: str, targe
         a_row = tx.execute("SELECT * FROM catalog_assets WHERE code = ?", (tid.upper(),)).fetchone() if not t_row else None
 
         if t_row:
+            require_forum_topic(tx, tid, user, write=True)
             resolved_type = "topic"
             if t_row["status"]!="published":
                 raise ServiceError("内容已下架，不能解锁",status=409)
@@ -3791,15 +3814,8 @@ def validate_topic_title(title: Any) -> str:
 
 def publish_forum_topic_post(db: Database, user: dict[str, Any], body: dict[str, Any]) -> dict[str, Any]:
     cat = str(body.get("category") or "experience")
-    cat_map = {
-        "tuning": "🎯 作品求调优 / 悬赏",
-        "experience": "📘 实战经验与变现",
-        "assets": "🎨 画风与图型专区",
-        "tools": "🛠️ 工具流与问答",
-    }
-    if cat not in cat_map:
-        cat = "experience"
-
+    if cat == "showcase":
+        raise ServiceError("作品讨论请从作品详情页发起评论")
     title = validate_topic_title(body.get("title"))[:140]
     raw_body = str(body.get("body") or body.get("bodyHtml") or body.get("lockedBody") or body.get("summary") or "附上我的实战配置与思考，欢迎交流！").strip()[:60000]
     clean_body = sanitize_rich_html(raw_body, max_chars=60000)
@@ -3897,6 +3913,7 @@ def publish_forum_topic_post(db: Database, user: dict[str, Any], body: dict[str,
     locked_body = sanitize_rich_html(locked_raw, max_chars=60000) if locked_raw else ""
 
     with db.transaction() as tx:
+        board = require_forum_board(tx, cat, user, write=True)
         settings = get_site_settings(tx)
         topic_reward = int(settings.get("economy", {}).get("topic_publish_credits", 0))
 
@@ -3953,7 +3970,7 @@ def publish_forum_topic_post(db: Database, user: dict[str, Any], body: dict[str,
             (
                 tid,
                 cat,
-                cat_map[cat],
+                board["label"],
                 title,
                 user["username"],
                 user["display_name"],
@@ -4029,6 +4046,7 @@ def publish_forum_reply_post(
 def accept_forum_bounty_reply(db: Database, user: dict[str, Any], topic_id: str, reply_id: str) -> dict[str, Any]:
     now_iso = utc_now_iso()
     with db.transaction() as tx:
+        require_forum_topic(tx, topic_id, user, write=True)
         tp = tx.execute("SELECT * FROM forum_topics WHERE id = ?", (topic_id,)).fetchone()
         if not tp:
             raise ServiceError("帖子不存在", status=404)
@@ -4087,6 +4105,7 @@ def forum_moderator_action(db: Database, user: dict[str, Any] | None, body: dict
     now_iso = utc_now_iso()
 
     with db.transaction() as tx:
+        require_forum_topic(tx, topic_id, user, write=True)
         tp = tx.execute("SELECT * FROM forum_topics WHERE id = ?", (topic_id,)).fetchone()
         if not tp:
             raise ServiceError("目标帖子不存在", status=404)
@@ -4144,17 +4163,16 @@ def forum_moderator_action(db: Database, user: dict[str, Any] | None, body: dict
             tx.execute("UPDATE forum_topics SET featured = 0, updated_at = ? WHERE id = ?", (now_iso, topic_id))
         elif action == "move":
             target_cat = str(body.get("targetCategory") or "").strip()
-            valid_cats = {
-                "tuning": "🎯 作品求调优 / 悬赏",
-                "experience": "📘 实战经验与变现",
-                "assets": "🎨 画风与图型专区",
-                "tools": "🛠️ 工具流与问答",
-            }
-            if target_cat not in valid_cats:
-                raise ServiceError("目标板块无效")
+            if target_cat == "showcase":
+                raise ServiceError("作品讨论版仅接受作品关联的讨论")
+            target_board = require_forum_board(tx, target_cat, user, write=True)
+            # Moving a private discussion into public would publish its entire history.
+            source_board = require_forum_board(tx, tp["category"], user, write=True)
+            if source_board["visibility"] != target_board["visibility"]:
+                raise ServiceError("不能跨公开与私密论坛移动帖子，请保留原帖的访问范围", status=409)
             tx.execute(
                 "UPDATE forum_topics SET category = ?, category_label = ?, updated_at = ? WHERE id = ?",
-                (target_cat, valid_cats[target_cat], now_iso, topic_id),
+                (target_cat, target_board["label"], now_iso, topic_id),
             )
         elif action == "hide":
             author_u = tx.execute("SELECT role FROM users WHERE username = ?", (tp["author_username"],)).fetchone()
@@ -4252,6 +4270,7 @@ def submit_abuse_report(db: Database, user: dict[str, Any], body: dict[str, Any]
             if r:
                 target_title = r["title"]
         elif target_type == "topic":
+            require_forum_topic(tx, target_id, user, write=True)
             r = tx.execute("SELECT title FROM forum_topics WHERE id = ?", (target_id,)).fetchone()
             if r:
                 target_title = r["title"]

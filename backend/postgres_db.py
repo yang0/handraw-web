@@ -281,6 +281,9 @@ class PostgresDatabase:
             cursor.execute("SELECT EXISTS(SELECT 1 FROM schema_migrations WHERE version=121)")
             if not cursor.fetchone()[0]:
                 raise RuntimeError("Apply backend/postgres_121_reward_promotions.sql before starting")
+            cursor.execute("SELECT EXISTS(SELECT 1 FROM schema_migrations WHERE version=122)")
+            if not cursor.fetchone()[0]:
+                raise RuntimeError("Apply backend/postgres_122_forum_boards.sql before starting")
         return []
 
     def close_thread_conn(self):

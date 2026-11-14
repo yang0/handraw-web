@@ -1,6 +1,8 @@
 """Works feed service: public work admission, keyset & frozen-session pagination, and media dimensions."""
 from __future__ import annotations
 
+from .forum_boards import access_sql as forum_access_sql
+
 import base64
 import json
 import logging
@@ -168,6 +170,7 @@ def _load_feed_comments(conn: PgConnection, work_ids: list[str]) -> dict[str, li
             JOIN curation_resource_topics crt ON crt.topic_id = fr.topic_id AND crt.kind = 'work'
             WHERE crt.target_id IN ({placeholders})
               AND fr.status = 'published' AND {reply_filter}
+              AND EXISTS(SELECT 1 FROM forum_topics ft WHERE ft.id=fr.topic_id AND {forum_access_sql('ft.category')})
             ORDER BY fr.created_at ASC, fr.id ASC""",
         (*work_ids, *reply_ids),
     ).fetchall():
@@ -508,6 +511,7 @@ def get_work_by_id(
         FROM forum_replies fr
         JOIN curation_resource_topics crt ON crt.topic_id = fr.topic_id AND crt.kind = 'work'
         WHERE crt.target_id = ? AND fr.status = 'published' AND {reply_filter}
+          AND EXISTS(SELECT 1 FROM forum_topics ft WHERE ft.id=fr.topic_id AND {forum_access_sql('ft.category')})
         ORDER BY fr.created_at ASC, fr.id ASC
         """,
         (wid, *reply_ids),

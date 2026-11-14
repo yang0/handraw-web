@@ -286,6 +286,9 @@ def _context(db, user, kind, target):
     mapping = _mapping(db,kind,target)
     sub = _submission(db,kind,target)
     topic = _topic(conn,mapping['topic_id']) if mapping else None
+    if topic:
+        from .forum_boards import require_topic
+        require_topic(conn, topic["id"], user)
     raw = RD.resolve_resource(conn,kind,target)
     published = raw is not None
     if published:
@@ -384,7 +387,7 @@ def _asset_card(conn,kind,code,usage):
             'usageCount':usage,'publishedAtMs':int(raw.get('published_at_ms') or raw.get('publishedAtMs') or 0)}
 
 
-def _related_page(db,kind,target,resource,mapping,tab,q,sort,offset,limit):
+def _related_page(db,kind,target,resource,mapping,tab,q,sort,offset,limit,user=None):
     conn=db.get_conn()
     if tab=='works':
         sf,sp=S._seed_filter('w.id','works')
@@ -393,7 +396,8 @@ def _related_page(db,kind,target,resource,mapping,tab,q,sort,offset,limit):
     if tab=='topics':
         sf,sp=S._seed_filter('t.id','topics')
         match=_membership('t') if kind=='style' else ('t.layout_code=?' if kind=='layout' else 't.work_id=?')
-        where=f"t.status='published' AND {sf} AND {match}"
+        from .forum_boards import access_sql
+        where=f"t.status='published' AND {sf} AND {match} AND {access_sql('t.category', user)}"
         args=list(sp)+[target]
         if mapping:
             where+=' AND t.id<>?';args.append(mapping['topic_id'])
@@ -429,7 +433,7 @@ def resource_detail(db,user,kind,target):
     relations=[]
     if published:
         for tab in tabs:
-            items,total=_related_page(db,kind,target,resource,mapping,tab,'','newest',0,4)
+            items,total=_related_page(db,kind,target,resource,mapping,tab,'','newest',0,4,user)
             if total:
                 relations.append({'tab':tab,'label':{'works':'关联作品','styles':'使用的画风' if kind=='work' else '搭配画风','layouts':'使用的图型' if kind=='work' else '搭配图型','topics':'相关讨论'}[tab],'total':total,'items':items})
     return {'ok':True,'resource':resource,'thread':thread,'curation':_curation_block(db,db.get_conn(),sub,published),

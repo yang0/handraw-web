@@ -14,6 +14,7 @@ from pathlib import Path
 from typing import Any
 
 from .postgres_db import PgConnection
+from .forum_boards import access_sql as forum_access_sql, list_boards as visible_forum_boards, require_topic as require_forum_topic
 
 from .config import (
     CONTENT_DIR,
@@ -102,7 +103,7 @@ def get_management_profile(conn: PgConnection, user: dict[str, Any] | None) -> d
         SELECT fm.category, fm.title, fm.note
         FROM forum_moderators fm
         JOIN users u ON u.id = fm.user_id
-        WHERE fm.user_id = ? AND {moderator_user_filter}
+        WHERE fm.user_id = ? AND {moderator_user_filter} AND (fm.category='all' OR {forum_access_sql('fm.category', user)})
         ORDER BY CASE fm.category WHEN 'all' THEN 0 ELSE 1 END, fm.id ASC
         """,
         (int(user["id"]), *moderator_user_params),
@@ -212,9 +213,10 @@ def admin_get_moderator_console(db: Database, user: dict[str, Any] | None, board
         raise ServiceError("权限不足：当前账号未被任命为任何板块版主", status=403, code="not_moderator")
 
     if prof["effectiveRole"] in ("admin", "operator", "reviewer") or "all" in prof["moderatedBoards"]:
-        allowed_cats = ["tuning", "experience", "assets", "tools"]
+        allowed_cats = [b["key"] for b in visible_forum_boards(conn, user)]
     else:
-        allowed_cats = [c for c in prof["moderatedBoards"] if c in ("tuning", "experience", "assets", "tools")]
+        visible_cats = {b["key"] for b in visible_forum_boards(conn, user)}
+        allowed_cats = [c for c in prof["moderatedBoards"] if c in visible_cats]
 
     if not allowed_cats:
         raise ServiceError("当前未分配有效管辖板块", status=403, code="not_moderator")
@@ -225,6 +227,8 @@ def admin_get_moderator_console(db: Database, user: dict[str, Any] | None, board
 
     from .resource_discussions import topic_visibility_sql
     f_vis = topic_visibility_sql(reply_filter="1=1", admin=True)
+    if not user or user.get("role") != "admin":
+        f_vis += " AND " + forum_access_sql(viewer=user)
     topic_seed_filter, topic_seed_params = _seed_filter("id", "topics")
     topic_rows = conn.execute(
         f"SELECT * FROM forum_topics WHERE category IN ({placeholders}) AND {f_vis} AND {topic_seed_filter} ORDER BY pinned DESC, COALESCE(listed_at_ms, published_at_ms) DESC, id DESC",
@@ -341,7 +345,7 @@ def admin_get_moderator_console(db: Database, user: dict[str, Any] | None, board
             f"""
             SELECT fm.*, u.display_name FROM forum_moderators fm
             JOIN users u ON u.id = fm.user_id
-            WHERE u.status = 'active' AND {moderator_user_filter}
+            WHERE u.status = 'active' AND {moderator_user_filter} AND (fm.category='all' OR {forum_access_sql('fm.category', user)})
             ORDER BY CASE fm.category WHEN 'all' THEN 0 ELSE 1 END, fm.id ASC
             """,
             moderator_user_params,
@@ -349,7 +353,7 @@ def admin_get_moderator_console(db: Database, user: dict[str, Any] | None, board
         if mr["category"] == "all" or mr["category"] in allowed_cats
     ]
 
-    boards_info = [{"id": b["key"], **b} for b in FORUM_BOARDS if b["key"] in allowed_cats]
+    boards_info = [{"id": b["key"], **b} for b in visible_forum_boards(conn, user) if b["key"] in allowed_cats]
     return {
         "ok": True,
         "profile": prof,
@@ -557,6 +561,8 @@ def admin_get_dashboard(db: Database, user: dict[str, Any] | None) -> dict[str, 
     # Forum & Bounties
     from .resource_discussions import topic_visibility_sql
     f_vis = topic_visibility_sql(reply_filter="1=1", admin=True)
+    if not user or user.get("role") != "admin":
+        f_vis += " AND " + forum_access_sql(viewer=user)
     topics_total = int(conn.execute(f"SELECT COUNT(*) FROM forum_topics WHERE {f_vis} AND {topic_seed_filter}", topic_seed_params).fetchone()[0])
     topics_published = int(conn.execute(f"SELECT COUNT(*) FROM forum_topics WHERE status = 'published' AND {f_vis} AND {topic_seed_filter}", topic_seed_params).fetchone()[0])
     bounty_row = conn.execute(
@@ -1060,7 +1066,7 @@ def admin_list_comments(
     forum_reply_filter, forum_reply_params = _seed_filter("fr.id", "forum_replies")
     forum_topic_filter, forum_topic_params = _seed_filter("fr.topic_id", "topics")
     for r in conn.execute(
-        f"SELECT fr.*, ft.title AS parent_title, m.kind AS resource_kind, m.target_id AS resource_target FROM forum_replies fr LEFT JOIN forum_topics ft ON ft.id = fr.topic_id LEFT JOIN curation_resource_topics m ON m.topic_id = fr.topic_id WHERE {forum_reply_filter} AND {forum_topic_filter} ORDER BY fr.created_at DESC LIMIT ?",
+        f"SELECT fr.*, ft.title AS parent_title, m.kind AS resource_kind, m.target_id AS resource_target FROM forum_replies fr LEFT JOIN forum_topics ft ON ft.id = fr.topic_id LEFT JOIN curation_resource_topics m ON m.topic_id = fr.topic_id WHERE {forum_reply_filter} AND {forum_topic_filter} AND {('TRUE' if user.get('role') == 'admin' else forum_access_sql('ft.category', user))} ORDER BY fr.created_at DESC LIMIT ?",
         (*forum_reply_params, *forum_topic_params, max(1, min(500, int(limit)))),
     ).fetchall():
         if status and status != "all" and r["status"] != status:
@@ -1212,6 +1218,9 @@ def admin_moderate_comment(
             # hide or delete: considered already completed (idempotent), keep old row unchanged
             return {"ok": True, "id": cid, "action": act}
 
+        if resolved_type == "forum_reply" and m_row and not is_admin:
+            require_forum_topic(tx, m_row["topic_id"], user, write=True)
+
         if resolved_type == "forum_reply" and m_row:
             table = "forum_replies"
             ctype = "forum_reply"
@@ -1230,6 +1239,9 @@ def admin_moderate_comment(
                         break
         if not row:
             raise ServiceError("评论或回复不存在", status=404)
+
+        if table == "forum_replies" and not is_admin:
+            require_forum_topic(tx, row["topic_id"], user, write=True)
 
         _admin_reject_seed_value(target_cid, "work_comments" if ctype == "work_comment" else ("forum_replies" if ctype == "forum_reply" else "asset_comments"), "评论")
         parent_kind = "works" if ctype == "work_comment" else ("topics" if ctype == "forum_reply" else "assets")
@@ -2100,6 +2112,8 @@ def admin_list_topics(
     topic_seed_filter, topic_seed_params = _seed_filter("id", "topics")
     from .resource_discussions import topic_visibility_sql
     f_vis = topic_visibility_sql(reply_filter="1=1", admin=True)
+    if not user or user.get("role") != "admin":
+        f_vis += " AND " + forum_access_sql(viewer=user)
     sql = f"SELECT * FROM forum_topics WHERE {f_vis} AND {topic_seed_filter}"
     params: list[Any] = list(topic_seed_params)
     if status and status != "all":
@@ -2190,6 +2204,8 @@ def admin_moderate_topic(
     with db.transaction() as tx:
         settings = get_site_settings(tx)
         _admin_reject_seed_value(tid, "topics", "帖子")
+        if not is_admin:
+            require_forum_topic(tx, tid, user, write=True)
         t = tx.execute("SELECT * FROM forum_topics WHERE id = ?", (tid,)).fetchone()
         if not t:
             raise ServiceError(f"帖子不存在：{tid}", status=404)
@@ -2241,7 +2257,17 @@ def admin_moderate_topic(
             )
         elif act == "edit":
             cat = str(payload.get("category") or t["category"]).strip()
-            cat_label = FORUM_CATEGORY_LABELS.get(cat, t["category_label"])
+            from .forum_boards import require_board
+            if cat != t["category"]:
+                if cat == "showcase":
+                    raise ServiceError("作品讨论版仅接受作品关联的讨论")
+                target_board = require_board(tx, cat, user, write=True)
+                source_board = require_board(tx, t["category"], user, write=True)
+                if source_board["visibility"] != target_board["visibility"]:
+                    raise ServiceError("不能跨公开与私密论坛移动帖子", status=409)
+                cat_label = target_board["label"]
+            else:
+                cat_label = t["category_label"]
             title = str(payload.get("title") if payload.get("title") is not None else t["title"]).strip()
             try:
                 price = max(0, min(200, int(payload.get("price") if payload.get("price") is not None else t["price"])))
@@ -2337,7 +2363,7 @@ def admin_list_forum_moderators(db: Database, user: dict[str, Any] | None) -> di
         SELECT fm.*, u.display_name, u.role, u.status AS user_status
         FROM forum_moderators fm
         JOIN users u ON u.id = fm.user_id
-        WHERE {moderator_user_filter}
+        WHERE {moderator_user_filter} AND (fm.category='all' OR {forum_access_sql('fm.category', user)})
         ORDER BY CASE fm.category WHEN 'all' THEN 0 ELSE 1 END, fm.id ASC
         """,
         moderator_user_params,
@@ -2372,7 +2398,7 @@ def admin_list_forum_moderators(db: Database, user: dict[str, Any] | None) -> di
             _admin_user_seed_filter("username")[1],
         ).fetchall()
     ]
-    boards_meta = [{"id": b["key"], **b} for b in FORUM_BOARDS]
+    boards_meta = [{"id":"all","key":"all","label":"全区总版主","shortLabel":"全区总版"}, *visible_forum_boards(conn, user)]
     return {"items": items, "total": len(items), "boards": boards_meta, "candidates": candidates}
 
 
@@ -2385,8 +2411,8 @@ def admin_assign_forum_moderator(
     raw_uname = str(payload.get("username") or "").strip().lstrip("@").lower()
     raw_uid = payload.get("userId")
     cat = str(payload.get("category") or "all").strip().lower()
-    if cat not in ("all", "tuning", "experience", "assets", "tools"):
-        raise ServiceError("无效的论坛板块标识（可选 all / tuning / experience / assets / tools）")
+    if cat != "all" and not db.get_conn().execute("SELECT 1 FROM forum_boards WHERE key=?", (cat,)).fetchone():
+        raise ServiceError("无效的论坛板块标识")
     title = str(payload.get("title") or ("总版主" if cat == "all" else "版主")).strip()[:24] or "版主"
     note = str(payload.get("note") or "").strip()[:200]
     now_iso = utc_now_iso()
@@ -2480,6 +2506,9 @@ def admin_list_reports(db: Database, user: dict[str, Any] | None, status: str = 
     require_staff(user, allow_reviewer=True)
     conn = db.get_conn()
     sql = "SELECT * FROM reports WHERE 1=1"
+    if user.get("role") != "admin":
+        sql += f" AND (target_type<>'topic' OR EXISTS(SELECT 1 FROM forum_topics t WHERE t.id=reports.target_id AND {forum_access_sql('t.category', user)}))"
+        sql += f" AND (target_type NOT IN ('reply','forum_reply') OR EXISTS(SELECT 1 FROM forum_replies r JOIN forum_topics t ON t.id=r.topic_id WHERE r.id=reports.target_id AND {forum_access_sql('t.category', user)}))"
     params: list[Any] = []
     if status and status != "all":
         sql += " AND status = ?"

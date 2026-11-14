@@ -118,7 +118,7 @@ class Fix65SmallDesignGapsTests(unittest.TestCase):
             self.author,
             {
                 "title": "求高手指导手绘排版技巧",
-                "category": "feedback",
+                "category": "tuning",
                 "body": "请问如何调整画风与图型的搭配以达到最佳效果？",
                 "bounty": 20,
             },

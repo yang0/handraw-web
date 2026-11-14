@@ -30,6 +30,14 @@
     { key: "tools", label: "🛠️ 工具流与问答", short: "工具问答" }
   ];
 
+  function getBoardDefs(){
+    const boards=App.state?.forumBoards;
+    if(!Array.isArray(boards))return [{key:"showcase",label:"🎨 作品讨论",short:"作品讨论"},...BOARD_DEFS];
+    return boards.filter(b=>(b.key||b.id)!=='all').map(b=>({key:b.key||b.id,label:(b.visibility==='private'?'🔒 ':'')+b.label,short:b.shortLabel||b.label}));
+  }
+
+  function getPostingBoards(){return getBoardDefs().filter(b=>b.key!=="showcase");}
+
   function buildIntextMediaHtml(url, tag = "") {
     return `
       <figure class="hw-intext-media" contenteditable="false" draggable="true" data-media-url="${esc(url)}" title="按住可拖拽调整段落位置">
@@ -88,9 +96,9 @@
   }
 
   function createEmptyDraft(overrides = {}) {
-    const cat = overrides.category && BOARD_DEFS.some((b) => b.key === overrides.category)
+    const cat = overrides.category && getPostingBoards().some((b) => b.key === overrides.category)
       ? overrides.category
-      : "experience";
+      : (getPostingBoards().find(b=>b.key==="experience")?.key || getPostingBoards()[0]?.key || "");
     let bodyHtml = String(overrides.bodyHtml || overrides.body || "");
     const sharedCard = overrides.sharedCard || null;
 
@@ -254,9 +262,9 @@
   });
 
   function getValidCategories() {
-    const rawBoards = (App.state && Array.isArray(App.state.forumBoards) && App.state.forumBoards.length)
+    const rawBoards = (App.state && Array.isArray(App.state.forumBoards))
       ? App.state.forumBoards
-      : ["all", "showcase", ...BOARD_DEFS.map((b) => b.key)];
+      : ["all", "showcase", ...getBoardDefs().map((b) => b.key)];
     const keys = rawBoards
       .map((b) => (typeof b === "object" && b ? (b.key || b.id) : b))
       .filter(Boolean);
@@ -279,7 +287,7 @@
     const legacyTopic = (p.get("topic") || "").trim();
 
     if (p.get("asset")) FUI.filterAsset = p.get("asset").toUpperCase();
-    if (p.get("category") && getValidCategories().includes(p.get("category"))) {
+    if (p.get("category")) {
       FUI.category = p.get("category");
     }
     // Legacy URL param 'format' (visual/text) is ignored; format filter is deprecated.
@@ -987,7 +995,7 @@
           <div class="hw-compose-header-left">
             <button type="button" class="btn btn-sm" id="compose-back-btn">← 返回论坛</button>
             <div class="hw-compose-board-pills" id="compose-board-pills">
-              ${BOARD_DEFS.map(
+              ${getPostingBoards().map(
                 (b) => `
                   <button type="button" class="hw-compose-board-pill ${d.category === b.key ? "is-active" : ""}" data-compose-cat="${esc(b.key)}">
                     ${esc(b.label)}
@@ -1893,7 +1901,7 @@
           );
         } else {
           createdTopicId = "top_" + Date.now();
-          const bDef = BOARD_DEFS.find((x) => x.key === d.category) || BOARD_DEFS[1];
+          const bDef = getPostingBoards().find((x) => x.key === d.category) || getPostingBoards()[0];
           App.state.topics.unshift({
             id: createdTopicId,
             category: d.category,
@@ -1943,6 +1951,7 @@
   }
 
   let _activeTopicDetailGen = 0;
+  let _forumReadScope = "";
   const _socialInFlight = new Set();
   const _socialSeq = new Map();
   if (typeof window !== "undefined") {
@@ -2308,11 +2317,12 @@
       if (backBtn) backBtn.onclick = () => openForumList(true);
 
       const targetId = tid;
+      const targetGeneration = _activeTopicDetail.gen;
       Promise.all([
         S.apiJson(`/api/posts/${encodeURIComponent(targetId)}`),
         S.apiJson(`/api/posts/${encodeURIComponent(targetId)}/replies?limit=20`)
       ]).then(([postRes, repliesRes]) => {
-        if (FUI.view !== "topic" || FUI.activeTopicId !== targetId) return;
+        if (FUI.view !== "topic" || FUI.activeTopicId !== targetId || _activeTopicDetail.gen !== targetGeneration) return;
         if (!postRes || !postRes.ok || !postRes.topic) {
           _activeTopicDetail.status = "404";
           renderTopicDetailPage(root);
@@ -2325,7 +2335,7 @@
         _activeTopicDetail.nextCursor = (repliesRes && repliesRes.nextCursor) || null;
         renderTopicDetailPage(root);
       }).catch((err) => {
-        if (FUI.view !== "topic" || FUI.activeTopicId !== targetId) return;
+        if (FUI.view !== "topic" || FUI.activeTopicId !== targetId || _activeTopicDetail.gen !== targetGeneration) return;
         if (err && (err.status === 404 || String(err.message || "").includes("404") || String(err.message || "").includes("不存在") || String(err.message || "").includes("不可见"))) {
           _activeTopicDetail.status = "404";
         } else {
@@ -2399,7 +2409,7 @@
             <button type="button" class="btn btn-sm" data-mod-op="${topic.pinned ? "unpin" : "pin"}">${topic.pinned ? "取消置顶" : "📌 置顶本帖"}</button>
             <button type="button" class="btn btn-sm" data-mod-op="${topic.featured ? "unfeature" : "feature"}">${topic.featured ? "取消精华" : "🌟 设为精华"}</button>
             <select class="hw-select" id="topic-mod-move-select" style="padding:4px 8px;font-size:12px;">
-              ${BOARD_DEFS.map((b) => `<option value="${esc(b.key)}" ${b.key === topic.category ? "selected" : ""}>移至：${esc(b.short)}</option>`).join("")}
+              ${getPostingBoards().map((b) => `<option value="${esc(b.key)}" ${b.key === topic.category ? "selected" : ""}>移至：${esc(b.short)}</option>`).join("")}
             </select>
             <button type="button" class="btn btn-sm" id="topic-mod-move-btn">📂 确认移帖</button>
             <button type="button" class="btn btn-sm" data-mod-op="hide" style="color:var(--vermilion);">🙈 隐藏帖子</button>
@@ -3526,8 +3536,10 @@
         if (!_activeTopicDetail.nextCursor) return;
         loadMoreBtn.disabled = true;
         loadMoreBtn.textContent = "正在加载…";
+        const replyGeneration = _activeTopicDetail.gen;
         S.apiJson(`/api/posts/${encodeURIComponent(topic.id)}/replies?limit=20&cursor=${encodeURIComponent(_activeTopicDetail.nextCursor)}`)
           .then((res) => {
+            if (_activeTopicDetail.gen !== replyGeneration || FUI.activeTopicId !== topic.id) return;
             const newItems = (res && res.items) || [];
             _activeTopicDetail.nextCursor = (res && res.nextCursor) || null;
 
@@ -3626,12 +3638,14 @@
       const submitBtn = root.querySelector("#topic-reply-submit");
       if (submitBtn) submitBtn.disabled = true;
 
+      const replyGeneration = _activeTopicDetail.gen;
       try {
         const res = await S.apiJson(`/api/forum/topics/${encodeURIComponent(topic.id)}/replies`, {
           method: "POST",
           body: { text: txt, mountedStyle: "", mountedLayout: "" }
         });
 
+        if (_activeTopicDetail.gen !== replyGeneration || FUI.activeTopicId !== topic.id) return;
         const user = App.state.user || {};
         const newRep = {
           id: res.replyId || `rep_${Date.now()}`,
@@ -3907,6 +3921,13 @@
   function renderForum() {
     const root = document.getElementById("forum-app-root");
     if (!root || !App.state) return;
+    const readScope=JSON.stringify([App.state.loggedIn ? (App.state.user?.id||App.state.user?.username||"member") : "guest",App.state.user?.role||"",(App.state.forumBoards||[]).map(b=>[b.key||b.id,b.visibility,b.revision])]);
+    if(readScope!==_forumReadScope){
+      _forumReadScope=readScope;
+      _activeTopicDetailGen++;
+      _activeTopicDetail={id:null,gen:_activeTopicDetailGen,status:"idle",topicData:null,replies:[],pendingReplies:[],nextCursor:null,err:null};
+      invalidateFeaturedSidebar();
+    }
 
     if (FUI.view === "not_found") {
       renderNotFoundPage(root, FUI.notFoundCode);
@@ -3948,13 +3969,16 @@
       return;
     }
 
+    if(FUI.view==="list"&&!getValidCategories().includes(FUI.category)){
+      root.innerHTML=`<section class="hw-panel"><h2>论坛不存在或无访问权限</h2><p>该论坛可能已关闭，或需要管理员邀请你的账号。</p><a href="${esc(channelUrl('forum'))}">返回社区</a></section>`;
+      return;
+    }
     const allTopics = App.state.topics || [];
     const featuredSidebar = featuredSidebarTopics(allTopics, App.state.siteSettings);
 
     const cats = [
       { key: "all", label: "📋 全部社区讨论", count: allTopics.length },
-      { key: "showcase", label: "🎨 作品讨论", count: allTopics.filter((t) => t.category === "showcase").length },
-      ...BOARD_DEFS.map((b) => ({
+      ...getBoardDefs().map((b) => ({
         key: b.key,
         label: b.label,
         count: allTopics.filter((t) => t.category === b.key).length

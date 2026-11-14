@@ -255,6 +255,8 @@ def record_atomic_reply_and_listing(
     mounted_layout: str = "",
 ) -> tuple[str, int]:
     """Execute reply creation and first-time listing atomically within an existing transaction."""
+    from .forum_boards import require_topic
+    require_topic(tx, topic_id, user, write=True)
     topic = tx.execute("SELECT id, status, work_id, listed_at_ms FROM forum_topics WHERE id = ?", (topic_id,)).fetchone()
     if not topic or topic["status"] != "published":
         raise S.ServiceError("讨论已暂停", status=409)
@@ -418,7 +420,7 @@ def official_topic_ids_sql() -> str:
     )
 
 
-def topic_visibility_sql(reply_filter: str = "1=1", admin: bool = False) -> str:
+def topic_visibility_sql(reply_filter: str = "1=1", admin: bool = False, viewer=None) -> str:
     """Return SQL condition for topic visibility.
 
     Official style/layout topics are hidden from the topic list unless they have >= OFFICIAL_TOPIC_MIN_REPLIES.
@@ -450,7 +452,9 @@ def topic_visibility_sql(reply_filter: str = "1=1", admin: bool = False) -> str:
             "  OR forum_topics.listed_at_ms IS NOT NULL"
             ")"
         )
-    return f"((id NOT IN ({official_sql}) OR {reply_cond}) AND {work_cond})"
+    from .forum_boards import access_sql
+    board_cond = "TRUE" if admin else access_sql(viewer=viewer)
+    return f"((id NOT IN ({official_sql}) OR {reply_cond}) AND {work_cond} AND {board_cond})"
 
 
 def apply_boot(db, payload, current_user):
@@ -465,6 +469,9 @@ def apply_boot(db, payload, current_user):
     payload['discussions'] = {}
     for row in conn.execute('SELECT * FROM curation_resource_topics').fetchall():
         kind, target, tid, origin = row['kind'], row['target_id'], row['topic_id'], row['origin']
+        from .forum_boards import can_read_topic
+        if not can_read_topic(conn, tid, current_user):
+            continue
         norm_target = target.upper().lstrip('#') if kind in ('style', 'layout') else target
         topic = topics.get(tid)
         if not topic:

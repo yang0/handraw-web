@@ -694,7 +694,7 @@
   function normalizeSocialAndBoardState(st) {
     if (!st) return;
     st.likedIds = Array.isArray(st.likedIds) ? st.likedIds : [];
-    st.forumBoards = Array.isArray(st.forumBoards) && st.forumBoards.length
+    st.forumBoards = Array.isArray(st.forumBoards)
       ? st.forumBoards
       : [
           { id: "tuning", label: "🎯 作品求调优 / 悬赏", shortLabel: "求调优/悬赏", desc: "发实测原图求改词建议，支持积分悬赏采纳" },

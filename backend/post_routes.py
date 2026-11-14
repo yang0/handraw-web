@@ -26,6 +26,9 @@ def _is_topic_visible(conn: Any, t_row: Any, user: dict[str, Any] | None = None)
     is_staff = bool(user and user.get("role") in ("admin", "operator", "reviewer"))
     if not is_staff and t_row["status"] != "published":
         return False
+    from .forum_boards import can_read_topic
+    if not can_read_topic(conn, t_row["id"], user):
+        return False
     # Seed filter check
     tf, tp = S._seed_filter("id", "topics")
     t_valid = conn.execute(

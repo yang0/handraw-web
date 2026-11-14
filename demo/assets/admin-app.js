@@ -37,6 +37,12 @@
     { id: "tools", label: "🛠️ 好用的工具与工作流", short: "工具工作流" },
   ];
 
+  function forumBoardOptions(){
+    const source=state.data.forumBoards||state.boot?.forumBoards;
+    if(!Array.isArray(source))return FORUM_BOARD_OPTIONS;
+    return [{id:'all',label:'全区总版主',short:'全区总版'},...source.filter(b=>(b.key||b.id)!=='all').map(b=>({id:b.key||b.id,label:b.label,short:b.shortLabel||b.label}))];
+  }
+
   const state = {
     boot: null,
     user: null,
@@ -378,6 +384,7 @@
       } else if (state.subtab.governance === "moderators_list") {
         const res = await api("/api/admin/forum-moderators");
         state.data.forumModerators = res.items || [];
+        state.data.forumBoards = res.boards || [];
         state.data.moderatorCandidates = res.candidates || [];
       } else {
         const res = await api(`/api/admin/reports?status=${encodeURIComponent(state.filters.reportsStatus)}`);
@@ -1067,13 +1074,16 @@
     const showModeratorsTab = effRole() === "admin" || effRole() === "operator";
     return `
       <div class="adm-subtabs">
+        ${caps().canManageModerators ? `<button class="adm-subtab ${sub === "boards_list" ? "active" : ""}" data-subtab="governance:boards_list">论坛管理</button>` : ""}
         <button class="adm-subtab ${sub === "reports_list" ? "active" : ""}" data-subtab="governance:reports_list">🚩 举报工单裁定 ${openCnt ? `(${openCnt} 待审)` : ""}</button>
         <button class="adm-subtab ${sub === "topics_list" ? "active" : ""}" data-subtab="governance:topics_list">💬 论坛帖子${caps().canArbitrateBounty ? "与悬赏仲裁" : "安全巡检"}</button>
         ${showModeratorsTab
           ? `<button class="adm-subtab ${sub === "moderators_list" ? "active" : ""}" data-subtab="governance:moderators_list">🛡️ 论坛版主团队设置</button>`
           : ""}
       </div>
-      ${sub === "topics_list"
+      ${sub === "boards_list" && caps().canManageModerators
+        ? `<div data-forum-board-admin></div>`
+        : sub === "topics_list"
         ? renderTopicsGovernancePanel()
         : sub === "moderators_list"
         ? renderForumModeratorsPanel()
@@ -1898,7 +1908,7 @@
           <label>同步任命论坛板块版主（可选）</label>
           <select class="adm-select" id="cu-mod-board">
             <option value="">不任命论坛版主</option>
-            ${FORUM_BOARD_OPTIONS.map((b) => `<option value="${esc(b.id)}">${esc(b.label)}</option>`).join("")}
+            ${forumBoardOptions().map((b) => `<option value="${esc(b.id)}">${esc(b.label)}</option>`).join("")}
           </select>
         </div>
         <div class="adm-field">
@@ -1961,7 +1971,7 @@
         <div class="adm-field">
           <label>管辖论坛板块</label>
           <select class="adm-select" id="am-board">
-            ${FORUM_BOARD_OPTIONS.map((b) => `<option value="${esc(b.id)}">${esc(b.label)}</option>`).join("")}
+            ${forumBoardOptions().map((b) => `<option value="${esc(b.id)}">${esc(b.label)}</option>`).join("")}
           </select>
         </div>
       </div>
@@ -3103,6 +3113,8 @@
 
   function bindConsoleEvents() {
     const root = document.getElementById("admin-root");
+    const boardPanel=root.querySelector("[data-forum-board-admin]");
+    if(boardPanel)void window.HandrawForumBoardsAdmin.mount(boardPanel,api);
 
     // Sidebar navigation
     root.querySelectorAll("[data-nav-mod]").forEach((btn) => {

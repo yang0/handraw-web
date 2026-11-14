@@ -275,7 +275,7 @@ function createForumEnv(search = "") {
     ],
     forumBoards: [
       { key: "all", label: "📋 全区总版主", shortLabel: "全区总版" },
-      { key: "showcase", label: "🎨 晒作品", shortLabel: "晒作品版" },
+      { key: "showcase", label: "🎨 作品讨论", shortLabel: "作品讨论版" },
       { key: "tuning", label: "🎯 作品求调优 / 悬赏", shortLabel: "调优悬赏版" },
       { key: "experience", label: "📘 实战经验与变现", shortLabel: "实战变现版" },
       { key: "assets", label: "🎨 画风与图型专区", shortLabel: "画风图型版" },
@@ -285,6 +285,7 @@ function createForumEnv(search = "") {
   context.window.HandrawApp = App;
   S.App = App;
   S.initApp = (_name, cb) => {
+    S.testNotifyForum = cb;
     if (cb) cb();
     return Promise.resolve();
   };
@@ -342,15 +343,13 @@ function createForumEnv(search = "") {
     console.log("✓ Test 3 Passed: Standard categories (all, tuning, experience, assets, tools) still route correctly");
   }
 
-  // Test 4: Unknown category does not change default "all"
+  // Unknown/closed/private links must never silently show a different forum.
   {
     const env = createForumEnv("?category=invalid_board");
     vm.runInContext(fs.readFileSync("demo/assets/forum-app.js", "utf8"), env.context);
-    const allBtn = env.root.querySelector('[data-fcat="all"]');
-    assert.ok(allBtn && allBtn.classList.contains("is-active"), "Invalid category must fall back to 'all' as active");
-    const showcaseBtn = env.root.querySelector('[data-fcat="showcase"]');
-    assert.ok(showcaseBtn && !showcaseBtn.classList.contains("is-active"), "Showcase must not be active for invalid category");
-    console.log("✓ Test 4 Passed: Invalid category safely defaults to 'all'");
+    assert.ok(env.root.innerHTML.includes("论坛不存在或无访问权限"));
+    assert.equal(env.root.querySelector('[data-fcat="all"]'), null);
+    console.log("✓ Test 4 Passed: Unavailable forum has explicit access-denied state");
   }
 
   // Test 5: Clicking showcase button switches category and updates DOM
@@ -428,6 +427,30 @@ function createForumEnv(search = "") {
       assert.ok(!opt.textContent.includes("晒作品"), `Option "${opt.textContent}" must not contain '晒作品'`);
     }
     console.log("✓ Test 7 Passed: Moderator move dropdown does NOT contain '移至：晒作品'");
+  }
+
+  // Private detail caches and late responses are scoped to the current account.
+  for (const delayed of [false,true]) {
+    const env=createForumEnv("?view=topic&id=private_topic");
+    const st=env.shared.App.state;st.loggedIn=true;st.user={id:99,username:"member"};
+    st.forumBoards=[{key:"secret",label:"受邀论坛",visibility:"private"}];
+    let deliver;
+    const privatePost={ok:true,topic:{id:"private_topic",title:"私密标题",category:"secret",summary:"只对会员可见的正文",author:"member"},mount:{kind:"none"},viewer:{}};
+    env.shared.apiJson=path=>{
+      if(!st.loggedIn)return Promise.reject(Object.assign(new Error("不可见"),{status:404}));
+      if(path.includes('/replies'))return Promise.resolve({ok:true,items:[]});
+      return delayed ? new Promise(resolve=>deliver=resolve) : Promise.resolve(privatePost);
+    };
+    vm.runInContext(fs.readFileSync("demo/assets/forum-app.js", "utf8"),env.context);
+    await new Promise(resolve=>setTimeout(resolve,30));
+    if(!delayed)assert(env.root.innerHTML.includes("只对会员可见的正文"));
+    st.loggedIn=false;st.user=null;st.forumBoards=[];st.topics=[];
+    env.shared.testNotifyForum();
+    if(deliver)deliver(privatePost);
+    await new Promise(resolve=>setTimeout(resolve,30));
+    assert(!env.root.innerHTML.includes("只对会员可见的正文"));
+    assert(!env.root.innerHTML.includes("私密标题"));
+    console.log("✓ Private detail account fence passed; delayed="+delayed);
   }
 
   // Source-level guard: BOARD_DEFS must not contain showcase

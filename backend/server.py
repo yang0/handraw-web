@@ -954,9 +954,10 @@ def _is_published_media(db: Database, media_url: str) -> bool:
     if not target.startswith(("/uploads/", "/generated/")):
         return False
     conn = db.get_conn()
+    from .forum_boards import access_sql
     try:
         row = conn.execute(
-            """
+            f"""
             SELECT 1 FROM media_public_grants g
             WHERE g.media_url=? AND g.revoked_at IS NULL
               AND (
@@ -971,8 +972,8 @@ def _is_published_media(db: Database, media_url: str) -> bool:
                 ))
                 OR (g.target_type='topic' AND EXISTS (
                     SELECT 1 FROM forum_topics t
-                    WHERE t.id=g.target_id AND t.status='published'
-                      AND (t.work_id IS NULL OR EXISTS (
+                    WHERE t.id=g.target_id AND t.status='published' AND {access_sql('t.category')}
+                      AND (COALESCE(t.work_id,'')='' OR EXISTS (
                         SELECT 1 FROM works w
                         JOIN work_media wm ON wm.work_id=w.id
                         JOIN media_assets m ON m.id=wm.media_id
@@ -1563,6 +1564,18 @@ def _private_media_access(
         # A work can be hidden by moderation later. Never emit long-lived
         # immutable/CDN cache headers for user-generated media access grants.
         return True, "public, max-age=60, must-revalidate"
+    if user:
+        from .forum_boards import access_sql
+        allowed = db.get_conn().execute(f"""SELECT 1 FROM media_public_grants g
+            JOIN forum_topics t ON g.target_type='topic' AND g.target_id=t.id
+            WHERE g.media_url=? AND g.revoked_at IS NULL AND t.status='published'
+              AND (COALESCE(t.work_id,'')='' OR EXISTS(
+                SELECT 1 FROM works w JOIN work_media wm ON wm.work_id=w.id
+                JOIN media_assets m ON m.id=wm.media_id
+                WHERE w.id=t.work_id AND w.status='published' AND m.storage_key=g.media_url))
+              AND {access_sql('t.category', user)} LIMIT 1""", (safe,)).fetchone()
+        if allowed:
+            return True, "private, no-store"
     return False, "private, no-store"
 
 
@@ -3209,6 +3222,16 @@ class HandrawRequestHandler(BaseHTTPRequestHandler):
             self._send_json(admin_list_presets(self.db, user))
             return
 
+        if req_path == "/api/forum/boards":
+            from .forum_boards import list_boards
+            self._send_json({"ok": True, "items": list_boards(self.db.get_conn(), self._current_user(required=False))})
+            return
+
+        if req_path == "/api/admin/forum-boards":
+            from .forum_boards import admin_list
+            self._send_json(admin_list(self.db, self._current_user(required=True)))
+            return
+
         if req_path == "/api/admin/topics":
             user = self._current_user(required=True)
             self._send_json(
@@ -4329,6 +4352,21 @@ class HandrawRequestHandler(BaseHTTPRequestHandler):
         if req_path == "/api/admin/forum-moderators":
             user = self._current_user(required=True)
             self._send_json(admin_assign_forum_moderator(self.db, user, body))
+            return
+
+        if req_path == "/api/admin/forum-boards":
+            from .forum_boards import save_board
+            self._send_json(save_board(self.db, self._current_user(required=True), body))
+            return
+
+        board_route = re.fullmatch(r"/api/admin/forum-boards/([a-z0-9_-]+)(/members)?", req_path)
+        if board_route:
+            from .forum_boards import save_board, change_members
+            actor = self._current_user(required=True)
+            if board_route.group(2):
+                self._send_json(change_members(self.db, actor, board_route.group(1), body))
+            else:
+                self._send_json(save_board(self.db, actor, body, board_route.group(1)))
             return
 
         if req_path == "/api/admin/forum-moderators/revoke":

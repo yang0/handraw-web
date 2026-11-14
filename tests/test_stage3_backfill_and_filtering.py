@@ -141,7 +141,8 @@ class Stage3BackfillAndFilteringTests(unittest.TestCase):
         self.conn.execute("UPDATE forum_topics SET listed_at_ms = ? WHERE work_id = 'w_listed'", (now_ms - 2000,))
         self.conn.commit()
 
-        # Add a regular forum topic (non-work)
+        # Add a registered public forum and a regular topic (non-work).
+        self.conn.execute("INSERT INTO forum_boards(key,label) VALUES('chat','闲聊') ON CONFLICT DO NOTHING")
         now_iso = utc_now_iso()
         self.conn.execute(
             """
