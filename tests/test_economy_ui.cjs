@@ -49,3 +49,30 @@ test('specification names are escaped and money remains integer cents until pres
   const el=root();await ui.mountPicker(el);assert(!el.innerHTML.includes('<img'));assert(el.innerHTML.includes('&lt;img'));
   assert.equal(ui.yuan(1),'¥0.01');assert.equal(ui.yuan(101),'¥1.01');
 });
+
+test('wallet check-in, order verification and refund work for ordinary default-type buttons',async()=>{
+  const calls=[];
+  const state={cash:{balanceCents:1000,heldCents:0},points:0,freeQuota:[],earnings:{},cashEntries:[],pointEntries:[],unlocks:[]};
+  const ui=setup(async(path)=>{
+    calls.push(path);
+    if(path==='/api/economy')return state;
+    if(path==='/api/billing/orders')return {orders:[]};
+    if(path==='/api/boot')return {billing:{packages:[]}};
+    if(path==='/api/wallet/checkin'){state.points=1;return {bonus:1};}
+    if(path==='/api/billing/refund-requests'){state.cash={balanceCents:0,heldCents:1000};return {ok:true};}
+    return {ok:true};
+  });
+  const status={textContent:''};const el={isConnected:true,innerHTML:'',querySelector:()=>status};
+  await ui.mountWallet(el);
+  const click=async dataset=>{
+    const button={type:'submit',disabled:false,dataset,closest:()=>null,hasAttribute:name=>name==='data-checkin'&&dataset.checkin!==undefined};
+    await el.onclick({target:{closest:()=>button}});
+    assert.equal(button.disabled,false);
+  };
+  await click({checkin:''});assert(calls.includes('/api/wallet/checkin'));assert(el.innerHTML.includes('1 积分'));assert(status.textContent.includes('本次奖励 1 积分'));
+  await click({sync:'existing-order'});assert(calls.includes('/api/billing/orders/existing-order/sync'));
+  await click({refund:'paid-order'});assert(calls.includes('/api/billing/refund-requests'));assert(el.innerHTML.includes('冻结中 ¥10.00'));assert(status.textContent.includes('退款申请已提交'));
+  const before=calls.length;
+  await el.onclick({target:{closest:()=>({type:'submit',closest:()=>({}),disabled:false})}});
+  assert.equal(calls.length,before,'custom purchase form submits through its own handler only');
+});
