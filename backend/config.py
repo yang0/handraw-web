@@ -405,6 +405,7 @@ def get_public_billing_summary(cfg: dict[str, Any] | None = None) -> dict[str, A
     return {
         "enabled": True,
         "provider": resolved["provider"],
+        "customPurchases": resolved["provider"] == "xorpay" and resolved["currency"] == "CNY",
         "testMode": bool(resolved["test_mode"]),
         "currency": resolved["currency"],
         "payType": str(resolved.get("pay_type") or "alipay"),
