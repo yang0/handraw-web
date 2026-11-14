@@ -19,7 +19,7 @@
 
 ## 接口与账务
 
-`GET /api/economy` 返回人民币可用/冻结、社区积分、按规格免费额度、作者收益和各自明细。`POST /api/studio/quote` 接收 `items`，返回 `quoteId`、各项规格快照、免费数量、`totalCents`和过期时间。所有入口先报价确认，再携带 `quoteId` / `quoteIndex` 提交。画布使用 `maxAmountCents`，不再用 `maxCredits` 指代资金。
+`GET /api/economy` 返回人民币可用/冻结、社区积分、按规格免费额度、作者收益和各自明细。`/?view=wallet` 专注资产余额、充值/买分与收支流水；购买订单拆分至独立订单记录页（`/?view=orders` 与 `/orders`），通过 `GET /api/billing/orders`（支持 `status`、`purpose`、`page`、`limit` 筛选与分页及订单可退本金/退款申请状态，响应带 `Cache-Control: no-store`）展示与操作（#263）。`POST /api/studio/quote` 接收 `items`，返回 `quoteId`、各项规格快照、免费数量、`totalCents`和过期时间。所有入口先报价确认，再携带 `quoteId` / `quoteIndex` 提交。画布使用 `maxAmountCents`，不再用 `maxCredits` 指代资金。
 
 `GET/POST /api/admin/economy` 管理规格、全员额度预览/确认、赠送与撤回、积分价格档位，返回现金/积分流水及冻结额对账报告。优质作品/教程奖励使用 `/api/admin/economy/reward`。支付冲回形成欠款时，后续收入先抵欠，只有实际可用部分进入来源批次或未消费充值本金；已受理的冻结任务仍正常结算/释放。积分来源对账同时比较批次可用量与钱包非负可用余额。所有管理操作记录操作人及原因审计。人民币和积分流水禁止更新/删除，冲回通过关联追加流水完成。
 

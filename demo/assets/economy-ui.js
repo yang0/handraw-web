@@ -15,6 +15,45 @@
   };
   let chosenSpec="standard-1k",availableSpecs=[];
   const pickerLoads=new WeakMap();
+  const mountLoads=new WeakMap();
+  const viewUrl=view=>global.HANDRAW_SHARED?.channelUrl?global.HANDRAW_SHARED.channelUrl('main',{view}):`/?view=${encodeURIComponent(view)}`;
+  const goView=(event,view)=>{
+    if(event&&!event.metaKey&&!event.ctrlKey&&!event.shiftKey&&!event.altKey&&(!('button' in event)||event.button===0)&&global.HANDRAW_MAIN_SWITCH_VIEW){
+      event.preventDefault();
+      global.HANDRAW_MAIN_SWITCH_VIEW(view);
+      return true;
+    }
+    return false;
+  };
+  const syncSharedEconomy=(state,boot=null)=>{
+    const shared=global.HANDRAW_SHARED;
+    if(!shared?.App?.state||!state)return;
+    shared.syncWalletCredits?.(state.points);
+    if(boot)shared.App.state.dailyCheckedIn=Boolean(boot.state?.dailyCheckedIn??boot.dailyCheckedIn);
+    const basic=state.freeQuota?.find?.(q=>q.resolution==='1k');
+    if(basic){shared.App.state.freeQuotaRemaining=basic.remaining;shared.App.state.freeQuotaMax=basic.total;}
+    shared.renderChrome?.();
+  };
+  const formatOrderTime=raw=>{
+    const text=String(raw||'').trim();
+    if(!text)return '';
+    if(typeof Date==='function'){
+      const ts=Date.parse(text.includes('T')?text:text.replace(' ','T'));
+      if(!Number.isNaN(ts)){
+        const d=new Date(ts),pad=n=>String(n).padStart(2,'0');
+        return `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
+      }
+    }
+    return text;
+  };
+  const unmount=root=>{
+    if(!root)return;
+    mountLoads.delete(root);
+    root.onclick=null;
+    root.onchange=null;
+    root.oninput=null;
+    root.onsubmit=null;
+  };
   function picker(specs){return `<label>图片规格 <select data-economy-spec>${specs.filter(s=>s.enabled&&s.verified).map(s=>`<option value="${esc(s.id)}" ${s.id===chosenSpec?"selected":""}>${esc(s.name)} · ${s.priceCents==null?"付费价格未配置":yuan(s.priceCents)+"/张"}</option>`).join("")}</select></label>`;}
   function confirmDialog(quote){
     return new Promise(resolve=>{
@@ -44,20 +83,14 @@
     }catch(e){if(root.isConnected&&pickerLoads.get(root)===load){availableSpecs=[];root.textContent=e.message;}}
   }
   async function mountWallet(root){
+    const load=Symbol();
+    mountLoads.set(root,load);
+    root.onchange=null;
     root.innerHTML='<p role="status">正在读取余额与权益…</p>';
     try{
-      const state=await api('/api/economy');
-      const orders=await api('/api/billing/orders');
-      const boot=await api('/api/boot');
-      if(!root.isConnected)return;
-      const shared=global.HANDRAW_SHARED;
-      if(shared?.App?.state){
-        shared.syncWalletCredits?.(state.points);
-        shared.App.state.dailyCheckedIn=Boolean(boot.state?.dailyCheckedIn??boot.dailyCheckedIn);
-        const basic=state.freeQuota.find(q=>q.resolution==='1k');
-        if(basic){shared.App.state.freeQuotaRemaining=basic.remaining;shared.App.state.freeQuotaMax=basic.total;}
-        shared.renderChrome?.();
-      }
+      const [state,boot]=await Promise.all([api('/api/economy'),api('/api/boot')]);
+      if(!root.isConnected||mountLoads.get(root)!==load)return;
+      syncSharedEconomy(state,boot);
       const billing=boot.state?.billing||boot.billing||{};
       const packs=billing.packages||[];
       const purchaseRows=['cash','points'].map(purpose=>{
@@ -66,9 +99,9 @@
         if(!presets.length&&!billing.customPurchases)return '';
         return `<section class="economy-purchase-row" data-purchase-row="${purpose}"><h3>${title}</h3><div class="economy-cards">${presets.map(p=>`<article><strong>${purpose==='cash'?yuan(p.priceCents):p.credits+' 积分'}</strong><p>${esc(p.description)}</p><button type="button" data-purchase="${esc(p.id)}">支付 ${esc(p.priceDisplay)}</button></article>`).join('')}${billing.customPurchases?`<article><form data-custom-purchase="${purpose}"><label for="custom-${purpose}">自定义金额（元）</label><input id="custom-${purpose}" name="amountYuan" type="number" min="1" max="10000" step="1" required inputmode="numeric" placeholder="1–10000" aria-describedby="custom-${purpose}-hint"><p id="custom-${purpose}-hint" data-custom-hint>${purpose==='cash'?'充值 1–10000 元生图余额':'1 元 = 10 积分，可购买 10–100000 积分'}</p><button type="submit">${purpose==='cash'?'充值生图余额':'购买积分'}</button><p role="status" data-custom-message></p></form></article>`:''}</div></section>`;
       }).join('')||'<p>在线支付尚未配置，可通过社区贡献获得积分。</p>';
-      root.innerHTML=`<section class="economy-wallet"><h1>钱包与权益</h1><div class="economy-cards"><article><h2>生图余额</h2><strong>${yuan(state.cash.balanceCents)}</strong><p>冻结中 ${yuan(state.cash.heldCents)} · 仅用于图片生成</p></article><article><h2>社区积分</h2><strong>${state.points} 积分</strong><p>解锁内容与资源，不兑换现金或生图余额</p></article><article><h2>免费生图额度</h2>${state.freeQuota.map(q=>`<p>${esc(q.resolution.toUpperCase())} · 剩余 <strong>${q.remaining}</strong> 张 · 预占 ${q.held} 张</p>`).join('')}<p>一次性额度，长期有效；活动赠送按具体期限使用。</p></article></div><h2>充值与购买</h2><div class="economy-purchases">${purchaseRows}</div><h2>贡献与作者收益</h2><p>待结算 ${state.earnings.pending||0} 分 · 已结算 ${state.earnings.settled||0} 分 · 已冲回 ${state.earnings.reversed||0} 分。解锁分成80%，7天后可用。</p><p>账号验证20分；签到1分，每月最多20分；优质作品5分、原创资源20分、优质教程10分，每类每月最多10件。</p><button data-checkin>每日签到</button><h2>购买订单</h2>${(orders.orders||[]).map(o=>`<article class="economy-entry"><span>${o.purpose==='cash'?'生图余额':'社区积分'} · ${yuan(o.amountCents)} · ${esc(paymentStatus(o.status))}</span>${o.status==='pending'?`<a class="btn" href="${esc(o.checkoutUrl)}">继续付款</a><button data-sync="${esc(o.id)}">核验到账</button>`:''}${['paid','partially_refunded'].includes(o.status)?`<button data-refund="${esc(o.id)}">申请退还未消费部分</button>`:''}</article>`).join('')||'<p>暂无订单</p>'}<details><summary>人民币余额明细</summary>${state.cashEntries.map(e=>`<p>${esc(cashEntryLabel(e.kind))} · ${yuan(e.delta_cents)} · 冻结变化 ${yuan(e.held_delta_cents)} · ${esc(e.created_at)}</p>`).join('')||'暂无明细'}</details><details><summary>社区积分明细</summary>${state.pointEntries.map(e=>`<p>${esc(e.reason)} · ${e.delta>0?'+':''}${e.delta} 分</p>`).join('')||'暂无明细'}</details><details><summary>已解锁内容与资源</summary>${state.unlocks.filter(u=>u.status==='settled').map(u=>`<p>${esc(u.target_id)} · ${u.target_type==='asset'?'站内持续使用权':'查看与复制'}</p>`).join('')||'暂无解锁'}</details><p role="status" data-message></p></section>`;
+      root.innerHTML=`<section class="economy-wallet" data-wallet-page><div class="economy-page-head"><div><h1>钱包与权益</h1></div><a class="economy-nav-link" href="${esc(viewUrl('orders'))}" data-open-orders>订单记录 →</a></div><div class="economy-cards"><article><h2>生图余额</h2><strong>${yuan(state.cash.balanceCents)}</strong><p>冻结中 ${yuan(state.cash.heldCents)} · 仅用于图片生成</p></article><article><h2>社区积分</h2><strong>${state.points} 积分</strong><p>解锁内容与资源，不兑换现金或生图余额</p></article><article><h2>免费生图额度</h2>${state.freeQuota.map(q=>`<p>${esc(q.resolution.toUpperCase())} · 剩余 <strong>${q.remaining}</strong> 张 · 预占 ${q.held} 张</p>`).join('')}<p>一次性额度，长期有效；活动赠送按具体期限使用。</p></article></div><h2>充值与购买</h2><div class="economy-purchases">${purchaseRows}</div><h2>贡献与作者收益</h2><p>待结算 ${state.earnings.pending||0} 分 · 已结算 ${state.earnings.settled||0} 分 · 已冲回 ${state.earnings.reversed||0} 分。解锁分成80%，7天后可用。</p><p>账号验证20分；签到1分，每月最多20分；优质作品5分、原创资源20分、优质教程10分，每类每月最多10件。</p><button data-checkin>每日签到</button><details><summary>人民币余额明细</summary>${state.cashEntries.map(e=>`<p>${esc(cashEntryLabel(e.kind))} · ${yuan(e.delta_cents)} · 冻结变化 ${yuan(e.held_delta_cents)} · ${esc(e.created_at)}</p>`).join('')||'暂无明细'}</details><details><summary>社区积分明细</summary>${state.pointEntries.map(e=>`<p>${esc(e.reason)} · ${e.delta>0?'+':''}${e.delta} 分</p>`).join('')||'暂无明细'}</details><details><summary>已解锁内容与资源</summary>${state.unlocks.filter(u=>u.status==='settled').map(u=>`<p>${esc(u.target_id)} · ${u.target_type==='asset'?'站内持续使用权':'查看与复制'}</p>`).join('')||'暂无解锁'}</details><p role="status" data-message></p></section>`;
       const message=text=>{const target=root.querySelector('[data-message]');if(target)target.textContent=text;};
-      const openCheckout=async body=>{const result=await api('/api/billing/checkout',{method:'POST',body});const url=result.checkoutUrl||result.order?.checkoutUrl;if(url)global.location.assign(url);else throw Error('支付地址暂未返回，请在订单中核验');};
+      const openCheckout=async body=>{const result=await api('/api/billing/checkout',{method:'POST',body});const url=result.checkoutUrl||result.order?.checkoutUrl;if(url)global.location.assign(url);else throw Error('支付地址暂未返回，请在订单记录中核验');};
       root.oninput=event=>{
         const form=event.target.closest('[data-custom-purchase]');if(!form)return;
         form.querySelector('[data-custom-message]').textContent='';
@@ -86,15 +119,118 @@
         finally{button.disabled=false;}
       };
       root.onclick=async event=>{
+        const ordersLink=event.target.closest?.('[data-open-orders]');
+        if(ordersLink){goView(event,'orders');return;}
         const button=event.target.closest('button');if(!button||button.closest('[data-custom-purchase]')||button.disabled)return;button.disabled=true;
         try{
           if(button.dataset.purchase){await openCheckout({packId:button.dataset.purchase});}
-          else if(button.dataset.sync){await api(`/api/billing/orders/${encodeURIComponent(button.dataset.sync)}/sync`,{method:'POST',body:{}});await mountWallet(root);}
-          else if(button.dataset.refund){await api('/api/billing/refund-requests',{method:'POST',body:{orderId:button.dataset.refund,reason:'申请退还未消费部分'}});await mountWallet(root);message('退款申请已提交，未消费部分已冻结，等待管理员审核。');}
-          else if(button.hasAttribute('data-checkin')){const result=await api('/api/wallet/checkin',{method:'POST',body:{}});await mountWallet(root);message(`已签到，本次奖励 ${result.bonus} 积分，不改变生图额度。`);}
+          else if(button.hasAttribute('data-checkin')){const result=await api('/api/wallet/checkin',{method:'POST',body:{}});if(!root.isConnected||mountLoads.get(root)!==load)return;await mountWallet(root);message(`已签到，本次奖励 ${result.bonus} 积分，不改变生图额度。`);}
         }catch(e){message(e.message);}finally{button.disabled=false;}
       };
-    }catch(e){root.textContent=e.message;}
+    }catch(e){if(root.isConnected&&mountLoads.get(root)===load)root.textContent=e.message;}
+  }
+  async function mountOrders(root,initial={}){
+    root.oninput=null;
+    root.onsubmit=null;
+    const st={
+      status:['all','pending','paid','refund','closed'].includes(initial.status)?initial.status:'all',
+      purpose:['all','cash','points'].includes(initial.purpose)?initial.purpose:'all',
+      page:Number(initial.page)>0?Math.floor(Number(initial.page)):1,
+      limit:Number(initial.limit)>0?Math.min(50,Math.floor(Number(initial.limit))):20,
+      notice:''
+    };
+    const statusTabs=[['all','全部状态'],['pending','待付款'],['paid','已到账'],['refund','退款/售后'],['closed','已关闭']];
+    const renderOrderCard=o=>{
+      const req=o.refundRequest||null;
+      const activeRefund=req&&['pending','processing','unknown'].includes(req.status);
+      const canRefund=['paid','partially_refunded'].includes(o.status)&&!activeRefund&&(o.refundableCents===undefined||o.refundableCents>0);
+      const created=formatOrderTime(o.createdAt),paid=formatOrderTime(o.paidAt);
+      let refundableText='';
+      if(['paid','partially_refunded'].includes(o.status)&&!activeRefund&&o.refundableCents!==undefined){
+        refundableText=o.refundableCents>0?`可退未消费：${yuan(o.refundableCents)}`:'未消费余额：¥0.00（已消费）';
+      }
+      const actions=[];
+      if(o.status==='pending'){
+        if(o.checkoutUrl&&/^(\/|https:\/\/)/i.test(String(o.checkoutUrl)))actions.push(`<a class="economy-btn-link is-primary" href="${esc(o.checkoutUrl)}">继续付款</a>`);
+        actions.push(`<button type="button" data-sync="${esc(o.id)}">核验到账</button>`);
+      }
+      if(canRefund)actions.push(`<button type="button" data-refund="${esc(o.id)}">申请退还未消费部分</button>`);
+      return `<article class="economy-order-card" data-order-row="${esc(o.id)}"><div class="economy-order-top"><div class="economy-order-badges"><strong>${o.purpose==='cash'?'生图余额充值':`购买社区积分${o.credits?`（${Number(o.credits)} 积分）`:''}`}</strong><span class="economy-badge is-${esc(o.status)}">${esc(paymentStatus(o.status))}</span>${req?`<span class="economy-badge is-refund" data-refund-status="${esc(req.status)}">退款${esc(paymentStatus(req.status,true))} · ${yuan(req.amountCents)}</span>`:''}</div><strong class="economy-order-amount">${yuan(o.amountCents)}</strong></div><div class="economy-order-meta"><span>订单号：${esc(o.id)}</span>${created?`<span>下单：${esc(created)}</span>`:''}${paid?`<span>到账：${esc(paid)}</span>`:''}${refundableText?`<span>${esc(refundableText)}</span>`:''}</div>${actions.length?`<div class="economy-order-actions">${actions.join('')}</div>`:''}</article>`;
+    };
+    const loadOrders=async()=>{
+      const load=Symbol();
+      mountLoads.set(root,load);
+      if(!root.querySelector?.('[data-orders-page]'))root.innerHTML='<p role="status">正在读取订单记录…</p>';
+      try{
+        const qs=`status=${encodeURIComponent(st.status)}&purpose=${encodeURIComponent(st.purpose)}&page=${st.page}&limit=${st.limit}`;
+        const data=await api('/api/billing/orders?'+qs);
+        if(!root.isConnected||mountLoads.get(root)!==load)return;
+        const totalPages=Math.max(1,Number(data.totalPages)||1);
+        if(st.page>totalPages){st.page=totalPages;return loadOrders();}
+        const items=data.orders||[];
+        const totalCount=Number(data.total??items.length);
+        const noticeText=st.notice;
+        st.notice='';
+        root.innerHTML=`<section class="economy-wallet economy-orders" data-orders-page><div class="economy-page-head"><div><h1>订单记录</h1><p class="economy-page-sub">生图余额充值与社区积分购买订单独立管理；可在此继续付款、核验到账或申请退还未消费本金。</p></div><a class="economy-nav-link" href="${esc(viewUrl('wallet'))}" data-open-wallet>← 返回钱包与权益</a></div><div class="economy-order-filters"><div class="economy-filter-tabs" role="group" aria-label="订单状态">${statusTabs.map(([k,label])=>`<button type="button" data-order-status="${k}" aria-pressed="${st.status===k?'true':'false'}">${label}</button>`).join('')}</div><div class="economy-filter-right"><select data-order-purpose aria-label="订单用途"><option value="all" ${st.purpose==='all'?'selected':''}>全部用途</option><option value="cash" ${st.purpose==='cash'?'selected':''}>生图余额充值</option><option value="points" ${st.purpose==='points'?'selected':''}>社区积分购买</option></select><span class="economy-order-count">共 ${totalCount} 笔</span></div></div>${items.length?items.map(renderOrderCard).join(''):`<div class="economy-empty" data-orders-empty><p>${st.status==='all'&&st.purpose==='all'?'暂无购买订单记录。':'当前筛选条件下暂无订单记录。'}</p><a class="economy-nav-link" href="${esc(viewUrl('wallet'))}" data-open-wallet>前往钱包充值与购买</a></div>`}${totalPages>1?`<nav class="economy-pagination" aria-label="订单分页"><button type="button" data-order-page="${st.page-1}" ${st.page<=1?'disabled':''}>上一页</button><span>第 ${st.page} / ${totalPages} 页</span><button type="button" data-order-page="${st.page+1}" ${st.page>=totalPages?'disabled':''}>下一页</button></nav>`:''}<p role="status" aria-live="polite" data-message>${esc(noticeText)}</p></section>`;
+      }catch(e){
+        if(!root.isConnected||mountLoads.get(root)!==load)return;
+        const msgEl=root.querySelector?.('[data-message]');
+        if(msgEl)msgEl.textContent=e.message;
+        else root.textContent=e.message;
+      }
+    };
+    root.onchange=event=>{
+      const select=event.target.closest?.('[data-order-purpose]');
+      if(!select)return;
+      st.purpose=select.value||'all';
+      st.page=1;
+      loadOrders();
+    };
+    root.onclick=async event=>{
+      const walletLink=event.target.closest?.('[data-open-wallet]');
+      if(walletLink){goView(event,'wallet');return;}
+      const button=event.target.closest('button');
+      if(!button||button.disabled)return;
+      if(button.dataset.orderStatus){
+        st.status=button.dataset.orderStatus;
+        st.page=1;
+        await loadOrders();
+        return;
+      }
+      if(button.dataset.orderPage){
+        st.page=Math.max(1,Number(button.dataset.orderPage)||1);
+        await loadOrders();
+        return;
+      }
+      if(!button.dataset.sync&&!button.dataset.refund)return;
+      button.disabled=true;
+      const activeLoad=mountLoads.get(root);
+      try{
+        if(button.dataset.sync){
+          const res=await api(`/api/billing/orders/${encodeURIComponent(button.dataset.sync)}/sync`,{method:'POST',body:{}});
+          if(!root.isConnected||mountLoads.get(root)!==activeLoad)return;
+          const eco=await api('/api/economy').catch(()=>null);
+          if(eco&&mountLoads.get(root)===activeLoad)syncSharedEconomy(eco);
+          const nextStatus=res?.order?.status;
+          st.notice=nextStatus==='paid'?'支付已核验到账，余额或积分已同步更新。':nextStatus==='pending'?'订单暂未确认到账，如已付款请稍等数秒后再次核验。':'订单状态已核验更新。';
+          await loadOrders();
+        }else if(button.dataset.refund){
+          await api('/api/billing/refund-requests',{method:'POST',body:{orderId:button.dataset.refund,reason:'申请退还未消费部分'}});
+          if(!root.isConnected||mountLoads.get(root)!==activeLoad)return;
+          const eco=await api('/api/economy').catch(()=>null);
+          if(eco&&mountLoads.get(root)===activeLoad)syncSharedEconomy(eco);
+          st.notice='退款申请已提交，未消费部分已冻结，等待管理员审核。';
+          await loadOrders();
+        }
+      }catch(e){
+        if(!root.isConnected||mountLoads.get(root)!==activeLoad)return;
+        const msgEl=root.querySelector?.('[data-message]');
+        if(msgEl)msgEl.textContent=e.message;
+      }finally{
+        if(button.isConnected)button.disabled=false;
+      }
+    };
+    await loadOrders();
   }
   async function mountAdmin(root){
     root.innerHTML='<p role="status">正在读取独立账务配置…</p>';
@@ -140,5 +276,5 @@
       root.onclick=async event=>{const button=event.target.closest('[data-revoke],[data-approve-refund],[data-reconcile-refund]');if(!button)return;button.disabled=true;try{if(button.dataset.reconcileRefund){const evidence=global.prompt('填写支付平台退款核对记录编号');if(!evidence)return;const outcome=global.prompt('确认平台结果：输入 completed 表示已退款，rejected 表示确认未退款');if(!['completed','rejected'].includes(outcome))throw Error('结果无效，未修改冻结款项');const reason=global.prompt('填写核对说明');if(!reason)return;await api('/api/admin/economy/refunds',{method:'POST',body:{action:'reconcile',refundId:button.dataset.reconcileRefund,outcome,providerReference:evidence,reason}});}else if(button.dataset.revoke){const reason=global.prompt('填写撤回未使用额度的原因');if(!reason)return;await api('/api/admin/economy',{method:'POST',body:{action:'revoke',grantId:button.dataset.revoke,reason}});}else{if(!global.confirm('将申请中冻结的未消费款项原路退回。确认审核通过？'))return;await api('/api/admin/economy/refunds',{method:'POST',body:{refundId:button.dataset.approveRefund}});}await mountAdmin(root);}catch(e){message(e.message);}finally{button.disabled=false;}};
     }catch(e){root.textContent=e.message;}
   }
-  global.HandrawEconomy={quote,confirm,mountWallet,mountAdmin,mountPicker,yuan,get specId(){return chosenSpec;},get specs(){return availableSpecs;}};
+  global.HandrawEconomy={quote,confirm,mountWallet,mountOrders,mountAdmin,mountPicker,unmount,yuan,get specId(){return chosenSpec;},get specs(){return availableSpecs;}};
 })(window);

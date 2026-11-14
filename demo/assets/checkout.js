@@ -18,7 +18,7 @@
     document.getElementById('checkout-purpose').textContent = order.purpose === 'cash' ? '生图余额充值' : '购买社区积分';
     document.getElementById('checkout-amount').textContent = '¥' + (order.amountCents / 100).toFixed(2);
     const paid = ['paid','partially_refunded','refunded'].includes(order.status);
-    status.textContent = paid ? '支付已核验到账，请返回钱包查看。' : order.status === 'pending' ? (result.qr ? '扫码付款，或在手机上打开付款链接。' : '订单正在核验，请勿重复下单。可点击核验到账查询现有订单。') : '订单已结束，请返回钱包查看状态或重新购买。';
+    status.textContent = paid ? '支付已核验到账，可前往订单记录或返回钱包查看。' : order.status === 'pending' ? (result.qr ? '扫码付款，或在手机上打开付款链接。' : '订单正在核验，请勿重复下单。可点击核验到账查询现有订单。') : '订单已结束，请前往订单记录查看状态，或返回钱包重新购买。';
     image.hidden = paid || !result.qrImageUrl;
     if (!image.hidden) window.HandrawImages.set(image, result.qrImageUrl, {width:256});
     open.hidden = paid || !result.paymentLink;

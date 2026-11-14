@@ -120,7 +120,10 @@
 
   function parseInitialUrl() {
     const p = new URLSearchParams(window.location.search);
-    const view = p.get("view") || "";
+    let view = (p.get("view") || "").trim();
+    if (!view && /^\/orders\/?$/i.test(window.location.pathname || "")) {
+      view = "orders";
+    }
     const legacyAsset = p.get("asset") ? p.get("asset").trim().toUpperCase().replace(/^#/, "") : "";
     const legacyWork = p.get("work") ? p.get("work").trim() : "";
 
@@ -258,13 +261,13 @@
       return {};
     }
 
-    if (["discover", "styles", "layouts", "works", "rankings", "wallet", "auth", "skill", "guide", "recovery", "reset-password", "oauth-register", "verify-email", "notifications", "edit-work", "edit-topic", "device", "devices"].includes(view)) {
+    if (["discover", "styles", "layouts", "works", "rankings", "wallet", "orders", "auth", "skill", "guide", "recovery", "reset-password", "oauth-register", "verify-email", "notifications", "edit-work", "edit-topic", "device", "devices"].includes(view)) {
       App.view = view;
     } else {
       App.view = !view && p.get("q") ? "styles" : "discover";
     }
 
-    if (App.view === "wallet") {
+    if (App.view === "wallet" || App.view === "orders") {
       const ordId = (p.get("order") || p.get("request_id") || "").trim();
       if (/^ord_[a-zA-Z0-9_-]{8,64}$/.test(ordId)) {
         const rawCheckoutId = (p.get("checkout_id") || "").trim();
@@ -320,6 +323,7 @@
       works: `作品与做法（${wc} 件社区作品）— 手绘风创作社区`,
       rankings: "创作者荣誉榜单与作品风云榜 — 手绘风创作社区",
       wallet: "统一积分钱包与资产中心 — 手绘风创作社区",
+      orders: "订单记录 — 手绘风创作社区",
       auth: "登录 / 注册统一通行证 — 手绘风创作社区",
       skill: "开源画廊与官网在线创作联动 — 手绘风创作社区"
     };
@@ -371,8 +375,9 @@
         p.set("code", rawCode);
       }
     }
-    const next = `${window.location.pathname}?${p.toString()}`;
-    if (pushHistory && window.location.search !== `?${p.toString()}`) {
+    const basePath = /^\/orders\/?$/i.test(window.location.pathname || "") ? "/" : window.location.pathname;
+    const next = `${basePath}?${p.toString()}`;
+    if (pushHistory && (window.location.pathname !== basePath || window.location.search !== `?${p.toString()}`)) {
       UI.navHistoryDepth += 1;
       window.history.pushState({ view: App.view }, "", next);
     } else {
@@ -550,6 +555,9 @@
     const isBrowse = ["styles", "layouts", "works"].includes(App.view);
     root.classList.toggle("hw-product-browse", isBrowse);
     root.classList.toggle("hw-home-feed-root", App.view === "discover");
+    if (!["wallet", "orders"].includes(App.view)) {
+      window.HandrawEconomy?.unmount?.(root);
+    }
 
     if (window.HandrawAccountTools?.views.has(App.view)) {
       window.HandrawAccountTools.render(root, App.view);
@@ -591,6 +599,7 @@
       return;
     }
     else if (App.view === "wallet") renderWalletCenter(root);
+    else if (App.view === "orders") renderOrdersPage(root);
     else if (App.view === "work") renderWorkDetailPage(root);
     else if (App.view === "profile") renderCreatorProfilePage(root);
     else if (App.view === "account") renderAccountSettingsPage(root);
@@ -3280,6 +3289,11 @@
   function renderWalletCenter(root) {
     if(!App.state.loggedIn){openAuthPage("登录后查看生图余额、社区积分与免费额度",()=>switchView("wallet"));return;}
     window.HandrawEconomy.mountWallet(root);
+  }
+
+  function renderOrdersPage(root) {
+    if(!App.state.loggedIn){openAuthPage("登录后查看订单记录、付款状态与退款进度",()=>switchView("orders"));return;}
+    window.HandrawEconomy.mountOrders(root);
   }
   /* ======================== BOOTSTRAP ======================== */
   parseInitialUrl();

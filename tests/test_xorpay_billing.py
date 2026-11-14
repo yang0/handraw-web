@@ -464,6 +464,101 @@ class XorPayBillingTests(unittest.TestCase):
         self.assertEqual(st_list, 200)
         self.assertEqual(len(body_list["orders"]), 0)
 
+    def test_orders_endpoint_filters_pagination_refund_state_and_route(self):
+        from backend.billing import _settle_paid_order_tx
+
+        for path in ("/orders", "/?view=orders"):
+            st_html, body_html, _ = self._req("GET", path)
+            self.assertEqual(st_html, 200)
+            self.assertIn("订单记录 — Handraw 手绘风创作社区", body_html)
+
+        uid = int(self.user_a["id"])
+        with self.db.transaction() as tx:
+            tx.execute(
+                "INSERT INTO payment_orders(id,user_id,provider,pack_id,credits,amount_cents,currency,purpose,status,checkout_url,test_mode,created_at,updated_at) "
+                "VALUES('ord_f_pend',?,'xorpay','cash_10',0,1000,'CNY','cash','pending','/checkout/?orderId=ord_f_pend',1,'2026-01-01T00:00:01Z','2026-01-01T00:00:01Z')",
+                (uid,),
+            )
+            tx.execute(
+                "INSERT INTO payment_orders(id,user_id,provider,pack_id,credits,amount_cents,currency,purpose,test_mode,created_at,updated_at) "
+                "VALUES('ord_f_cash',?,'xorpay','cash_10',0,1000,'CNY','cash',1,'2026-01-01T00:00:02Z','2026-01-01T00:00:02Z')",
+                (uid,),
+            )
+            _settle_paid_order_tx(tx, order_id="ord_f_cash", provider_order_id="p_f_cash", provider="xorpay")
+            tx.execute(
+                "INSERT INTO payment_orders(id,user_id,provider,pack_id,credits,amount_cents,currency,purpose,test_mode,created_at,updated_at) "
+                "VALUES('ord_f_pts',?,'xorpay','pack_50',50,500,'CNY','points',1,'2026-01-01T00:00:03Z','2026-01-01T00:00:03Z')",
+                (uid,),
+            )
+            _settle_paid_order_tx(tx, order_id="ord_f_pts", provider_order_id="p_f_pts", provider="xorpay")
+            tx.execute(
+                "INSERT INTO payment_orders(id,user_id,provider,pack_id,credits,amount_cents,currency,purpose,status,test_mode,created_at,updated_at) "
+                "VALUES('ord_f_exp',?,'xorpay','cash_10',0,1000,'CNY','cash','expired',1,'2026-01-01T00:00:04Z','2026-01-01T00:00:04Z')",
+                (uid,),
+            )
+
+        hdr_a = {"Authorization": f"Bearer {self.tok_a}"}
+        st, page1, hdrs = self._req("GET", "/api/billing/orders?limit=2&page=1", headers=hdr_a)
+        self.assertEqual(st, 200)
+        self.assertIn("no-store", hdrs.get("cache-control", ""))
+        self.assertEqual(page1["total"], 4)
+        self.assertEqual(page1["page"], 1)
+        self.assertEqual(page1["pageSize"], 2)
+        self.assertEqual(page1["totalPages"], 2)
+        self.assertEqual([o["id"] for o in page1["orders"]], ["ord_f_exp", "ord_f_pts"])
+
+        st, page2, _ = self._req("GET", "/api/billing/orders?limit=2&page=2", headers=hdr_a)
+        self.assertEqual(st, 200)
+        self.assertEqual([o["id"] for o in page2["orders"]], ["ord_f_cash", "ord_f_pend"])
+
+        st, pend, _ = self._req("GET", "/api/billing/orders?status=pending", headers=hdr_a)
+        self.assertEqual(st, 200)
+        self.assertEqual([o["id"] for o in pend["orders"]], ["ord_f_pend"])
+
+        st, paid, _ = self._req("GET", "/api/billing/orders?status=paid", headers=hdr_a)
+        self.assertEqual(st, 200)
+        self.assertEqual([o["id"] for o in paid["orders"]], ["ord_f_pts", "ord_f_cash"])
+
+        st, closed, _ = self._req("GET", "/api/billing/orders?status=closed", headers=hdr_a)
+        self.assertEqual(st, 200)
+        self.assertEqual([o["id"] for o in closed["orders"]], ["ord_f_exp"])
+
+        st, pts, _ = self._req("GET", "/api/billing/orders?purpose=points", headers=hdr_a)
+        self.assertEqual(st, 200)
+        self.assertEqual([o["id"] for o in pts["orders"]], ["ord_f_pts"])
+
+        st, cash_paid, _ = self._req("GET", "/api/billing/orders?status=paid&purpose=cash", headers=hdr_a)
+        self.assertEqual(st, 200)
+        self.assertEqual(len(cash_paid["orders"]), 1)
+        self.assertEqual(cash_paid["orders"][0]["refundableCents"], 1000)
+
+        for bad_qs in ("status=bad", "purpose=bad", "page=0", "limit=0", "page=abc"):
+            st_bad, _, _ = self._req("GET", f"/api/billing/orders?{bad_qs}", headers=hdr_a)
+            self.assertEqual(st_bad, 400, bad_qs)
+
+        st_ref, _, _ = self._req(
+            "POST",
+            "/api/billing/refund-requests",
+            {"orderId": "ord_f_cash", "reason": "unused cash"},
+            {"Origin": "http://trusted.test", "Authorization": f"Bearer {self.tok_a}"},
+        )
+        self.assertEqual(st_ref, 200)
+
+        st, refunded, _ = self._req("GET", "/api/billing/orders?status=refund", headers=hdr_a)
+        self.assertEqual(st, 200)
+        self.assertEqual(len(refunded["orders"]), 1)
+        item = refunded["orders"][0]
+        self.assertEqual(item["id"], "ord_f_cash")
+        self.assertEqual(item["refundableCents"], 0)
+        self.assertIsNotNone(item["refundRequest"])
+        self.assertEqual(item["refundRequest"]["status"], "pending")
+        self.assertEqual(item["refundRequest"]["amountCents"], 1000)
+        self.assertNotIn("provider_result", item["refundRequest"])
+
+        st_b, res_b, _ = self._req("GET", "/api/billing/orders", headers={"Authorization": f"Bearer {self.tok_b}"})
+        self.assertEqual(st_b, 200)
+        self.assertEqual(res_b["orders"], [])
+
 
 if __name__ == "__main__":
     unittest.main()

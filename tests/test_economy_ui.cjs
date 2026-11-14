@@ -50,29 +50,83 @@ test('specification names are escaped and money remains integer cents until pres
   assert.equal(ui.yuan(1),'¥0.01');assert.equal(ui.yuan(101),'¥1.01');
 });
 
-test('wallet check-in, order verification and refund work for ordinary default-type buttons',async()=>{
+test('wallet check-in does not fetch orders; mountOrders sync and refund work and fence stale loads',async()=>{
   const calls=[];
   const state={cash:{balanceCents:1000,heldCents:0},points:0,freeQuota:[],earnings:{},cashEntries:[],pointEntries:[],unlocks:[]};
   const ui=setup(async(path)=>{
     calls.push(path);
     if(path==='/api/economy')return state;
-    if(path==='/api/billing/orders')return {orders:[]};
     if(path==='/api/boot')return {billing:{packages:[]}};
     if(path==='/api/wallet/checkin'){state.points=1;return {bonus:1};}
+    if(path.startsWith('/api/billing/orders?'))return {orders:[
+      {id:'ord_pending',purpose:'cash',status:'pending',amountCents:1000,checkoutUrl:'/checkout/ord_pending'},
+      {id:'ord_paid',purpose:'cash',status:'paid',amountCents:1000,refundableCents:1000},
+      {id:'ord_consumed',purpose:'cash',status:'paid',amountCents:500,refundableCents:0},
+      {id:'ord_refunding',purpose:'cash',status:'paid',amountCents:2000,refundableCents:0,refundRequest:{id:'ref_1',status:'pending',amountCents:2000}},
+    ],total:4,page:1,pageSize:12,totalPages:1};
     if(path==='/api/billing/refund-requests'){state.cash={balanceCents:0,heldCents:1000};return {ok:true};}
     return {ok:true};
   });
-  const status={textContent:''};const el={isConnected:true,innerHTML:'',querySelector:()=>status};
-  await ui.mountWallet(el);
-  const click=async dataset=>{
-    const button={type:'submit',disabled:false,dataset,closest:()=>null,hasAttribute:name=>name==='data-checkin'&&dataset.checkin!==undefined};
-    await el.onclick({target:{closest:()=>button}});
+  const status={textContent:''};
+  const walletEl={isConnected:true,innerHTML:'',querySelector:()=>status};
+  await ui.mountWallet(walletEl);
+  assert(!calls.some(p=>p.startsWith('/api/billing/orders')),'wallet must not fetch orders list');
+  assert(walletEl.innerHTML.includes('data-open-orders'));
+  assert(!walletEl.innerHTML.includes('data-refund'));
+  const clickEl=async(targetEl,dataset)=>{
+    const button={type:'submit',disabled:false,isConnected:true,dataset,closest:()=>null,hasAttribute:name=>name==='data-checkin'&&dataset.checkin!==undefined};
+    await targetEl.onclick({target:{closest:sel=>sel==='button'?button:null}});
     assert.equal(button.disabled,false);
   };
-  await click({checkin:''});assert(calls.includes('/api/wallet/checkin'));assert(el.innerHTML.includes('1 积分'));assert(status.textContent.includes('本次奖励 1 积分'));
-  await click({sync:'existing-order'});assert(calls.includes('/api/billing/orders/existing-order/sync'));
-  await click({refund:'paid-order'});assert(calls.includes('/api/billing/refund-requests'));assert(el.innerHTML.includes('冻结中 ¥10.00'));assert(status.textContent.includes('退款申请已提交'));
+  await clickEl(walletEl,{checkin:''});
+  assert(calls.includes('/api/wallet/checkin'));
+  assert(walletEl.innerHTML.includes('1 积分'));
+  assert(status.textContent.includes('本次奖励 1 积分'));
   const before=calls.length;
-  await el.onclick({target:{closest:()=>({type:'submit',closest:()=>({}),disabled:false})}});
+  await walletEl.onclick({target:{closest:sel=>sel==='button'?({type:'submit',closest:()=>({}),disabled:false}):null}});
   assert.equal(calls.length,before,'custom purchase form submits through its own handler only');
+
+  const ordersEl={isConnected:true,innerHTML:'',querySelector:sel=>sel==='[data-message]'?status:null};
+  await ui.mountOrders(ordersEl);
+  assert(ordersEl.innerHTML.includes('data-order-row="ord_pending"'));
+  assert(ordersEl.innerHTML.includes('可退未消费：¥10.00'));
+  assert(ordersEl.innerHTML.includes('未消费余额：¥0.00（已消费）'));
+  assert(ordersEl.innerHTML.includes('data-refund="ord_paid"'));
+  assert(!ordersEl.innerHTML.includes('data-refund="ord_consumed"'));
+  assert(!ordersEl.innerHTML.includes('data-refund="ord_refunding"'));
+  assert(ordersEl.innerHTML.includes('data-refund-status="pending"'));
+  await clickEl(ordersEl,{sync:'ord_pending'});
+  assert(calls.includes('/api/billing/orders/ord_pending/sync'));
+  await clickEl(ordersEl,{refund:'ord_paid'});
+  assert(calls.includes('/api/billing/refund-requests'));
+  assert(ordersEl.innerHTML.includes('退款申请已提交'));
+  ui.unmount(ordersEl);
+  assert.equal(ordersEl.onclick,null);
+  assert.equal(ordersEl.onchange,null);
+});
+
+test('mountOrders escapes order fields, sends filters/pagination, and fences stale responses',async()=>{
+  const pendingResolvers=[];
+  const requestedPaths=[];
+  const ui=setup(async(path)=>{
+    requestedPaths.push(path);
+    return new Promise(resolve=>pendingResolvers.push(resolve));
+  });
+  const ordersEl={isConnected:true,innerHTML:'',querySelector:()=>null};
+  const firstMount=ui.mountOrders(ordersEl);
+  const filterClick=ordersEl.onclick({target:{closest:sel=>sel==='button'?{dataset:{orderStatus:'paid'},disabled:false,closest:()=>null}:null}});
+  assert.equal(requestedPaths.length,2);
+  assert(requestedPaths[1].includes('status=paid&purpose=all&page=1&limit=20'));
+  pendingResolvers[1]({orders:[{id:'ord_<img src=x>',purpose:'points',credits:50,status:'paid',amountCents:500}],total:25,page:1,pageSize:20,totalPages:2});
+  pendingResolvers[0]({orders:[{id:'ord_stale_row',purpose:'cash',status:'pending',amountCents:1000}],total:1,page:1,pageSize:20,totalPages:1});
+  await Promise.all([firstMount,filterClick]);
+  assert(ordersEl.innerHTML.includes('ord_&lt;img src=x&gt;'));
+  assert(!ordersEl.innerHTML.includes('<img'));
+  assert(!ordersEl.innerHTML.includes('ord_stale_row'));
+  assert(ordersEl.innerHTML.includes('第 1 / 2 页'));
+  const secondPage=ordersEl.onclick({target:{closest:sel=>sel==='button'?{dataset:{orderPage:'2'},disabled:false,closest:()=>null}:null}});
+  assert(requestedPaths[2].includes('status=paid&purpose=all&page=2&limit=20'));
+  pendingResolvers[2]({orders:[],total:25,page:2,pageSize:20,totalPages:2});
+  await secondPage;
+  assert(ordersEl.innerHTML.includes('当前筛选条件下暂无订单记录'));
 });

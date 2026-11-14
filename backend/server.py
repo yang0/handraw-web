@@ -1778,6 +1778,8 @@ def render_seo_portal_html(db: Database, raw_html: str, origin: str, qs: dict[st
             page_title = "174+ 结构化版式与信息图图型库 — Handraw 手绘风社区"
         elif view == "rankings":
             page_title = "创作者荣誉殿堂与作品风云榜 — Handraw 手绘风社区"
+        elif view == "orders":
+            page_title = "订单记录 — Handraw 手绘风创作社区"
         if asset_code:
             canonical_url = f"{base}/?view=asset&id={urllib.parse.quote(asset_code)}"
             a_row = conn.execute(
@@ -2928,7 +2930,23 @@ class HandrawRequestHandler(BaseHTTPRequestHandler):
         if req_path == "/api/billing/orders":
             user = self._current_user(required=True)
             from .billing import list_user_payment_orders
-            self._send_json(list_user_payment_orders(self.db, int(user["id"]), limit=int(q1("limit") or 20)))  # type: ignore[index]
+            raw_limit_str = q1("limit")
+            raw_page_str = q1("page")
+            try:
+                raw_limit = int(raw_limit_str) if raw_limit_str != "" else 20
+                raw_page = int(raw_page_str) if raw_page_str != "" else 1
+            except ValueError as exc:
+                raise ServiceError("订单分页参数无效", status=400, code="invalid_pagination") from exc
+            self._send_json(
+                list_user_payment_orders(
+                    self.db,
+                    int(user["id"]),  # type: ignore[index]
+                    limit=raw_limit,
+                    page=raw_page,
+                    status_filter=q1("status") or "all",
+                    purpose_filter=q1("purpose") or "all",
+                )
+            )
             return
 
         checkout_match = re.fullmatch(r"/api/billing/orders/([^/]+)", req_path)
@@ -3464,6 +3482,10 @@ class HandrawRequestHandler(BaseHTTPRequestHandler):
             file_path = DEMO_DIR / "admin.html"
         elif req_path in ("/studio", "/studio/"):
             file_path = DEMO_DIR / "studio.html"
+        elif req_path in ("/orders", "/orders/") and not (is_admin_channel or is_studio_channel or is_forum_channel):
+            file_path = DEMO_DIR / "index.html"
+            if "view" not in qs:
+                qs = {"view": ["orders"], **qs}
         elif req_path in ("/checkout", "/checkout/"):
             file_path = DEMO_DIR / "checkout.html"
         elif req_path in ("/forum", "/forum/"):

@@ -3001,6 +3001,9 @@
                       <a class="hw-dropdown-item" href="${esc(channelUrl("main", { view: "wallet" }))}" data-main-view="wallet" id="hw-dropdown-wallet">
                         <span>✦</span> <span>积分中心与创作密钥</span>
                       </a>
+                      <a class="hw-dropdown-item" href="${esc(channelUrl("main", { view: "orders" }))}" data-main-view="orders" id="hw-dropdown-orders">
+                        <span>🧾</span> <span>订单记录</span>
+                      </a>
                       <a class="hw-dropdown-item" href="${esc(channelUrl("main", { view: "account", section: "profile" }))}" id="hw-dropdown-account">
                         <span>⚙️</span> <span>账号资料与安全设置</span>
                       </a>
@@ -3086,6 +3089,13 @@
           const targetView = el.getAttribute("data-main-view");
           if (targetView && window.HANDRAW_MAIN_SWITCH_VIEW) {
             e.preventDefault();
+            const menuEl = document.getElementById("hw-user-dropdown-menu");
+            const avatarEl = document.getElementById("hw-user-avatar-btn");
+            if (menuEl) menuEl.classList.remove("is-open");
+            if (avatarEl) {
+              avatarEl.classList.remove("is-active");
+              avatarEl.setAttribute("aria-expanded", "false");
+            }
             window.HANDRAW_MAIN_SWITCH_VIEW(targetView);
           }
         });

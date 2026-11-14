@@ -71,21 +71,129 @@ def _serialize_order(row: Any) -> dict[str, Any]:
     }
 
 
-def list_user_payment_orders(db: Database, user_id: int, limit: int = 20) -> dict[str, Any]:
-    safe_limit = max(1, min(50, int(limit or 20)))
+def list_user_payment_orders(
+    db: Database,
+    user_id: int,
+    limit: int = 20,
+    *,
+    page: int = 1,
+    status_filter: str = "all",
+    purpose_filter: str = "all",
+) -> dict[str, Any]:
+    if int(limit) < 1 or int(page) < 1:
+        raise ServiceError("订单分页参数无效", status=400, code="invalid_pagination")
+    safe_limit = min(50, int(limit))
+    safe_page = int(page)
+    clean_status = str(status_filter or "all").strip().lower()
+    if clean_status not in ("all", "pending", "paid", "refund", "closed"):
+        raise ServiceError("订单状态筛选无效", status=400, code="invalid_order_filter")
+    clean_purpose = str(purpose_filter or "all").strip().lower()
+    if clean_purpose not in ("all", "cash", "points"):
+        raise ServiceError("订单用途筛选无效", status=400, code="invalid_order_filter")
+
+    clauses = ["user_id = ?"]
+    params: list[Any] = [int(user_id)]
+    if clean_purpose in ("cash", "points"):
+        clauses.append("purpose = ?")
+        params.append(clean_purpose)
+    if clean_status == "pending":
+        clauses.append("status = 'pending'")
+    elif clean_status == "paid":
+        clauses.append("status IN ('paid', 'partially_refunded')")
+    elif clean_status == "refund":
+        clauses.append(
+            "(status IN ('partially_refunded', 'refunded') OR EXISTS ("
+            "SELECT 1 FROM billing_refund_requests r "
+            "WHERE r.order_id = payment_orders.id AND r.user_id = payment_orders.user_id))"
+        )
+    elif clean_status == "closed":
+        clauses.append("status IN ('failed', 'expired', 'cancelled')")
+
+    where_sql = " AND ".join(clauses)
+    offset = (safe_page - 1) * safe_limit
     conn = db.get_conn()
+    total = int(
+        conn.execute(
+            f"SELECT COUNT(*) FROM payment_orders WHERE {where_sql}",
+            tuple(params),
+        ).fetchone()[0]
+    )
+    total_pages = max(1, (total + safe_limit - 1) // safe_limit)
     rows = conn.execute(
-        """
+        f"""
         SELECT * FROM payment_orders
-        WHERE user_id = ?
+        WHERE {where_sql}
         ORDER BY created_at DESC, id DESC
-        LIMIT ?
+        LIMIT ? OFFSET ?
         """,
-        (int(user_id), safe_limit),
+        (*params, safe_limit, offset),
     ).fetchall()
+
+    orders: list[dict[str, Any]] = []
+    if rows:
+        order_ids = [str(r["id"]) for r in rows]
+        ph = ",".join("?" for _ in order_ids)
+        lot_params = (int(user_id), *order_ids)
+        cash_map = {
+            str(r["order_id"]): int(r["remaining_cents"] or 0)
+            for r in conn.execute(
+                f"SELECT order_id, remaining_cents FROM cash_lots WHERE user_id = ? AND order_id IN ({ph})",
+                lot_params,
+            ).fetchall()
+        }
+        point_map = {
+            str(r["payment_order_id"]): int(r["units"] or 0)
+            for r in conn.execute(
+                f"SELECT payment_order_id, COALESCE(SUM(remaining_units), 0) AS units "
+                f"FROM point_lots WHERE user_id = ? AND payment_order_id IN ({ph}) GROUP BY payment_order_id",
+                lot_params,
+            ).fetchall()
+        }
+        refund_map: dict[str, dict[str, Any]] = {}
+        for r in conn.execute(
+            f"SELECT id, order_id, status, amount_cents, units, reason, created_at "
+            f"FROM billing_refund_requests WHERE user_id = ? AND order_id IN ({ph}) "
+            f"ORDER BY created_at DESC, id DESC",
+            lot_params,
+        ).fetchall():
+            oid = str(r["order_id"])
+            if oid not in refund_map:
+                created_raw = r["created_at"]
+                refund_map[oid] = {
+                    "id": str(r["id"]),
+                    "status": str(r["status"] or "pending"),
+                    "amountCents": int(r["amount_cents"] or 0),
+                    "units": int(r["units"] or 0),
+                    "reason": str(r["reason"] or ""),
+                    "createdAt": created_raw.isoformat()
+                    if hasattr(created_raw, "isoformat")
+                    else str(created_raw or ""),
+                }
+
+        for r in rows:
+            item = _serialize_order(r)
+            if item["status"] in ("paid", "partially_refunded"):
+                if item["purpose"] == "cash":
+                    refundable_cents = int(cash_map.get(item["id"], 0))
+                    refundable_units = 0
+                else:
+                    refundable_units = int(point_map.get(item["id"], 0))
+                    refundable_cents = refundable_units * 10
+            else:
+                refundable_cents = 0
+                refundable_units = 0
+            item["refundableCents"] = refundable_cents
+            item["refundableUnits"] = refundable_units
+            item["refundRequest"] = refund_map.get(item["id"])
+            orders.append(item)
+
     return {
         "ok": True,
-        "orders": [_serialize_order(r) for r in rows],
+        "orders": orders,
+        "total": total,
+        "page": safe_page,
+        "pageSize": safe_limit,
+        "totalPages": total_pages,
     }
 
 
