@@ -1351,6 +1351,7 @@ const {
   fetchHandler=async()=>referenceResponse({assets:[{id:"retry-reference",cat:"props",name_zh:"Retry"}]});
   await api.ensureBenchmarkAssets();
   assert(api.getReferenceAssets().some(item=>item.id==="retry-reference"));
+  assert(!api.getReferenceAssets().some(item=>item.id==="OT-001"||item.id==="OT-002"));
 
   console.log("All studio generation, document isolation, save and history tests passed (37/37).");
 })().catch((err) => {

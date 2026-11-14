@@ -17428,11 +17428,7 @@
       const config = await configPromise;
       if (config) CS.serverCfg = config;
       configureGenerationEngine();
-      const defaultOtherAssets = [
-        { id: "OT-001", name_zh: "朱砂闲章与宣纸底纹", desc_zh: "东方手绘版面装饰印章参考", image: "/images/poster-demo-autumn-equinox.webp", cat: "other", custom: false },
-        { id: "OT-002", name_zh: "手账胶带与便签边框", desc_zh: "拼贴感信息卡装饰元素参考", image: "/images/A_001-016.webp", cat: "other", custom: false }
-      ];
-      Catalog.benchmarkAssets.other = defaultOtherAssets;
+      Catalog.benchmarkAssets.other = [];
 
       mountStudioShell();
       // A completed import from a previous tab/session may be recovered without
