@@ -470,10 +470,12 @@ class DeviceAuthTests(unittest.TestCase):
 
         results = []
         errors = []
+        barrier = threading.Barrier(6)
 
         def worker(idx: int) -> None:
             try:
                 # Use distinct fake IPs so IP rate limit does not trigger
+                barrier.wait(timeout=10)
                 r = DA.create_device_code(self.db, f"192.168.1.{idx + 1}", {"clientName": f"Worker {idx}"})
                 results.append(r)
             except ServiceError as e:

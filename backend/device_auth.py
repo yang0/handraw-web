@@ -234,6 +234,9 @@ def create_device_code(
 
     # 3. Pending count check and insertion within the same transaction (atomic)
     with db.transaction() as tx:
+        # COUNT + INSERT alone is not atomic under PostgreSQL READ COMMITTED.
+        # Serialize admissions across all workers in this database.
+        tx.execute("SELECT pg_advisory_xact_lock(255, 0)")
         now_iso = utc_now_iso()
         pending_count = tx.execute(
             "SELECT COUNT(*) FROM device_codes WHERE status = 'pending' AND expires_at > ?",
