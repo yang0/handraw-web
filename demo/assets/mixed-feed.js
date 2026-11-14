@@ -325,7 +325,7 @@
     var authorText = hit && hit.author ? esc(hit.author) : '';
     var imgAttr = (window && window.HandrawImageLoader) ? 'data-hw-src="' : 'src="';
     return '<article class="hw-mf-card hw-mf-search-hit">' +
-      (img ? '<a class="hw-mf-media" href="' + href + '">' +
+      (img ? '<a class="hw-mf-media has-ratio hw-progressive-media" href="' + href + '" data-hw-refine-ratio="true" style="aspect-ratio:3 / 4">' +
         '<img ' + imgAttr + esc(img) + '" alt="" loading="lazy"></a>' : '') +
       '<div class="hw-mf-body">' +
         '<a class="hw-mf-title" href="' + href + '">' + titleHtml + '</a>' +
