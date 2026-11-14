@@ -676,7 +676,7 @@ window.HandrawMarket = ({
           image.loading = "lazy";
           if (source && window.HandrawImages)
             window.HandrawImages.set(image, source);
-          else if (source) image.src = source;
+          else if (source) image.dataset.hwSrc = source;
         }
         for (const source of template.content.querySelectorAll(
           "source[srcset]",

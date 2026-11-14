@@ -4,7 +4,7 @@ const fs = require("node:fs");
 const vm = require("node:vm");
 const path = require("node:path");
 
-let now = 0, nextId = 0, imageStarts = 0, geometryReads = 0, io, mutation;
+let now = 0, nextId = 0, imageStarts = 0, geometryReads = 0, documentScans = 0, io, mutation;
 const timers = new Map(), rafs = [], windowEvents = {}, documentEvents = {};
 class FakeImage {
   constructor(source) {
@@ -70,7 +70,7 @@ const document = {
   documentElement: {},
   body: { append() {} },
   addEventListener: (event, cb) => documentEvents[event] = cb,
-  querySelectorAll: () => [first, second],
+  querySelectorAll: () => {documentScans++;return [first, second];},
   createElement() { return { style: {}, append() {}, addEventListener() {}, setAttribute() {} }; }
 };
 const window = {
@@ -88,7 +88,7 @@ const file = path.join(__dirname, "..", "demo", "assets", "image-loader.js");
 vm.runInNewContext(fs.readFileSync(file, "utf8"), sandbox, { filename: file });
 assert.ok(window.HandrawImageLoader);
 assert.equal(windowEvents.scroll, undefined, "IO should handle scroll without global rescans");
-assert.equal(windowEvents.resize, undefined, "IO should handle resize without global rescans");
+assert.equal(typeof windowEvents.resize, 'function', "DPR and viewport changes can upgrade visible variants");
 
 documentEvents.DOMContentLoaded();
 io.show([first, second]);
@@ -100,6 +100,7 @@ first.emit("load");
 assert.equal(first.dataset.hwLoaded, first.src);
 assert.ok(first.classList.contains("hw-img-ready"));
 const readsBefore = geometryReads;
+const scansBefore = documentScans;
 
 const added = new FakeImage("/images/c.webp");
 const container = new FakeRoot([added]);
@@ -111,7 +112,7 @@ rafs.shift()();
 io.show([added]);
 advance(40);
 assert.equal(imageStarts, 3, "newly appended image loads");
-assert.equal(geometryReads, readsBefore, "IO path does not compute every image bounding rect");
+assert.equal(documentScans, scansBefore, "new subtree sizing never rescans the whole document");
 
 added.complete = true;
 added.naturalWidth = 100;

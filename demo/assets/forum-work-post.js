@@ -452,14 +452,14 @@
 
     if (stage && main) {
       main.addEventListener("click", () => {
-        const currentSrc = main.getAttribute("src") || main.getAttribute("data-hw-src");
+        const currentSrc = main.getAttribute("data-hw-src") || main.getAttribute("src");
         if (currentSrc && typeof S.openModal === "function") {
           S.openModal({
             title: `🖼️ ${esc(model.title || "作品大图")}`,
             html: `
               <div class="hw-modal-lightbox-container" style="text-align:center;">
                 <a href="${esc(currentSrc)}" target="_blank" rel="noopener noreferrer" title="点击新窗口打开" style="display:block;max-width:100%;">
-                  <img class="hw-modal-lightbox-img" src="${esc(currentSrc)}" alt="${esc(model.title || "作品原图")}" style="max-height:75vh;border-radius:8px;" />
+                  <img class="hw-modal-lightbox-img" data-hw-src="${esc(currentSrc)}" alt="${esc(model.title || "作品原图")}" style="max-height:75vh;border-radius:8px;" />
                 </a>
                 <div style="display:flex;gap:10px;align-items:center;margin-top:14px;justify-content:center;flex-wrap:wrap;">
                   <a class="btn btn-sm btn-primary" href="${esc(currentSrc)}" download="handraw-work.webp" target="_blank" rel="noopener noreferrer">⬇️ 下载原图</a>

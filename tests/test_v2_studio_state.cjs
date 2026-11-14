@@ -228,7 +228,7 @@ assert.match(loader, /MAX_ACTIVE\s*=\s*6/);
 assert.match(loader, /MAX_RETRIES\s*=\s*2/);
 assert.match(loader, /data-hw-src/);
 assert.match(loader, /data-hw-width/);
-assert.match(loader, /"w=" \+ width|"&" : "\?"/, "a width bucket is appended to the request URL");
+assert.match(loader, /function variantUrl\(/, "one variant URL builder is shared by all image contexts");
 
 // Execute the demo loader against a tight deterministic DOM: hidden images
 // wait for an intersection, several requests run at once, a dropped request is
@@ -369,7 +369,7 @@ for (const source of [shared, studio]) {
 }
 assert.match(shared, /<img data-hw-src="\$\{esc\(item\.image\)\}"/);
 assert.match(studio, /<img data-hw-src="\$\{esc\(it\.image\)\}"/);
-assert.match(studio, /<img src="\$\{esc\(url\)\}"/);
+assert.match(studio, /<img data-hw-src="\$\{esc\(url\)\}"/);
 
 // Execute the actual Studio scope helpers in isolation. This simulates a
 // logged-in user's draft, switches to another account, rejects a late token,

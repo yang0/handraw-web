@@ -26,7 +26,7 @@
         var detailHref = s.detailUrl || S.channelUrl("main", { view: "work", id: s.id });
         return (
           '<a class="hw-scenario-thumb hw-scenario-thumb--' + (idx + 1) + '" href="' + S.esc(detailHref) + '" title="' + S.esc(s.title || sc.title) + '">' +
-          '<img data-hw-src="' + S.esc(imgUrl) + '" src="' + S.esc(imgUrl) + '" loading="lazy" alt="' + S.esc(s.title || sc.title) + '">' +
+          '<img data-hw-src="' + S.esc(imgUrl) + '" loading="lazy" alt="' + S.esc(s.title || sc.title) + '">' +
           '</a>'
         );
       }).join("");

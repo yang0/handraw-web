@@ -8,8 +8,9 @@
  *   3. keep the server healthy — bound concurrency, retry a dropped request,
  *      and back off instead of stalling the whole queue.
  *
- * Images opt in with data-hw-src. Optional attributes:
- *   data-hw-width  requested render width; drives ?w= on the source
+ * Templates use data-hw-src to avoid an eager original request. Native images
+ * are adopted automatically; data-hw-width is a fallback CSS size hint.
+ * Optional attributes:
  *   data-hw-ratio  "w/h" aspect ratio used to reserve layout space
  *   data-hw-lqip   tiny inline data URI painted before the real image
  *
@@ -30,6 +31,10 @@
   const PREFETCH_MARGIN = "600px 0px";
   const PREVIEW_MAX_ACTIVE = 3;
   const PREVIEW_WIDTH = 48;
+  const WIDTHS = [48, 96, 160, 240, 320, 480, 640, 960, 1280, 1600, 1920, 2560];
+  const states = new WeakMap();
+  const cancellations = new WeakMap();
+  const managedImages = new Set();
 
   const pending = new Set();
   const failures = new Set();
@@ -52,25 +57,55 @@
   let timer = null;
   let retryNotice = null;
 
-  /** Build the URL actually requested for one image. */
+  function widthBucket(width) {
+    return WIDTHS.find(value => value >= width) || WIDTHS[WIDTHS.length - 1];
+  }
+
+  function localMedia(raw) {
+    let source = String(raw || '').trim();
+    const origin = window.location?.origin;
+    if (origin && source.startsWith(origin + '/')) source = source.slice(origin.length);
+    // These are first-party public mirrors, never an arbitrary URL proxy.
+    source = source.replace(/^https:\/\/(?:img|static)\.handraw-style\.com(?=\/images\/)/i, '');
+    return /^\/(?:images|uploads|generated|avatars|assets)\//.test(source) ? source : '';
+  }
+
+  function variantUrl(raw, width) {
+    const local = localMedia(raw);
+    if (!local || /\.(?:svg|gif)(?:[?#]|$)/i.test(local)) return raw;
+    const [path, fragment = ''] = local.split('#');
+    const clean = path.replace(/([?&])w=[^&]*&?/g, '$1').replace(/[?&]$/, '');
+    const base = window.HandrawImageConfig?.mediaOrigin || '';
+    return base + clean + (clean.includes('?') ? '&' : '?') + 'w=' + widthBucket(width) + (fragment ? '#' + fragment : '');
+  }
+
+  /** Build a derivative URL without ever changing the original source receipt. */
   function resolveSource(image) {
     const raw = (image.dataset.hwSrc || "").trim();
     if (!raw) return "";
-    if (raw.startsWith("data:")) return raw;
-    if (/[?&]w=/.test(raw)) return raw;
-    // Only the Handraw media endpoint guarantees ?w= thumbnail support.
-    // Adding it to arbitrary remote hosts can break image URLs and caching.
-    if (!/^\/(?:images|uploads|generated)\//.test(raw)) return raw;
-    const width = parseInt(image.dataset.hwWidth || "", 10);
-    if (!width || width <= 0) return raw;
-    return raw + (raw.includes("?") ? "&" : "?") + "w=" + width;
+    if (image.dataset.hwOriginal === 'true' || !localMedia(raw)) return raw;
+    const width = autoWidth(image);
+    if (!width) return '';
+    const state = states.get(image);
+    // A smaller box can reuse already decoded pixels; expanding it upgrades.
+    const desired = widthBucket(width);
+    if (state?.raw === raw && state.width >= desired) return state.url;
+    return variantUrl(raw, desired);
   }
 
   /** Estimate a request width bucket from the rendered box. */
   function autoWidth(image) {
-    const cssWidth = image.clientWidth || image.parentElement?.clientWidth || 0;
+    const rect = image.getBoundingClientRect?.();
+    let cssWidth = rect?.width || image.clientWidth || Number(image.dataset.hwWidth) || image.parentElement?.clientWidth || 0;
+    const cssHeight = rect?.height || image.clientHeight || 0;
+    if (cssWidth > 0 && cssHeight > 0 && image.naturalWidth > 0 && image.naturalHeight > 0) {
+      const fit = window.getComputedStyle?.(image)?.objectFit;
+      const widthForHeight = cssHeight * image.naturalWidth / image.naturalHeight;
+      if (fit === 'contain') cssWidth = Math.min(cssWidth, widthForHeight);
+      if (fit === 'cover') cssWidth = Math.max(cssWidth, widthForHeight);
+    }
     if (!cssWidth) return 0;
-    return Math.ceil((cssWidth * (window.devicePixelRatio || 1)) / 160) * 160;
+    return Math.ceil(cssWidth * Math.min(3, Math.max(1, window.devicePixelRatio || 1)));
   }
 
   function nearby(image) {
@@ -117,13 +152,13 @@
   /** Never guess a query-string thumbnail contract for third-party images. */
   function previewSource(image) {
     const source = String(image.dataset.hwSrc || "").trim();
-    if (!/^\/(?:images|uploads|generated)\//.test(source) || /[?&]w=/.test(source)) return "";
-    return source + (source.includes("?") ? "&" : "?") + "w=" + PREVIEW_WIDTH;
+    if (!localMedia(source) || /\.(?:svg|gif)(?:[?#]|$)/i.test(source)) return "";
+    return variantUrl(source, PREVIEW_WIDTH);
   }
 
   function revealPreview(image, source, dimensions) {
     const box = progressiveBox(image);
-    if (!box || image.classList.contains("hw-img-ready")) return;
+    if (!box || image.classList.contains("hw-img-ready") || previewSource(image) !== source) return;
     updateProgressiveRatio(image, dimensions.width, dimensions.height);
     box.style.setProperty("--hw-preview-image", "url(" + JSON.stringify(source) + ")");
     box.classList.add("hw-preview-ready");
@@ -266,17 +301,26 @@
     image.decoding = "async";
     // Never let the browser defer the image we already scheduled.
     image.loading = "eager";
+    const raw = image.dataset.hwSrc;
+    const width = /[?&]w=(\d+)/.exec(source);
+    states.set(image, {raw, url:source, width:width ? Number(width[1]) : 0});
 
     let finished = false;
     let skeletonTimer = null;
-    const done = (failed) => {
+    const done = (failed, obsolete = false) => {
       if (finished) return;
       finished = true;
       if (skeletonTimer) clearTimeout(skeletonTimer);
       image.removeEventListener("load", loaded);
       image.removeEventListener("error", errored);
       inFlight.delete(image);
+      cancellations.delete(image);
       active = Math.max(0, active - 1);
+      if (obsolete || image.dataset.hwSrc !== raw || !image.isConnected) {
+        if (image.isConnected) pending.add(image);
+        pump();
+        return;
+      }
       if (failed) {
         const tries = (retries.get(image) || 0) + 1;
         retries.set(image, tries);
@@ -306,6 +350,8 @@
         if (decodedSources.size > 1500) decodedSources.delete(decodedSources.values().next().value);
         image.classList.add("hw-img-ready");
         image.classList.remove("hw-img-loading");
+        // A container may have expanded while this request was in flight.
+        if (resolveSource(image) !== source) pending.add(image);
       }
       pump();
     };
@@ -313,6 +359,7 @@
     const errored = () => done(true);
     image.addEventListener("load", loaded);
     image.addEventListener("error", errored);
+    cancellations.set(image, () => done(false, true));
 
     if (!decodedSources.has(source)) {
       // Defer the animated placeholder until we know this is not a fast
@@ -322,8 +369,13 @@
       }, SKELETON_DELAY);
     } else image.classList.remove("hw-img-loading");
     // A cached image can be complete immediately; avoid waiting for another event.
-    if (image.getAttribute?.("src") !== source) image.src = source;
-    if (image.complete && image.naturalWidth > 0) done(false);
+    if (image.getAttribute?.('src') === source && image.complete && image.naturalWidth > 0) done(false);
+    else {
+      // Reassign even an identical failed URL; otherwise no new load/error
+      // event fires and an explicit retry would occupy a queue slot forever.
+      image.src = source;
+      if (image.complete && image.naturalWidth > 0) done(false);
+    }
   }
 
   function markLoading(image) {
@@ -360,21 +412,24 @@
     if (!root) return;
     const register = (image) => {
       if (!image || !image.isConnected) return;
+      if (!image.dataset.hwSrc) {
+        const source = image.getAttribute?.('src');
+        if (!source) return;
+        image.dataset.hwSrc = source;
+      }
       if (!watched.has(image)) {
         watched.add(image);
-        if (!image.dataset.hwWidth) {
-          const guess = autoWidth(image);
-          if (guess > 0) image.dataset.hwWidth = String(guess);
-        }
+        managedImages.add(image);
+        resizeObserver?.observe(image);
         applyRatio(image);
         preparePlaceholder(image);
         if (observer) observer.observe(image);
       }
       if (!observer && nearby(image)) enqueue(image);
     };
-    if (root.matches?.("img[data-hw-src]")) register(root);
+    if (root.matches?.("img") || root.matches?.("img[data-hw-src]")) register(root);
     if (root.querySelectorAll) {
-      for (const image of root.querySelectorAll("img[data-hw-src]")) register(image);
+      for (const image of root.querySelectorAll("img")) register(image);
     }
     pump();
   }
@@ -394,8 +449,59 @@
         pump();
       }, { rootMargin: PREFETCH_MARGIN });
 
+  const resizeObserver = typeof ResizeObserver === 'undefined' ? null : new ResizeObserver(entries => {
+    for (const {target} of entries) if (visible.has(target)) enqueue(target);
+    pump();
+  });
+
+  function set(image, source, options = {}) {
+    if (!image || !source) return;
+    if (image.dataset.hwSrc !== source) {
+      const cancel = cancellations.get(image);
+      image.dataset.hwSrc = source;
+      states.delete(image);
+      delete image.dataset.hwLoaded;
+      delete image.dataset.hwFailed;
+      retries.delete(image);
+      image.classList?.remove('hw-img-ready');
+      const box = progressiveBox(image);
+      box?.classList.remove('hw-preview-ready');
+      if (box) delete box.dataset.hwPlaceholderReady;
+      cancel?.();
+    }
+    if (options.width) image.dataset.hwWidth = String(options.width);
+    scan(image);
+    if (nearby(image)) {visible.add(image);enqueue(image);pump();}
+  }
+
+  function transformHtml(html, forDisplay) {
+    const template = document.createElement('template');
+    template.innerHTML = String(html || '');
+    if (!template.content) return template.innerHTML;
+    for (const image of template.content.querySelectorAll('img')) {
+      const source = image.getAttribute('data-hw-src') || image.getAttribute('src');
+      if (!source) continue;
+      if (forDisplay) {
+        image.setAttribute('data-hw-src', source);
+        image.removeAttribute('src');
+        image.removeAttribute('srcset');
+      } else {
+        image.setAttribute('src', source);
+        for (const attribute of [...image.attributes])
+          if (attribute.name.startsWith('data-hw-')) image.removeAttribute(attribute.name);
+        image.classList.remove('hw-img-ready','hw-img-loading','hw-img-failed');
+      }
+    }
+    return template.innerHTML;
+  }
+
   window.HandrawImageLoader = {
     scan,
+    set,
+    url: variantUrl,
+    original: image => image?.dataset?.hwSrc || image?.getAttribute?.('src') || '',
+    prepareHtml: html => transformHtml(html, true),
+    originalHtml: html => transformHtml(html, false),
     retry(image) {
       if (!image || !image.dataset.hwSrc) return false;
       delete image.dataset.hwFailed;
@@ -411,8 +517,9 @@
       for (const image of [...failures]) this.retry(image);
       return count;
     },
-    constants: { MAX_ACTIVE, START_INTERVAL, RETRY_DELAY, MAX_RETRIES, PREFETCH_MARGIN }
+    constants: { MAX_ACTIVE, START_INTERVAL, RETRY_DELAY, MAX_RETRIES, PREFETCH_MARGIN, WIDTHS }
   };
+  window.HandrawImages = window.HandrawImageLoader;
 
   // Batch DOM additions into a single scan of only the new subtrees. Never
   // rescan the whole document on each card append or on every scroll tick.
@@ -433,15 +540,39 @@
   if (typeof MutationObserver !== "undefined") {
     new MutationObserver((records) => {
       for (const record of records || []) {
+        if (record.type === 'attributes') {
+          const image = record.target;
+          if (record.attributeName === 'src' && image.getAttribute('src') !== states.get(image)?.url) {
+            const source = image.getAttribute('src');
+            if (source && source !== image.dataset.hwSrc) set(image, source);
+          } else if (record.attributeName === 'data-hw-src') {
+            if (states.get(image)?.raw !== image.dataset.hwSrc) {
+              const cancel = cancellations.get(image);
+              states.delete(image); delete image.dataset.hwLoaded;
+              delete image.dataset.hwFailed; retries.delete(image);
+              cancel?.();
+            }
+            enqueue(image);pump();
+          }
+        }
         for (const node of record.addedNodes || []) {
           if (node.nodeType !== 1) continue;
-          if (node.matches?.("img[data-hw-src]") || node.querySelector?.("img[data-hw-src]")) {
+          if (node.matches?.("img") || node.matches?.("img[data-hw-src]") || node.querySelector?.("img") || node.querySelector?.("img[data-hw-src]")) {
             addedRoots.add(node);
+          }
+        }
+        for (const node of record.removedNodes || []) {
+          if (node.nodeType !== 1) continue;
+          const detached = [node, ...(node.querySelectorAll?.('img') || [])];
+          for (const image of detached) if (!image.isConnected) {
+            managedImages.delete(image); pending.delete(image);failures.delete(image);
+            watched.delete(image);cancellations.get(image)?.();
+            observer?.unobserve?.(image);resizeObserver?.unobserve?.(image);
           }
         }
       }
       if (addedRoots.size) scheduleAdded();
-    }).observe(document.documentElement, { childList: true, subtree: true });
+    }).observe(document.documentElement, { childList: true, subtree: true, attributes:true, attributeFilter:['src','data-hw-src'] });
   }
   // IntersectionObserver already tracks scroll/resize; only use a throttled
   // viewport scan on old browsers without it.
@@ -457,6 +588,10 @@
     window.addEventListener("scroll", onViewport, { passive: true });
     window.addEventListener("resize", onViewport, { passive: true });
   }
+  if (observer) window.addEventListener('resize', () => {
+    for (const image of managedImages) if (image.isConnected && visible.has(image)) enqueue(image);
+    pump();
+  }, {passive:true});
   if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", () => scan(document), { once: true });
   else scan(document);
 })();

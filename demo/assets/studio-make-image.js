@@ -408,7 +408,7 @@
                           return `
                             <div class="make-image-slot-card is-inline" data-tone-card="${esc(tid)}">
                               <div class="make-image-slot-thumb-wrap">
-                                <img src="${esc(tImg)}" alt="${esc(tName)}" />
+                                <img data-hw-src="${esc(tImg)}" alt="${esc(tName)}" />
                                 <button type="button" class="make-image-slot-clear" data-del-tone="${esc(tid)}" title="移除影调">×</button>
                               </div>
                               <div class="make-image-slot-meta">
@@ -524,7 +524,7 @@
                     ${results.map((r, idx) => `
                       <div class="make-image-result-card" data-result-id="${esc(r.id)}">
                         <div class="make-image-result-thumb">
-                          <img src="${esc(r.imageUrl)}" alt="生成结果 #${idx + 1}" loading="lazy" />
+                          <img data-hw-src="${esc(r.imageUrl)}" alt="生成结果 #${idx + 1}" loading="lazy" />
                         </div>
                         <div class="make-image-result-actions">
                           <button type="button" class="btn btn-sm btn-primary" data-action="download" data-url="${esc(r.imageUrl)}">下载</button>
@@ -548,7 +548,7 @@
                           return `
                             <div class="make-image-ref-thumb" data-ref-card="${idx}">
                               <div class="make-image-slot-thumb-wrap">
-                                <img src="${esc(imgUrl)}" alt="${esc(imgName)}" />
+                                <img data-hw-src="${esc(imgUrl)}" alt="${esc(imgName)}" />
                                 <button type="button" class="make-image-slot-clear" data-del-ref="${idx}" title="移除参考图" aria-label="移除参考图 ${idx + 1}">×</button>
                               </div>
 
@@ -1095,7 +1095,7 @@
               const on = current.has(t.id);
               return `
                 <div class="ic-picker-card ${on ? "is-selected" : ""}" data-tone-id="${esc(t.id)}" style="cursor:pointer;border:1.5px solid ${on ? "var(--vermilion)" : "var(--line-soft)"};border-radius:9px;padding:6px;background:${on ? "var(--vermilion-surface)" : "#fff"};display:flex;gap:8px;align-items:center;">
-                  <img src="${esc(t.image || `/images/individual/TONES/${t.id}.webp`)}" alt="${esc(t.name_zh || t.name)}" style="width:40px;height:40px;object-fit:cover;border-radius:6px;" />
+                  <img data-hw-src="${esc(t.image || `/images/individual/TONES/${t.id}.webp`)}" alt="${esc(t.name_zh || t.name)}" style="width:40px;height:40px;object-fit:cover;border-radius:6px;" />
                   <div style="min-width:0;flex:1;">
                     <div style="font-size:10px;font-family:var(--font-mono);font-weight:700;color:var(--ink-muted);">${esc(t.id)}</div>
                     <div style="font-size:12px;font-weight:700;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${esc(t.name_zh || t.name || t.id)}</div>

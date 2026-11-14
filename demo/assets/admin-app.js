@@ -837,7 +837,7 @@
             <tbody>
               ${state.data.works.map((w) => `
                 <tr>
-                  <td><img class="adm-thumb" src="${esc(w.image)}" alt="${esc(w.title)}" loading="lazy" /></td>
+                  <td><img class="adm-thumb" data-hw-src="${esc(w.image)}" alt="${esc(w.title)}" loading="lazy" /></td>
                   <td style="max-width:340px;">
                     <div style="font-weight:700;margin-bottom:4px;">
                       ${esc(w.title)}
@@ -997,7 +997,7 @@
                 const statusLabel = statusLabels[a.status] || esc(a.status);
                 return `
                   <tr>
-                    <td><img class="adm-thumb" src="${esc(a.image)}" alt="${esc(a.code)}" loading="lazy" /></td>
+                    <td><img class="adm-thumb" data-hw-src="${esc(a.image)}" alt="${esc(a.code)}" loading="lazy" /></td>
                     <td>
                       <div><code><strong>${esc(a.code)}</strong></code> · <strong>${esc(a.name)}</strong></div>
                       <div style="font-size:12px;color:var(--adm-ink-muted);margin-top:3px;">@${esc(a.authorUsername || "官方")} · ${esc(a.kind === "layout" ? "图型框架" : "画风指令")}</div>
@@ -2338,7 +2338,7 @@
           <button class="adm-btn" id="moff-btn-upload">📷 上传封面</button>
         </div>
         <div id="moff-thumb-wrap" style="margin-top:8px;${item.image ? "" : "display:none;"}">
-          <img id="moff-thumb" src="${esc(item.image)}" style="width:72px;height:72px;object-fit:cover;border-radius:6px;border:1px solid var(--adm-border);" />
+          <img id="moff-thumb" data-hw-src="${esc(item.image)}" style="width:72px;height:72px;object-fit:cover;border-radius:6px;border:1px solid var(--adm-border);" />
         </div>
       </div>
       <div class="adm-field">
@@ -2383,7 +2383,7 @@
       imgInput.oninput = () => {
         const val = imgInput.value.trim();
         if (val) {
-          thumbImg.src = val;
+          window.HandrawImages.set(thumbImg, val);
           thumbWrap.style.display = "";
         } else {
           thumbWrap.style.display = "none";
@@ -2411,7 +2411,7 @@
               });
               if (res && res.url) {
                 imgInput.value = res.url;
-                thumbImg.src = res.url;
+                window.HandrawImages.set(thumbImg, res.url);
                 thumbWrap.style.display = "";
                 toast("封面图片上传成功");
               }
@@ -2813,7 +2813,7 @@
                   <div class="adm-scenario-sample-thumbs">
                     ${samples.length ? samples.map((s) => `
                       <div class="adm-sample-thumb-item ${s.isPinned ? "is-pinned" : ""}">
-                        <img src="${esc(s.imageUrl || s.coverUrl)}" alt="${esc(s.title)}" />
+                        <img data-hw-src="${esc(s.imageUrl || s.coverUrl)}" alt="${esc(s.title)}" />
                         <div class="adm-sample-thumb-info">
                           <span class="adm-sample-thumb-title" title="${esc(s.title)}">${esc(s.title || "无题")}</span>
                           <span class="adm-sample-thumb-badge">${s.isPinned ? "📌 置顶" : "🔄 轮换"}</span>
@@ -2842,7 +2842,7 @@
                           <tr>
                             <td>${p.pinOrder}</td>
                             <td>
-                              ${p.imageUrl ? `<img src="${esc(p.imageUrl)}" style="width:40px;height:40px;object-fit:cover;border-radius:4px;" />` : `<div style="width:40px;height:40px;background:#e5ded3;border-radius:4px;"></div>`}
+                              ${p.imageUrl ? `<img data-hw-src="${esc(p.imageUrl)}" style="width:40px;height:40px;object-fit:cover;border-radius:4px;" />` : `<div style="width:40px;height:40px;background:#e5ded3;border-radius:4px;"></div>`}
                             </td>
                             <td>
                               <strong>${esc(p.title)}</strong><br/>
@@ -3044,7 +3044,7 @@
           const img = (w.images && w.images[0]) || "";
           return `
             <div class="pw-pick-item" data-id="${esc(w.id)}" style="display:flex;align-items:center;gap:10px;padding:8px;border-bottom:1px solid #eee;cursor:pointer;background:#fff;border-radius:4px;margin-bottom:4px;">
-              ${img ? `<img src="${esc(img)}" style="width:36px;height:36px;object-fit:cover;border-radius:4px;" />` : `<div style="width:36px;height:36px;background:#eee;border-radius:4px;"></div>`}
+              ${img ? `<img data-hw-src="${esc(img)}" style="width:36px;height:36px;object-fit:cover;border-radius:4px;" />` : `<div style="width:36px;height:36px;background:#eee;border-radius:4px;"></div>`}
               <div style="flex:1;min-width:0;">
                 <div style="font-size:13px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${esc(w.title || "无题")}</div>
                 <div style="font-size:11px;color:#777;">ID: <code>${esc(w.id)}</code> · 作者: ${esc(w.authorName || w.author || "")} · ${esc(w.layout || w.layout_code || "自由排版")}</div>

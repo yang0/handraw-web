@@ -20,7 +20,7 @@
       node.loading = "lazy";
       if (window.HandrawImages && attrs.src)
         window.HandrawImages.set(node, attrs.src);
-      else if (attrs.src) node.src = attrs.src;
+      else if (attrs.src) node.dataset.hwSrc = attrs.src;
     }
     for (const child of children.flat())
       if (child !== null && child !== undefined)

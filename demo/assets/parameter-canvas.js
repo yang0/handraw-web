@@ -331,7 +331,7 @@
     const examples=result.samples.map((row,index)=>`<li><span class="pc-example-number">${index+1}</span><div>${Object.keys(labels).filter(field=>Object.hasOwn(row,field)).map(field=>{
       const {label,image}=exampleValue(field,row[field]);
       if(!label) return "";
-      return `<span class="pc-example-value" title="${esc(label)}">${image?`<img src="${esc(image)}" alt="" loading="lazy">`:""}${esc(label.slice(0,48))}</span>`;
+      return `<span class="pc-example-value" title="${esc(label)}">${image?`<img data-hw-src="${esc(image)}" alt="" loading="lazy">`:""}${esc(label.slice(0,48))}</span>`;
     }).join("")}</div></li>`).join("");
     const fixed=sources.filter(source=>source.count===1 && source.samples.some(row=>Object.values(row).some(value=>Array.isArray(value)?value.length:value)));
     return `${choices}${result.error?`<p class="pc-match-warning" role="status">${esc(result.error)}</p>`:""}
@@ -711,7 +711,7 @@
   }
   function parameterValue(node,value,index) {
     const id=esc(node.id),field=node.parameter,base=`data-node="${id}" data-parameter="${esc(field)}" data-value="${index}"`;
-    if(field==="refImages") return `<button type="button" ${base} data-action="refs">选择一组参考图（${value.length}/6）</button><div class="pc-references">${value.map(url=>`<img src="${esc(url)}" alt="已选参考图" loading="lazy">`).join("")}</div>`;
+    if(field==="refImages") return `<button type="button" ${base} data-action="refs">选择一组参考图（${value.length}/6）</button><div class="pc-references">${value.map(url=>`<img data-hw-src="${esc(url)}" alt="已选参考图" loading="lazy">`).join("")}</div>`;
     if(field==="prompt") return `<textarea aria-label="主题候选 ${index+1}" placeholder="描述想画的内容，例如雨后森林中的小屋" ${base}>${esc(value)}</textarea>`;
     if(field==="ratio") return `<select aria-label="比例候选 ${index+1}" ${base}>${ratios.map(r=>`<option ${r===value?"selected":""}>${r}</option>`).join("")}</select>`;
     if(field==="specId") return `<select aria-label="图片规格候选 ${index+1}" ${base}>${(options.specifications?.()||[]).filter(s=>s.enabled&&s.verified).map(s=>`<option value="${esc(s.id)}" ${s.id===value?'selected':''}>${esc(s.name)} · ${s.priceCents==null?'尚未配置收费价格':window.HandrawEconomy.yuan(s.priceCents)+'/张'}</option>`).join('')}</select>`;
@@ -724,7 +724,7 @@
   function presetChoices(field) {return choiceOptions(field,options.parameterChoices?.(field)||[]);}
   function selectedPresetHtml(field,value) {
     const values=Array.isArray(value)?value:[value];
-    return presetChoices(field).filter(item=>values.includes(item.value)&&item.value).map(item=>`<span class="pc-selected-preset">${item.image?`<img src="${esc(item.image)}" alt="">`:""}<span>${esc(item.label)}</span></span>`).join("");
+    return presetChoices(field).filter(item=>values.includes(item.value)&&item.value).map(item=>`<span class="pc-selected-preset">${item.image?`<img data-hw-src="${esc(item.image)}" alt="">`:""}<span>${esc(item.label)}</span></span>`).join("");
   }
   function choiceValue(node,value,index) {
     const field=node.parameter,base=`data-node="${esc(node.id)}" data-parameter="${field}" data-value="${index}"`,choices=presetChoices(field),known=new Set(choices.map(item=>item.value));
@@ -759,7 +759,7 @@
     const grid=element.querySelector('.pc-parameter-grid-picker'),search=element.querySelector('[type=search]'),error=element.querySelector('[role=alert]');
     const render=()=>{
       const query=search.value.trim().toLowerCase();
-      grid.innerHTML=choices.filter(item=>(item.value+' '+item.label).toLowerCase().includes(query)).map(item=>`<button type="button" data-preset-value="${esc(item.value)}" aria-pressed="${selected.has(item.value)}">${item.image?`<img src="${esc(item.image)}" alt="" loading="lazy">`:""}<strong>${esc(item.label)}</strong>${item.value!==item.label?`<small>${esc(item.value)}</small>`:""}</button>`).join('')||'<p>暂无匹配预设，仍可在节点中填写自定义内容。</p>';
+      grid.innerHTML=choices.filter(item=>(item.value+' '+item.label).toLowerCase().includes(query)).map(item=>`<button type="button" data-preset-value="${esc(item.value)}" aria-pressed="${selected.has(item.value)}">${item.image?`<img data-hw-src="${esc(item.image)}" alt="" loading="lazy">`:""}<strong>${esc(item.label)}</strong>${item.value!==item.label?`<small>${esc(item.value)}</small>`:""}</button>`).join('')||'<p>暂无匹配预设，仍可在节点中填写自定义内容。</p>';
       element.querySelector('.pc-picker-confirm').textContent=selected.size?`应用所选（${selected.size}）`:'应用所选';
     };
     search.oninput=render;
@@ -784,7 +784,7 @@
     const image=resource?.image||"",base=`data-node="${esc(node.id)}" data-parameter="${esc(node.parameter)}" data-value="${index}" data-field="${field}"`;
     const disabled=field==="style2"&&!resourceCode(value,"style1");
     return `<div class="pc-resource-control"><button type="button" class="pc-resource-picker ${code?"is-selected":""}" data-action="resource" ${base} aria-label="选择${label}候选 ${index+1}${code?`：${esc(code)} ${esc(name)}`:""}" ${disabled?"disabled":""}>
-      <span class="pc-resource-thumb">${image?`<img src="${esc(image)}" alt="${esc(code)} ${esc(name)}"${node.grouped?"":" loading=\"lazy\""}>`:'<span aria-hidden="true">＋</span>'}</span>
+      <span class="pc-resource-thumb">${image?`<img data-hw-src="${esc(image)}" alt="${esc(code)} ${esc(name)}"${node.grouped?"":" loading=\"lazy\""}>`:'<span aria-hidden="true">＋</span>'}</span>
       <span class="pc-resource-info"><small>${label}${code?` · ${esc(code)}`:""}</small><strong>${esc(name)}</strong><span>${disabled?"先选择主画风":code?"点击更换":"按编号、名称或图片挑选"}</span></span></button>
       ${code?`<div class="pc-resource-actions">${image?`<button type="button" data-action="zoom-resource" ${base} aria-label="放大${label}候选 ${index+1}">放大</button>`:""}<button type="button" data-action="clear-resource" ${base} aria-label="清空${label}候选 ${index+1}">清空</button></div>`:""}</div>`;
   }
@@ -1093,7 +1093,7 @@
     return `<div class="pc-gallery">${items.map(item => {
       const prompt = String(item.spec?.prompt || "");
       return `<article><strong>${item.ordinal + 1}. ${esc(prompt.slice(0, 80))}</strong><span>${taskLabels[item.status] || "等待确认"}</span>
-      ${item.images.map(url => `<button type="button" class="pc-result-image" data-action="open-result-image" data-url="${esc(url)}" data-title="${esc(prompt.slice(0, 80))}" aria-label="查看第 ${item.ordinal + 1} 项生成图"><img src="${esc(url)}" alt="${esc(prompt.slice(0, 80))}" loading="lazy"></button>`).join("")}</article>`;
+      ${item.images.map(url => `<button type="button" class="pc-result-image" data-action="open-result-image" data-url="${esc(url)}" data-title="${esc(prompt.slice(0, 80))}" aria-label="查看第 ${item.ordinal + 1} 项生成图"><img data-hw-src="${esc(url)}" alt="${esc(prompt.slice(0, 80))}" loading="lazy"></button>`).join("")}</article>`;
     }).join("")}</div>`;
   }
 
@@ -1154,7 +1154,7 @@
       const items = byNode.get(id) || [];
       const thumb = items.find(item => item.images.length)?.images[0];
       updateMarkup(slot, items.length ? `<button type="button" data-action="open-output" data-node="${esc(id)}" aria-expanded="${activePanel === "output" && outputPanelId === id}">
-        ${thumb ? `<img src="${esc(thumb)}" alt="" loading="lazy">` : ""}
+        ${thumb ? `<img data-hw-src="${esc(thumb)}" alt="" loading="lazy">` : ""}
         <span><strong>出图结果</strong><small>完成 ${completedCount(items)} / ${items.length} 项 · ${resultCount(items)} 张图</small></span><span aria-hidden="true">›</span></button>` : "");
     }
     const history = root.querySelector('[data-action="toggle-history"]');

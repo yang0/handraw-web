@@ -59,7 +59,7 @@
     assets.innerHTML = data.assets.length ? data.assets.map((item) => {
       const url = safeImage(item.imageUrl || item.publicUrl); // Always prefer owner-authenticated image endpoint.
       return `<article class="hw-detail-section-card" style="padding:10px;min-width:105px;width:130px;">
-        ${url ? '<img loading="lazy" alt="' + escapeHtml(item.name) + '" src="' + escapeHtml(url) +
+        ${url ? '<img loading="lazy" alt="' + escapeHtml(item.name) + '" data-hw-src="' + escapeHtml(url) +
           '" style="width:100%;aspect-ratio:1;object-fit:cover;border-radius:7px;" />' : ""}
         <strong style="font-size:12px;overflow-wrap:anywhere;">${escapeHtml(item.name || item.localId || item.uid)}</strong>
         <div style="font-size:11px;color:var(--ink-muted);">${escapeHtml(item.cat)}</div>
@@ -83,7 +83,7 @@
         <span style="color:var(--ink-muted);font-size:12px;"> · ${escapeHtml(run.status)} · ${escapeHtml(run.createdAt)}</span></div>
         <p style="white-space:pre-wrap;overflow-wrap:anywhere;font-size:13px;margin:8px 0;color:var(--ink-body);">${escapeHtml((run.originalRequest || "").slice(0, 180))}</p>
         ${links.length ? '<div style="display:flex;gap:8px;overflow-x:auto;">' +
-          links.map((url) => '<img loading="lazy" alt="生成结果" src="' + escapeHtml(url) +
+          links.map((url) => '<img loading="lazy" alt="生成结果" data-hw-src="' + escapeHtml(url) +
             '" style="width:80px;height:80px;object-fit:cover;border-radius:8px;" />').join("") + '</div>' : ""}
         ${run.publishedWorkId ? '<a class="btn btn-sm" style="margin-top:10px;" href="/?view=work&id=' +
           encodeURIComponent(run.publishedWorkId) + '">查看公开作品</a>' : ""}
@@ -318,7 +318,7 @@
         const img = safeImage(item.imageUrl);
         return '<article class="hw-personal-gallery-card">' +
           '<div class="hw-personal-gallery-image">' +
-            (img ? '<img loading="lazy" src="' + escapeHtml(img) +
+            (img ? '<img loading="lazy" data-hw-src="' + escapeHtml(img) +
               '" alt="' + escapeHtml(item.name || "我的图片") + '" />'
               : '<span>暂无预览</span>') + '</div>' +
           '<div class="hw-personal-gallery-card-body"><strong>' +

@@ -753,7 +753,7 @@
                           const url=typeof ref === "string" ? ref : (ref.image || ref.url || "");
                           const name=typeof ref === "string" ? `参考图 ${refIndex+1}` : (ref.name || ref.id || `参考图 ${refIndex+1}`);
                           return !url ? "" : `<div class="batch-series-attachment">
-                            <img src="${esc(url)}" alt="${esc(name)}" loading="lazy" />
+                            <img data-hw-src="${esc(url)}" alt="${esc(name)}" loading="lazy" />
                             <button type="button" ${composerMode === "image" ? `data-remove-series-ref="${refIndex}"` : `data-remove-global-ref="${refIndex}"`} aria-label="移除参考图 ${refIndex+1}" title="移除">×</button>
                           </div>`;
                         }).join("")}
@@ -1414,8 +1414,7 @@
       if (card) {
         const img = card.querySelector("img");
         if (img) {
-          img.setAttribute("data-hw-src", res.imageUrl);
-          img.src = res.imageUrl;
+          global.HandrawImages.set(img, res.imageUrl);
         }
         const a = card.querySelector("a.btn");
         if (a) a.href = res.imageUrl;
@@ -2681,7 +2680,7 @@
         testImg.onload = () => {
           if (el.dataset.activeSrc !== src) return;
           if (img) {
-            img.src = src;
+            global.HandrawImages.set(img, src);
             img.alt = name ? `${code} ${name}` : (code || "图型预览");
           }
           if (codeEl) {
@@ -2707,9 +2706,9 @@
           this.hideHoverPreview(true);
         };
         el.dataset.activeSrc = src;
-        testImg.src = src;
+        testImg.src = global.HandrawImages ? global.HandrawImages.url(src, 640) : src;
       } else {
-        if (img) img.src = src;
+        if (img) global.HandrawImages.set(img, src);
         if (codeEl) codeEl.textContent = code || "";
         if (nameEl) nameEl.textContent = name || "";
         el.style.display = "block";

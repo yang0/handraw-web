@@ -192,13 +192,14 @@
         const {item}=await S.apiJson(`/api/content/${kind}/${encodeURIComponent(id)}/edit`);if(!isCurrent())return true;
         shell(root,kind==="works"?"编辑我的作品":"编辑我的帖子",`<form class="hw-account-form"><label>标题<input class="hw-input" name="title" value="${esc(item.title)}" minlength="4" maxlength="140" required></label>${kind==="works"?`<label>实际提示词<textarea class="hw-textarea" name="prompt" rows="9" required>${esc(item.prompt)}</textarea></label><label>创作说明<textarea class="hw-textarea" name="notes" rows="5">${esc(item.notes)}</textarea></label>`:'<label>公开正文<div class="hw-owner-rich-editor" id="owner-public-body" contenteditable="true" role="textbox" aria-multiline="true"></div></label>'+(item.price>0?'<label>解锁正文<div class="hw-owner-rich-editor" id="owner-locked-body" contenteditable="true" role="textbox" aria-multiline="true"></div></label>':"")}<p>本次编辑保留原有图片、价格与解锁记录。</p><button class="btn btn-primary" type="submit">保存修改</button></form>`);
         if(kind==="topics"){
-          root.querySelector("#owner-public-body").innerHTML=safeHtml(item.summary);
-          const locked=root.querySelector("#owner-locked-body");if(locked)locked.innerHTML=safeHtml(item.locked_body);
+          const display=value=>window.HandrawImages?.prepareHtml(safeHtml(value)) || safeHtml(value);
+          root.querySelector("#owner-public-body").innerHTML=display(item.summary);
+          const locked=root.querySelector("#owner-locked-body");if(locked)locked.innerHTML=display(item.locked_body);
         }
         bindForm(root,async data=>{
           const payload={title:data.get("title")};
           if(kind==="works"){payload.prompt=data.get("prompt");payload.notes=data.get("notes");}
-          else {payload.body=root.querySelector("#owner-public-body").innerHTML;payload.lockedBody=root.querySelector("#owner-locked-body")?.innerHTML||"";}
+          else {const original=value=>window.HandrawImages?.originalHtml(value)||value;payload.body=original(root.querySelector("#owner-public-body").innerHTML);payload.lockedBody=original(root.querySelector("#owner-locked-body")?.innerHTML||"");}
           await S.apiJson(`/api/content/${kind}/${encodeURIComponent(id)}/edit`,{method:"POST",body:payload});
           location.href=kind==="works"?mainUrl("work",{id}):S.channelUrl("forum",{view:"topic",id});
         });

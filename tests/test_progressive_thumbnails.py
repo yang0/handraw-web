@@ -14,7 +14,7 @@ class ProgressiveThumbnailTests(unittest.TestCase):
         self.assertIn(48, THUMB_WIDTHS)
         self.assertEqual(normalize_thumb_width("48"), 48)
         self.assertEqual(normalize_thumb_width("32"), 48)
-        self.assertEqual(normalize_thumb_width("240"), 320)
+        self.assertEqual(normalize_thumb_width("240"), 240)
         self.assertEqual(normalize_thumb_width("500"), 640)
 
     def test_48px_webp_preserves_aspect_without_cropping(self):
@@ -28,7 +28,8 @@ class ProgressiveThumbnailTests(unittest.TestCase):
                 self.assertEqual(thumb.format, "WEBP")
                 self.assertEqual(thumb.size, (48, 32))
             # Requested image larger than the source must not upscale the original.
-            self.assertIsNone(build_thumbnail(path, 1280))
+            with Image.open(io.BytesIO(build_thumbnail(path, 1280))) as large:
+                self.assertEqual(large.size, (960, 640))
 
 
 if __name__ == "__main__":

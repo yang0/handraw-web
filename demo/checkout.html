@@ -1,0 +1,26 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta name="referrer" content="no-referrer">
+  <title>Handraw 付款</title>
+  <link rel="stylesheet" href="/assets/theme.css?v=48">
+  <link rel="stylesheet" href="/assets/economy.css?v=1">
+</head>
+<body>
+  <main class="economy-wallet" style="max-width:560px;margin:32px auto;padding:24px;text-align:center">
+    <h1>确认付款</h1>
+    <p id="checkout-purpose"></p><strong id="checkout-amount"></strong>
+    <p id="checkout-status" role="status">正在读取订单…</p>
+    <img id="checkout-qr" alt="付款二维码" width="256" height="256" hidden>
+    <p><a id="checkout-open" class="btn btn-primary" hidden target="_blank" rel="noopener noreferrer">打开付款链接</a></p>
+    <p><button id="checkout-sync" class="btn" type="button">我已付款，核验到账</button></p>
+    <p><a href="/?view=wallet">返回钱包</a></p>
+    <p>请确认收款金额。只有支付平台核验成功后才会到账；请勿重复付款。</p>
+  </main>
+  <script defer src="/assets/error-boundary.js?v=1"></script>
+  <script defer src="/assets/image-loader.js?v=45"></script>
+  <script defer src="/assets/checkout.js?v=1"></script>
+</body>
+</html>

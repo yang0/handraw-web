@@ -2052,7 +2052,7 @@
       p.avatarUrl || "/assets/avatar-default.svg";
     const legalSize = ["sm", "md", "lg", "xl"].includes(size) ? size : "sm";
     return '<img class="hw-creator-avatar-' + legalSize + ' hw-creator-avatar-image" ' +
-      'src="' + esc(src) + '" alt="' + esc(p.authorName || p.name || uname || "创作者") +
+      'data-hw-src="' + esc(src) + '" alt="' + esc(p.authorName || p.name || uname || "创作者") +
       '的头像" loading="lazy" decoding="async" />';
   }
 
@@ -2934,14 +2934,14 @@
               ? `
                 <div class="hw-user-dropdown-wrap" id="hw-user-dropdown-wrap">
                   <button type="button" class="hw-user-avatar-btn" id="hw-user-avatar-btn" aria-haspopup="true" aria-expanded="false" title="@${esc(curUser.name || curUser.username)} · 点击展开个人菜单">
-                    <img src="${esc(curUser.avatarUrl || userProf.avatarUrl || "/assets/avatar-default.svg")}" class="hw-user-avatar-circle-img" alt="${esc(curUser.name || curUser.username)}" onerror="this.style.display='none';if(this.nextElementSibling)this.nextElementSibling.style.display='flex';" />
+                    <img data-hw-src="${esc(curUser.avatarUrl || userProf.avatarUrl || "/assets/avatar-default.svg")}" class="hw-user-avatar-circle-img" alt="${esc(curUser.name || curUser.username)}" onerror="this.style.display='none';if(this.nextElementSibling)this.nextElementSibling.style.display='flex';" />
                     <span class="hw-creator-avatar-sm ${esc(userProf.honor.sealClass)}" style="display:none;border-radius:50%;">${esc(userProf.avatarChar)}</span>
                     ${canAccessAdmin && s.user && s.user.openReportsCount > 0 ? `<span class="hw-avatar-dot-badge" title="有待办事项"></span>` : ""}
                   </button>
                   <div class="hw-user-dropdown-menu" id="hw-user-dropdown-menu">
                     <div class="hw-dropdown-header">
                       <div style="display:flex;align-items:center;gap:10px;margin-bottom:8px;">
-                        <img src="${esc(curUser.avatarUrl || userProf.avatarUrl || "/assets/avatar-default.svg")}" class="hw-user-avatar-circle-img hw-avatar-dropdown-lg" alt="${esc(curUser.name || curUser.username)}" onerror="this.style.display='none';if(this.nextElementSibling)this.nextElementSibling.style.display='flex';" />
+                        <img data-hw-src="${esc(curUser.avatarUrl || userProf.avatarUrl || "/assets/avatar-default.svg")}" class="hw-user-avatar-circle-img hw-avatar-dropdown-lg" alt="${esc(curUser.name || curUser.username)}" onerror="this.style.display='none';if(this.nextElementSibling)this.nextElementSibling.style.display='flex';" />
                         <span class="hw-creator-avatar-md ${esc(userProf.honor.sealClass)}" style="display:none;border-radius:50%;">${esc(userProf.avatarChar)}</span>
                         <div style="min-width:0;flex:1;">
                           <div style="font-weight:800;font-size:14.2px;color:var(--ink-strong);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">
@@ -3637,7 +3637,7 @@
         <div style="display:grid;grid-template-columns:120px 1fr;gap:14px;align-items:start;">
           <div style="background:#fff;border:1px solid var(--line-soft);border-radius:8px;padding:6px;text-align:center;">
             <div class="hw-share-thumb-wrap">
-              <img src="${esc(img)}" alt="" />
+              <img data-hw-src="${esc(img)}" alt="" />
             </div>
             <div style="font-size:11px;color:var(--ink-muted);">邀请码：<strong>${esc(invCode)}</strong></div>
           </div>
@@ -4218,7 +4218,7 @@
         }
 
         <section data-account-panel="profile" class="hw-account-identity-row" aria-label="头像和创作者身份">
-          <img class="hw-account-avatar-preview" src="${esc(u.avatarUrl || "/assets/avatar-default.svg")}" alt="我的创作者头像" />
+          <img class="hw-account-avatar-preview" data-hw-src="${esc(u.avatarUrl || "/assets/avatar-default.svg")}" alt="我的创作者头像" />
           <div class="hw-account-identity-actions">
             <strong>${esc(u.displayName || u.name || u.username)}</strong>
             <span style="font-size:12px;color:var(--ink-muted);">公开头像 · 支持 JPG、PNG、WebP，原始图片最大 3 MB；裁剪后再上传</span>

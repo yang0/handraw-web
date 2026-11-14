@@ -77,7 +77,7 @@
         const query=search.value.trim().toLowerCase();
         const visible=images.map((img,i)=>({...img,index:i})).filter(x=>!query||x.title.toLowerCase().includes(query));
         gallery.innerHTML=visible.length?visible.map(x=>`<button type="button" data-image-index="${x.index}" class="hw-article-p2-gallery-card">
-          <img src="${escape(x.url)}" alt="${escape(x.title)}" loading="lazy"><span>${escape(x.title)}</span><small>${escape(x.ratio)}</small></button>`).join(""):'<p class="hw-article-p2-empty">没有找到可插入的历史图片。请先完成一次生图。</p>';
+          <img data-hw-src="${escape(x.url)}" alt="${escape(x.title)}" loading="lazy"><span>${escape(x.title)}</span><small>${escape(x.ratio)}</small></button>`).join(""):'<p class="hw-article-p2-empty">没有找到可插入的历史图片。请先完成一次生图。</p>';
         gallery.querySelectorAll("[data-image-index]").forEach(b=>b.onclick=()=>finish(images[Number(b.dataset.imageIndex)]));
       };
       cover.querySelector("[data-cancel]").onclick=()=>finish(null);
@@ -94,7 +94,7 @@
       cover.innerHTML=`<section class="hw-article-p2-dialog" role="dialog" aria-modal="true" aria-labelledby="hw-variant-title">
         <header><span class="hw-article-p2-kicker">HANDRAW · 图片版本</span><h2 id="hw-variant-title">对比并选择图片</h2><p>旧图不会因重新生成而丢失。选择其中一张作为当前文章配图。</p></header>
         <div class="hw-article-p2-gallery">${variants.map((v,i)=>`<button type="button" data-variant="${i}" class="hw-article-p2-gallery-card">
-        <img src="${escape(v.imageUrl)}" alt="候选图 ${i+1}" loading="lazy"><strong>${escape(v.source||"版本 "+(i+1))}</strong><small>${v.imageUrl===card.imageUrl?"当前使用":"点击采用"}</small></button>`).join("")}</div>
+        <img data-hw-src="${escape(v.imageUrl)}" alt="候选图 ${i+1}" loading="lazy"><strong>${escape(v.source||"版本 "+(i+1))}</strong><small>${v.imageUrl===card.imageUrl?"当前使用":"点击采用"}</small></button>`).join("")}</div>
         <footer><button type="button" data-cancel>暂不替换</button></footer></section>`;
       const prev=document.activeElement;let done=false;
       const finish=(v)=>{if(done)return;done=true;cover.remove();if(prev?.isConnected)prev.focus();resolve(v)};

@@ -7648,7 +7648,7 @@
       html: `
         <div class="hw-modal-lightbox-container" style="gap:12px;">
           <a href="${esc(url)}" target="_blank" rel="noopener noreferrer" title="点击查看原图" style="display:block;max-width:100%;">
-            <img src="${esc(url)}" class="hw-modal-lightbox-img" alt="${esc(title)}" />
+            <img data-hw-src="${esc(url)}" class="hw-modal-lightbox-img" alt="${esc(title)}" />
           </a>
           <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;justify-content:center;">
             <a class="btn btn-sm btn-primary" href="${esc(url)}" download="handraw-output.webp">⬇️ 下载高清原图</a>
@@ -8161,7 +8161,7 @@
                                       <button type="button" class="btn btn-sm" data-hist-close-preview="${esc(h.id)}">收起预览 ✕</button>
                                     </div>
                                   </div>
-                                  <img src="${esc(selImgItem.imageUrl)}" alt="${esc(selImgItem.title || "高清预览")}" />
+                                  <img data-hw-src="${esc(selImgItem.imageUrl)}" alt="${esc(selImgItem.title || "高清预览")}" />
                                 </div>
                               `
                               : ""
@@ -8486,7 +8486,7 @@
     return `
       <div class="ic-v4-visual-slot is-filled" data-sp-pick="${esc(nodeId)}" data-sp-field="${esc(field)}" title="${esc(res.id)} ${esc(res.name)}（点击更换）">
         <div style="position:relative;">
-          <img class="ic-v4-slot-thumb" src="${esc(res.image)}" alt="${esc(res.name)}" />
+          <img class="ic-v4-slot-thumb" data-hw-src="${esc(res.image)}" alt="${esc(res.name)}" />
           <span style="position:absolute;left:5px;top:5px;padding:1px 5px;border-radius:4px;background:rgba(20,17,15,0.72);color:#fff;font-size:9.5px;font-family:var(--font-mono);font-weight:700;">${esc(res.id)}</span>
           <button type="button" class="ic-mini-glass-btn" data-sp-clear-field="${esc(nodeId)}" data-sp-field="${esc(field)}" style="position:absolute;right:4px;top:4px;padding:1px 5px;font-size:10px;" title="清空此项">×</button>
         </div>
@@ -8719,7 +8719,7 @@
                           const cm = getAssetCatMeta(it.cat || "other");
                           return `
                             <div style="position:relative;border-radius:10px;overflow:hidden;border:1px solid var(--ic-border);height:132px;background:var(--ic-surface);" data-ast-open="${esc(n.id)}">
-                              <img src="${esc(it.image)}" alt="${esc(it.name)}" style="width:100%;height:100%;object-fit:cover;display:block;cursor:pointer;" />
+                              <img data-hw-src="${esc(it.image)}" alt="${esc(it.name)}" style="width:100%;height:100%;object-fit:cover;display:block;cursor:pointer;" />
                               <span style="position:absolute;left:6px;top:6px;padding:2px 6px;border-radius:5px;background:rgba(20,17,15,0.72);color:#fff;font-size:10px;font-weight:750;">${esc(it.catLabel || cm.label)}</span>
                               <div style="position:absolute;right:6px;top:6px;display:flex;gap:4px;">
                                 <button type="button" class="ic-mini-glass-btn" data-ast-open="${esc(n.id)}">更换</button>
@@ -8742,7 +8742,7 @@
                           .map(
                             (it) => `
                             <div style="position:relative;border-radius:8px;overflow:hidden;height:78px;border:1px solid var(--ic-border);">
-                              <img src="${esc(it.image)}" alt="${esc(it.name)}" style="width:100%;height:100%;object-fit:cover;display:block;" />
+                              <img data-hw-src="${esc(it.image)}" alt="${esc(it.name)}" style="width:100%;height:100%;object-fit:cover;display:block;" />
                               <span style="position:absolute;left:4px;bottom:4px;right:4px;padding:1px 4px;border-radius:4px;background:rgba(20,17,15,0.72);color:#fff;font-size:9.5px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${esc(it.name)}</span>
                             </div>
                           `
@@ -9090,7 +9090,7 @@
                             const r = rMap.get(id);
                             return `
                               <div class="ic-loop-item-card" title="${esc(r?.name || id)}">
-                                ${r?.image ? `<img src="${esc(r.image)}" alt="${esc(id)}" />` : ""}
+                                ${r?.image ? `<img data-hw-src="${esc(r.image)}" alt="${esc(id)}" />` : ""}
                                 <div style="min-width:0;flex:1;">
                                   <div style="font-size:10px;font-family:var(--font-mono);font-weight:800;color:#0f766e;">#${idx + 1} · ${esc(id)}</div>
                                   <div style="font-size:10.5px;font-weight:750;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${esc(r?.name || id)}</div>
@@ -9133,7 +9133,7 @@
                           .map(
                             (it, idx) => `
                             <div class="ic-loop-item-card" title="${esc(it.name || it.id)}">
-                              ${it.image ? `<img src="${esc(it.image)}" alt="${esc(it.name || "")}" />` : ""}
+                              ${it.image ? `<img data-hw-src="${esc(it.image)}" alt="${esc(it.name || "")}" />` : ""}
                               <div style="min-width:0;flex:1;">
                                 <div style="font-size:10px;font-family:var(--font-mono);font-weight:800;color:#0f766e;">#${idx + 1}</div>
                                 <div style="font-size:10.5px;font-weight:750;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${esc(it.name || it.id)}</div>
@@ -9454,7 +9454,7 @@
                                 </span>
                                 ${
                                   c.imageUrl
-                                    ? `<img src="${esc(c.imageUrl)}" alt="" style="width:28px;height:20px;border-radius:4px;object-fit:cover;flex-shrink:0;border:1px solid var(--ic-border);" />`
+                                    ? `<img data-hw-src="${esc(c.imageUrl)}" alt="" style="width:28px;height:20px;border-radius:4px;object-fit:cover;flex-shrink:0;border:1px solid var(--ic-border);" />`
                                     : ""
                                 }
                                 <span style="min-width:0;flex:1;font-size:11.2px;font-weight:750;color:var(--ic-ink);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">
@@ -9595,7 +9595,7 @@
                     : it && it.imageUrl
                       ? `
                       <div class="ic-disp-single-wrap">
-                        <img src="${esc(it.imageUrl)}" alt="${esc(it.title || "生成图片")}" data-disp-zoom="${esc(it.imageUrl)}" data-disp-title="${esc(it.title || "生成图片")}" />
+                        <img data-hw-src="${esc(it.imageUrl)}" alt="${esc(it.title || "生成图片")}" data-disp-zoom="${esc(it.imageUrl)}" data-disp-title="${esc(it.title || "生成图片")}" />
                         <div style="position:absolute;right:8px;top:8px;display:flex;gap:5px;">
                           <button type="button" class="ic-mini-glass-btn" data-disp-zoom="${esc(it.imageUrl)}" data-disp-title="${esc(it.title || "生成图片")}">放大</button>
                           ${upParentId ? `<button type="button" class="ic-mini-glass-btn" data-disp-regen-node="${esc(n.id)}" title="单张重绘此节点">重绘</button>` : ""}
@@ -12003,7 +12003,7 @@
           card.imageUrl
             ? `
             <div class="ic-plan-slot-img-box">
-              <img src="${esc(card.imageUrl)}" alt="${esc(card.title)}" />
+              <img data-hw-src="${esc(card.imageUrl)}" alt="${esc(card.title)}" />
               <button
                 type="button"
                 class="ic-mini-glass-btn"
@@ -13763,7 +13763,7 @@
 
       // Images: ![alt](url)
       s = s.replace(/!\[([^\]]*)\]\(([^)]+)\)/g, (match, alt, url) => {
-        return `<div style="text-align:center;margin:18px 0;"><img src="${url}" alt="${alt}" style="max-width:100%;border-radius:6px;box-shadow:0 2px 8px rgba(0,0,0,0.08);" />${alt ? `<div style="font-size:12px;color:#888;margin-top:5px;">${alt}</div>` : ""}</div>`;
+        return `<div style="text-align:center;margin:18px 0;"><img data-hw-src="${url}" alt="${alt}" style="max-width:100%;border-radius:6px;box-shadow:0 2px 8px rgba(0,0,0,0.08);" />${alt ? `<div style="font-size:12px;color:#888;margin-top:5px;">${alt}</div>` : ""}</div>`;
       });
 
       // Links: [text](url)
@@ -14011,7 +14011,7 @@
       if (card.imageUrl) {
         return `
           <figure class="ic-wechat-figure" data-card-id="${esc(card.id)}" data-role="${esc(role)}" style="margin:18px 0;width:100%;text-align:center;">
-            <img src="${esc(card.imageUrl)}" alt="${esc(card.title || roleLabel)}" class="hw-editor-body-img" loading="lazy" style="border-radius:6px;" />
+            <img data-hw-src="${esc(card.imageUrl)}" alt="${esc(card.title || roleLabel)}" class="hw-editor-body-img" loading="lazy" style="border-radius:6px;" />
           </figure>
         `;
       }
@@ -14101,7 +14101,7 @@
 
         <!-- Selected Style Banner Badge -->
         <div style="display:flex;align-items:center;gap:12px;padding:10px 14px;background:#f4f9f5;border-radius:8px;border:1px solid #d1ead7;margin-bottom:22px;">
-          <img src="${esc(styleObj.image || '')}" style="width:40px;height:40px;border-radius:6px;object-fit:cover;border:1px solid #c2e2ca;flex-shrink:0;" alt="" onerror="this.style.display='none'" />
+          <img data-hw-src="${esc(styleObj.image || '')}" style="width:40px;height:40px;border-radius:6px;object-fit:cover;border:1px solid #c2e2ca;flex-shrink:0;" alt="" onerror="this.style.display='none'" />
           <div style="flex:1;min-width:0;">
             <div style="font-size:12.5px;font-weight:850;color:#1f6f4a;display:flex;align-items:center;gap:6px;">
               <span>配图画风：#${esc(styleObj.id)} · ${esc(styleObj.name)}</span>
@@ -14555,7 +14555,7 @@
             ${
               card.imageUrl
                 ? `
-              <img src="${esc(card.imageUrl)}" alt="${esc(card.title || '文章封面')}" loading="lazy" />
+              <img data-hw-src="${esc(card.imageUrl)}" alt="${esc(card.title || '文章封面')}" loading="lazy" />
               <button
                 type="button"
                 class="ic-mini-glass-btn"
@@ -14640,7 +14640,7 @@
           ${
             card.imageUrl
               ? `
-            <img src="${esc(card.imageUrl)}" alt="${esc(card.title || '插图 ' + inlineNo)}" loading="lazy" />
+            <img data-hw-src="${esc(card.imageUrl)}" alt="${esc(card.title || '插图 ' + inlineNo)}" loading="lazy" />
             <button
               type="button"
               class="ic-mini-glass-btn"
@@ -15404,7 +15404,7 @@
               <div style="display:flex;align-items:center;gap:6px;">
                 <span style="font-size:12px;color:var(--ic-muted);font-weight:750;">画风:</span>
                 <button type="button" class="btn btn-sm ic-wechat-style-badge" id="editor-style-picker" title="点击更换手绘视觉画风（展示代表图，防止同名混淆）">
-                  <img src="${esc(styleObj.image || '')}" class="ic-wechat-style-thumb" id="editor-style-thumb" alt="" onerror="this.style.display='none'" />
+                  <img data-hw-src="${esc(styleObj.image || '')}" class="ic-wechat-style-thumb" id="editor-style-thumb" alt="" onerror="this.style.display='none'" />
                   <div class="ic-wechat-style-meta">
                     <span class="ic-wechat-style-id" id="editor-style-id">#${esc(styleObj.id)}</span>
                     <span class="ic-wechat-style-name" id="editor-style-name">${esc(styleObj.name || styleObj.id)}</span>
@@ -15889,7 +15889,7 @@
             const idEl = DOM.previewStage.querySelector("#editor-style-id");
             const nameEl = DOM.previewStage.querySelector("#editor-style-name");
             if (thumbEl && res?.image) {
-              thumbEl.src = res.image;
+              window.HandrawImages.set(thumbEl, res.image);
               thumbEl.style.display = "block";
             }
             if (idEl) idEl.textContent = `#${id}`;

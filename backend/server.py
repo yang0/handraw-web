@@ -84,7 +84,6 @@ from .config import (
     SESSION_TTL_SECONDS,
     get_generated_dir,
     get_image_config_path,
-    get_storage_root,
     get_uploads_dir,
     load_image_config,
     open_url,
@@ -890,86 +889,11 @@ def _path_is_within(path: Path, root: Path) -> bool:
 # pixels, so each distinct width is rendered once into a private cache and
 # reused.  Anything we cannot decode is served as the original bytes.
 
-THUMB_WIDTHS = (48, 320, 480, 640, 960, 1280)  # 48px blur previews for progressive feed cards
-_THUMB_LOCK = threading.Lock()
-
-
-def get_thumb_cache_dir() -> Path:
-    explicit = os.environ.get("HANDRAW_THUMB_CACHE_DIR")
-    if explicit:
-        return Path(explicit).resolve()
-    return get_storage_root() / "thumbs"
-
-
-def normalize_thumb_width(raw: Any) -> int:
-    """Snap a requested width up to the nearest supported bucket (0 = original)."""
-    try:
-        value = int(str(raw).strip())
-    except (TypeError, ValueError):
-        return 0
-    if value <= 0:
-        return 0
-    for width in THUMB_WIDTHS:
-        if value <= width:
-            return width
-    return THUMB_WIDTHS[-1]
-
-
-def build_thumbnail(source: Path, width: int) -> bytes | None:
-    """Return WebP bytes at ``width``, or None when the source cannot be decoded."""
-    try:
-        from PIL import Image  # imported lazily: only needed when a thumb is requested
-    except Exception:
-        return None
-    try:
-        with Image.open(source) as image:
-            image.load()
-            if image.width <= width:
-                return None
-            height = max(1, round(image.height * (width / image.width)))
-            resized = image.resize((width, height), Image.LANCZOS)
-            if resized.mode not in ("RGB", "RGBA"):
-                resized = resized.convert("RGBA" if "A" in resized.getbands() else "RGB")
-            buffer = io.BytesIO()
-            # Tiny preview variants should be cheap to encode and transmit.
-            # The normal sharp thumbnails keep their existing quality.
-            resized.save(buffer, format="WEBP",
-                         quality=55 if width <= 48 else 82,
-                         method=2 if width <= 48 else 4)
-            return buffer.getvalue()
-    except Exception:
-        return None
-
-
-def read_with_thumbnail(source: Path, width: int) -> tuple[bytes, str, bool]:
-    """Return (payload, content_type, is_thumbnail) for one media file."""
-    original_type = mimetypes.guess_type(str(source))[0] or "application/octet-stream"
-    if width <= 0:
-        return source.read_bytes(), original_type, False
-    try:
-        stat = source.stat()
-    except OSError:
-        return b"", original_type, False
-    key = f"{abs(hash(str(source))):x}_{stat.st_mtime_ns}_{stat.st_size}_{width}.webp"
-    cache_dir = get_thumb_cache_dir()
-    cached = cache_dir / key
-    if cached.is_file():
-        try:
-            return cached.read_bytes(), "image/webp", True
-        except OSError:
-            pass
-    payload = build_thumbnail(source, width)
-    if payload is None:
-        return source.read_bytes(), original_type, False
-    try:
-        cache_dir.mkdir(parents=True, exist_ok=True)
-        with _THUMB_LOCK:
-            temp = cached.with_suffix(".tmp")
-            temp.write_bytes(payload)
-            temp.replace(cached)
-    except OSError:
-        pass
-    return payload, "image/webp", True
+# Compatibility exports; the cache implementation is shared with all media routes.
+from .image_variants import (
+    THUMB_WIDTHS, build_thumbnail, get_thumb_cache_dir,
+    normalize_thumb_width, read_with_thumbnail,
+)
 
 
 def _iter_media_values(value: Any):
@@ -2569,6 +2493,16 @@ class HandrawRequestHandler(BaseHTTPRequestHandler):
             except (ConnectionResetError, ConnectionAbortedError, BrokenPipeError):
                 pass
 
+    def _send_media(self, path: Path, width: int, cache: str):
+        payload, content_type, variant = read_with_thumbnail(path, width)
+        if cache.startswith("public"):
+            # Mutable paths must revalidate; unchanged derivatives return 304.
+            # Private sources are authorized on every request, including hits.
+            etag = '"' + hashlib.sha256(payload).hexdigest() + '"'
+            self._send_public_representation((payload, "", etag), content_type, "public, no-cache" if variant else cache)
+        else:
+            self._send_bytes(payload, content_type, cache="private, no-store")
+
     def _send_cached_json(
         self,
         obj: dict[str, Any],
@@ -2982,6 +2916,12 @@ class HandrawRequestHandler(BaseHTTPRequestHandler):
             user = self._current_user(required=True)
             from .billing import list_user_payment_orders
             self._send_json(list_user_payment_orders(self.db, int(user["id"]), limit=int(q1("limit") or 20)))  # type: ignore[index]
+            return
+
+        checkout_match = re.fullmatch(r"/api/billing/orders/([^/]+)", req_path)
+        if checkout_match:
+            from .billing import get_checkout_order
+            self._send_json(get_checkout_order(self.db, self._current_user(required=True), checkout_match.group(1)))
             return
 
         # Studio Config, Workspace & Task Polling
@@ -3426,8 +3366,7 @@ class HandrawRequestHandler(BaseHTTPRequestHandler):
                     self.send_error(503, "Avatar temporarily unavailable")
                     return
             if path.is_file():
-                self._send_bytes(path.read_bytes(), "image/webp",
-                                 cache="public, max-age=31536000, immutable")
+                self._send_media(path, normalize_thumb_width(q1("w")), "public, max-age=31536000, immutable")
             else:
                 self.send_error(404, "Avatar not found")
             return
@@ -3469,12 +3408,7 @@ class HandrawRequestHandler(BaseHTTPRequestHandler):
                         if not target.is_file():
                             self.send_error(404, "Media not found")
                             return
-                        payload, ctype, resized = read_with_thumbnail(target, normalize_thumb_width(q1("w")))
-                        if resized:
-                            # A transcoded variant is addressable by its own URL,
-                            # so it can be cached by any shared layer.
-                            cache_policy = "public, max-age=604800" if prefix == "/images/" else "private, no-store"
-                        self._send_bytes(payload, ctype, cache=cache_policy)
+                        self._send_media(target, normalize_thumb_width(q1("w")), cache_policy)
                         return
                 self.send_error(404, "Media not found")
                 return
@@ -3507,6 +3441,8 @@ class HandrawRequestHandler(BaseHTTPRequestHandler):
             file_path = DEMO_DIR / "admin.html"
         elif req_path in ("/studio", "/studio/"):
             file_path = DEMO_DIR / "studio.html"
+        elif req_path in ("/checkout", "/checkout/"):
+            file_path = DEMO_DIR / "checkout.html"
         elif req_path in ("/forum", "/forum/"):
             file_path = DEMO_DIR / "forum.html"
         else:
@@ -3537,6 +3473,9 @@ class HandrawRequestHandler(BaseHTTPRequestHandler):
         ctype = mimetypes.guess_type(str(file_path))[0] or "text/html"
         if ctype.startswith("text/") or ctype in ("application/javascript", "text/javascript"):
             ctype += "; charset=utf-8"
+        if req_path.startswith("/assets/") and file_path.suffix.lower() in (".png", ".jpg", ".jpeg", ".webp", ".gif"):
+            self._send_media(file_path, normalize_thumb_width(q1("w")), "public, max-age=3600")
+            return
         # Only public frontend code uses this cache. Private media and API
         # responses keep their own authorization and no-store policies.
         if req_path.startswith("/assets/") and file_path.suffix in (".js", ".css", ".svg"):

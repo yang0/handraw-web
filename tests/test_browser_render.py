@@ -171,6 +171,58 @@ class BrowserRenderTests(unittest.TestCase):
         )
         self.assertEqual(self.js_errors, [], f"JS errors on home: {self.js_errors}")
 
+    def test_image_component_selects_sizes_and_upgrades_containers_without_original_fetch(self):
+        from PIL import Image
+        directory = Path(self.enterContext(TemporaryDirectory()))
+        Image.effect_noise((1800,1200),35).convert('RGB').save(directory/'responsive.jpg',quality=95)
+        self.enterContext(patch.object(server_module,'DEFAULT_STYLE_IMAGES_DIR',directory))
+        requested=[]
+        self.page.on('request',lambda request:requested.append(request.url))
+        self._load('/studio/')
+        self.page.wait_for_selector('#make-image-subject')
+        self.page.evaluate("""() => {
+            const panel=document.createElement('div');panel.id='image-test-panel';
+            panel.style.cssText='position:fixed;top:0;left:0;z-index:100000;background:white;width:700px';
+            panel.innerHTML='<img id="small-variant" style="width:64px;height:auto" data-hw-src="/images/responsive.jpg"><img id="large-variant" style="width:640px;height:auto" data-hw-src="/images/responsive.jpg">';
+            document.body.append(panel);
+        }""")
+        self.page.wait_for_function("() => document.querySelector('#small-variant')?.naturalWidth===96 && document.querySelector('#large-variant')?.naturalWidth===640")
+        self.assertFalse(any(url.endswith('/images/responsive.jpg') for url in requested))
+        self.page.evaluate("document.querySelector('#small-variant').style.width='320px'")
+        self.page.wait_for_function("() => document.querySelector('#small-variant').naturalWidth===320")
+        self.assertEqual(self.page.evaluate("HandrawImages.original(document.querySelector('#small-variant'))"),'/images/responsive.jpg')
+        serialized=self.page.evaluate("HandrawImages.originalHtml(document.querySelector('#image-test-panel').innerHTML)")
+        self.assertIn('src="/images/responsive.jpg"',serialized)
+        self.assertNotIn('?w=',serialized)
+        self.assertNotIn('data-hw-',serialized)
+        prepared=self.page.evaluate('value => HandrawImages.prepareHtml(value)',serialized)
+        self.assertIn('data-hw-src="/images/responsive.jpg"',prepared)
+        self.assertNotIn(' src=',prepared)
+        self.assertEqual(self.js_errors,[])
+
+    def test_checkout_renders_existing_payment_qr_without_recreating_order(self):
+        self.enterContext(patch.dict(os.environ, {"HANDRAW_ALLOWED_ORIGINS": self.base}))
+        cfg={'enabled':True,'provider':'xorpay','aid':'fixture','app_secret':'fixture-only','api_base':self.base,'currency':'CNY','test_mode':True,'active_packages':[{'id':'cash_10','title':'生图余额','price_cents':1000,'credits':0,'purpose':'cash'}]}
+        self.enterContext(patch('backend.billing.load_payment_config',return_value=cfg))
+        provider=self.enterContext(patch('backend.billing._xorpay_api_request',return_value={'status':'ok','aoid':'browser-fixture','info':{'qr':'https://qr.alipay.com/browser-fixture'}}))
+        response=self.page.request.post(self.base+'/api/auth/login',data={'account':'br_author','password':'password-a'},headers={'Origin':self.base})
+        self.assertEqual(response.status,200)
+        created=self.page.request.post(self.base+'/api/billing/checkout',data={'packId':'cash_10'},headers={'Origin':self.base})
+        self.assertEqual(created.status,200)
+        order=created.json()['order']
+        self.page.route('**/qr?data=*',lambda route:route.fulfill(status=200,content_type='image/svg+xml',body='<svg xmlns="http://www.w3.org/2000/svg" width="256" height="256"><rect width="256" height="256" fill="black"/></svg>'))
+        self.page.goto(self.base+order['checkoutUrl'],wait_until='networkidle')
+        self.page.wait_for_function("() => document.querySelector('#checkout-qr')?.naturalWidth===256")
+        self.assertIn('生图余额充值',self.page.inner_text('body'))
+        self.assertEqual(self.page.locator('#checkout-open').get_attribute('href'),'https://qr.alipay.com/browser-fixture')
+        self.page.reload(wait_until='networkidle')
+        self.assertEqual(provider.call_count,1)
+        self.assertNotIn('/api/cashier/',self.page.url)
+        for width in (1440,820,390):
+            self.page.set_viewport_size({'width':width,'height':900})
+            self.assertLessEqual(self.page.evaluate('document.documentElement.scrollWidth-innerWidth'),1)
+        self.assertEqual(self.js_errors,[])
+
     def test_studio_is_usable_while_workspace_is_pending_and_hydration_preserves_typing(self):
         self.enterContext(patch.dict(os.environ, {"HANDRAW_ALLOWED_ORIGINS": self.base}))
         response = self.page.request.post(self.base + '/api/auth/login', data={"account":"br_author","password":"password-a"}, headers={"Origin":self.base})

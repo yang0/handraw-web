@@ -61,7 +61,7 @@ def _serialize_order(row: Any) -> dict[str, Any]:
         "currency": str(row["currency"] or "CNY"),
         "status": str(row["status"] or "pending"),
         "checkoutId": str(row["checkout_id"] or ""),
-        "checkoutUrl": str(row["checkout_url"] or "") if row["status"] == "pending" else "",
+        "checkoutUrl": (f"/checkout/?orderId={urllib.parse.quote(str(row['id']))}" if row["provider"] == "xorpay" else str(row["checkout_url"] or "")) if row["status"] == "pending" else "",
         "providerOrderId": str(row["provider_order_id"] or ""),
         "providerOrderNumber": str(row["provider_order_number"] or ""),
         "testMode": bool(row["test_mode"]),
@@ -87,6 +87,21 @@ def list_user_payment_orders(db: Database, user_id: int, limit: int = 20) -> dic
         "ok": True,
         "orders": [_serialize_order(r) for r in rows],
     }
+
+
+def get_checkout_order(db: Database, user: dict[str, Any], order_id: str) -> dict[str, Any]:
+    row = db.get_conn().execute('SELECT * FROM payment_orders WHERE id=? AND user_id=?', (order_id, user['id'])).fetchone()
+    if not row:
+        raise ServiceError('支付订单不存在', status=404, code='order_not_found')
+    result = {'ok': True, 'order': _serialize_order(row)}
+    meta = json.loads(row['meta_json'] or '{}')
+    qr = str(meta.get('qr') or '') if row['status'] == 'pending' else ''
+    if qr and len(qr) <= 4096 and qr.startswith(('https://', 'weixin://', 'alipays://')):
+        cfg = load_payment_config()
+        result['qr'] = qr
+        result['qrImageUrl'] = str(cfg.get('api_base') or 'https://xorpay.com').rstrip('/') + '/qr?data=' + urllib.parse.quote(qr, safe='')
+        result['paymentLink'] = qr if qr.startswith(('https://', 'alipays://')) else ''
+    return result
 
 
 def _strip_channel_subdomain(origin: str) -> str:
@@ -401,17 +416,17 @@ def create_checkout_order(
         api_base = str(cfg.get("api_base") or "https://xorpay.com").strip().rstrip("/")
 
         sign = xorpay_sign(order_name, pay_type, price_str, order_id, notify_url, app_secret)
-        cashier_params = {
-            "name": order_name,
-            "pay_type": pay_type,
-            "price": price_str,
-            "order_id": order_id,
-            "notify_url": notify_url,
-            "sign": sign,
-        }
-        cashier_url = f"{api_base}/api/cashier/{aid}?" + urllib.parse.urlencode(cashier_params)
+        # The cashier endpoint is a separate WeChat JSAPI creation flow. Show
+        # the QR returned by /pay, rather than submitting an order there again.
+        cashier_url = f"{main_origin}/checkout/?orderId=" + urllib.parse.quote(order_id)
 
         with db.transaction() as tx:
+            tx.execute('SELECT pg_advisory_xact_lock(254, ?)', (uid,))
+            cutoff = (_dt.datetime.now(_dt.timezone.utc)-_dt.timedelta(minutes=15)).isoformat().replace('+00:00','Z')
+            recent = tx.execute("SELECT * FROM payment_orders WHERE user_id=? AND provider='xorpay' AND pack_id=? AND amount_cents=? AND purpose=? AND currency=? AND test_mode=? AND status='pending' AND created_at>=? ORDER BY created_at DESC LIMIT 1", (uid, clean_pack_id, price_cents, str(package.get('purpose') or 'points'), str(cfg['currency']), int(test_mode), cutoff)).fetchone()
+            if recent:
+                serialized = _serialize_order(recent)
+                return {'ok': True, 'order': serialized, 'checkoutUrl': serialized['checkoutUrl']}
             tx.execute(
                 """
                 INSERT INTO payment_orders (
@@ -455,11 +470,11 @@ def create_checkout_order(
         }
 
         try:
-            res = _xorpay_api_request("POST", f"/api/pay/{aid}", pay_payload, api_base=api_base)
+            res = _xorpay_api_request("POST", f"/api/pay/{aid}", pay_payload, api_base=api_base, retry=False)
         except Exception:
             with db.transaction() as tx:
                 tx.execute(
-                    "UPDATE payment_orders SET status = 'failed', updated_at = ? WHERE id = ? AND status = 'pending'",
+                    "UPDATE payment_orders SET meta_json = (meta_json::jsonb || '{\"creationUnknown\":true}'::jsonb)::text, updated_at = ? WHERE id = ? AND status = 'pending'",
                     (utc_now_iso(), order_id),
                 )
             raise
@@ -473,6 +488,10 @@ def create_checkout_order(
                 )
             raise ServiceError("XorPay 平台手续费余额不足，请前往商户后台 xorpay.com 充值平台手续费", status=502, code="xorpay_fee_error")
 
+        if res_status in ('order_exist', 'order_payed'):
+            result = sync_payment_order_from_provider(db, user, order_id)
+            result['checkoutUrl'] = cashier_url
+            return result
         if res_status != "ok":
             with db.transaction() as tx:
                 tx.execute(
@@ -483,7 +502,7 @@ def create_checkout_order(
             raise ServiceError(f"支付网关下单失败：{msg}", status=502, code="payment_gateway_error")
 
         info = res.get("info") if isinstance(res.get("info"), dict) else {}
-        aoid = str(info.get("aoid") or "").strip()
+        aoid = str(res.get("aoid") or info.get("aoid") or "").strip()
         qr = str(info.get("qr") or "").strip()
 
         updated_at = utc_now_iso()

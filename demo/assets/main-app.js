@@ -2281,7 +2281,7 @@
           <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:12px;max-height:58vh;overflow-y:auto;padding:4px;">
             ${images.map((img) => `
               <div style="border-radius:8px;overflow:hidden;background:var(--paper-soft);border:1px solid var(--line-soft);text-align:center;">
-                <img src="${esc(img)}" alt="${esc(title)}" style="max-width:100%;max-height:460px;object-fit:contain;display:block;margin:0 auto;" />
+                <img data-hw-src="${esc(img)}" alt="${esc(title)}" style="max-width:100%;max-height:460px;object-fit:contain;display:block;margin:0 auto;" />
               </div>
             `).join("")}
           </div>
@@ -2898,7 +2898,7 @@
         <section class="hw-profile-hero">
           <div class="hw-profile-hero-top">
             <div style="display:flex;gap:18px;align-items:flex-start;flex-wrap:wrap;flex:1;min-width:260px;">
-              <img class="hw-profile-avatar-xl hw-creator-avatar-image" src="${esc(prof.avatarUrl || "/assets/avatar-default.svg")}" alt="${esc(prof.authorName)}的头像" />
+              <img class="hw-profile-avatar-xl hw-creator-avatar-image" data-hw-src="${esc(prof.avatarUrl || "/assets/avatar-default.svg")}" alt="${esc(prof.authorName)}的头像" />
               <div style="flex:1;min-width:220px;">
                 <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:6px;">
                   <h1 style="margin:0;font-size:24px;font-family:var(--font-serif);color:var(--ink-strong);">@${esc(prof.authorName)}</h1>

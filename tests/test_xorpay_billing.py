@@ -20,6 +20,47 @@ from backend.services import register_user
 
 
 class XorPayBillingTests(unittest.TestCase):
+    def test_checkout_reuses_pending_order_and_exposes_only_owned_qr(self):
+        headers={'Origin':'http://trusted.test','Authorization':f'Bearer {self.tok_a}'}
+        with patch('backend.billing._xorpay_api_request',return_value={'status':'ok','aoid':'aoid_top_level','info':{'qr':'https://qr.alipay.com/fixture-receipt'}}) as provider:
+            status,first,_=self._req('POST','/api/billing/checkout',{'packId':'pack_100'},headers)
+            self.assertEqual(status,200)
+            status,second,_=self._req('POST','/api/billing/checkout',{'packId':'pack_100'},headers)
+            self.assertEqual(status,200)
+            self.assertEqual(first['order']['id'],second['order']['id'])
+            self.assertEqual(provider.call_count,1)
+            self.assertFalse(provider.call_args.kwargs['retry'])
+        oid=first['order']['id']
+        self.assertEqual(first['order']['checkoutId'],'aoid_top_level')
+        status,details,detail_headers=self._req('GET',f'/api/billing/orders/{oid}',headers=headers)
+        self.assertEqual(status,200)
+        self.assertEqual(details['qr'],'https://qr.alipay.com/fixture-receipt')
+        self.assertNotIn('/api/cashier/',first['checkoutUrl'])
+        self.assertNotIn(self.app_secret,json.dumps(details))
+        self.assertIn('no-store',detail_headers['cache-control'])
+        status,_,_=self._req('GET',f'/api/billing/orders/{oid}',headers={'Authorization':f'Bearer {self.tok_b}'})
+        self.assertEqual(status,404)
+
+    def test_unknown_creation_is_not_reposted_or_marked_failed(self):
+        headers={'Origin':'http://trusted.test','Authorization':f'Bearer {self.tok_a}'}
+        with patch('backend.billing._xorpay_api_request',side_effect=TimeoutError('fixture transport timeout')) as provider:
+            status,_,_=self._req('POST','/api/billing/checkout',{'packId':'pack_100'},headers)
+            self.assertGreaterEqual(status,500)
+            status,resumed,_=self._req('POST','/api/billing/checkout',{'packId':'pack_100'},headers)
+            self.assertEqual(status,200)
+            self.assertEqual(provider.call_count,1)
+        self.assertEqual(resumed['order']['status'],'pending')
+
+    def test_provider_order_exist_queries_existing_order_without_second_creation(self):
+        headers={'Origin':'http://trusted.test','Authorization':f'Bearer {self.tok_a}'}
+        with patch('backend.billing._xorpay_api_request',side_effect=[{'status':'order_exist'},{'status':'new'}]) as provider:
+            status,result,_=self._req('POST','/api/billing/checkout',{'packId':'pack_100'},headers)
+        self.assertEqual(status,200)
+        self.assertEqual(result['order']['status'],'pending')
+        self.assertEqual(provider.call_args_list[0].args[0],'POST')
+        self.assertEqual(provider.call_args_list[1].args[0],'GET')
+        self.assertIn('/checkout/',result['checkoutUrl'])
+
     def setUp(self) -> None:
         self.tmp = tempfile.TemporaryDirectory()
         self.tmp_path = Path(self.tmp.name)
@@ -154,7 +195,7 @@ class XorPayBillingTests(unittest.TestCase):
     def test_checkout_order_creation_and_success(self) -> None:
         captured_requests: list[tuple[str, str, dict[str, Any], str]] = []
 
-        def fake_xorpay_api(method: str, path: str, data=None, *, api_base="https://xorpay.com", timeout=20.0):
+        def fake_xorpay_api(method: str, path: str, data=None, *, api_base="https://xorpay.com", timeout=20.0, retry=True):
             captured_requests.append((method, path, data or {}, api_base))
             return {
                 "status": "ok",
@@ -180,7 +221,8 @@ class XorPayBillingTests(unittest.TestCase):
         self.assertEqual(res["order"]["status"], "pending")
         self.assertEqual(res["order"]["checkoutId"], "xorp_order_9988")
         self.assertEqual(res["qr"], "https://qr.alipay.com/bax01234test")
-        self.assertIn("/api/cashier/708427?", res["checkoutUrl"])
+        self.assertIn("/checkout/?orderId=", res["checkoutUrl"])
+        self.assertNotIn("/api/cashier/", res["checkoutUrl"])
 
         # Check call to XorPay unified pay endpoint
         method, path, sent_data, _ = captured_requests[0]
@@ -201,7 +243,7 @@ class XorPayBillingTests(unittest.TestCase):
         self.assertEqual(sent_data["sign"], expected_sign)
 
     def test_checkout_order_fee_error_handling(self) -> None:
-        def fake_xorpay_fee_error(method: str, path: str, data=None, *, api_base="https://xorpay.com", timeout=20.0):
+        def fake_xorpay_fee_error(method: str, path: str, data=None, *, api_base="https://xorpay.com", timeout=20.0, retry=True):
             return {"status": "fee_error"}
 
         with patch("backend.billing._xorpay_api_request", side_effect=fake_xorpay_fee_error):
@@ -217,7 +259,7 @@ class XorPayBillingTests(unittest.TestCase):
 
     def test_webhook_signature_verification_and_settlement(self) -> None:
         # First create a pending order
-        def fake_pay(method: str, path: str, data=None, *, api_base="https://xorpay.com", timeout=20.0):
+        def fake_pay(method: str, path: str, data=None, *, api_base="https://xorpay.com", timeout=20.0, retry=True):
             return {
                 "status": "ok",
                 "info": {"aoid": "aoid_test_1001", "order_id": data.get("order_id"), "qr": "qr_1001"},
@@ -293,7 +335,7 @@ class XorPayBillingTests(unittest.TestCase):
         self.assertEqual(wal2["balance"], 100)
 
     def test_sync_order_from_provider_query2(self) -> None:
-        def fake_pay(method: str, path: str, data=None, *, api_base="https://xorpay.com", timeout=20.0):
+        def fake_pay(method: str, path: str, data=None, *, api_base="https://xorpay.com", timeout=20.0, retry=True):
             return {
                 "status": "ok",
                 "info": {"aoid": "aoid_test_sync_1", "order_id": data.get("order_id"), "qr": "qr_sync_1"},
@@ -310,7 +352,7 @@ class XorPayBillingTests(unittest.TestCase):
         order_id = res["order"]["id"]
 
         # Mock query2 response returning payed
-        def fake_query2(method: str, path: str, data=None, *, api_base="https://xorpay.com", timeout=20.0):
+        def fake_query2(method: str, path: str, data=None, *, api_base="https://xorpay.com", timeout=20.0, retry=True):
             self.assertEqual(method, "GET")
             self.assertIn(f"/api/query2/{self.aid}?", path)
             expected_sign = xorpay_sign(order_id, self.app_secret)
@@ -348,7 +390,7 @@ class XorPayBillingTests(unittest.TestCase):
         self.assertEqual(body_sync2["credits"], 50)
 
     def test_user_cross_account_isolation(self) -> None:
-        def fake_pay(method: str, path: str, data=None, *, api_base="https://xorpay.com", timeout=20.0):
+        def fake_pay(method: str, path: str, data=None, *, api_base="https://xorpay.com", timeout=20.0, retry=True):
             return {
                 "status": "ok",
                 "info": {"aoid": "aoid_iso_1", "order_id": data.get("order_id"), "qr": "qr_iso_1"},

@@ -25,7 +25,7 @@ def build(plugin: Path, target: Path, static_root: Path):
     navigation = navigation.replace('data-surface="portal"', 'data-surface="gallery"')
     navigation = navigation.replace('data-site-section="explore"', 'data-site-section="explore" aria-current="page"')
     style = f'<link rel="stylesheet" href="https://static.handraw-style.com/handraw-web/releases/{revision}/assets/navigation.css">'
-    loader = f'<script src="https://static.handraw-style.com/handraw-web/releases/{revision}/assets/image-loader.js" defer></script>'
+    loader = f'<script>window.HandrawImageConfig={{mediaOrigin:"https://handraw-style.com"}};</script><script src="https://static.handraw-style.com/handraw-web/releases/{revision}/assets/image-loader.js" defer></script>'
     for source in (static_root / 'gallery').iterdir():
         if source.suffix != '.html':
             if source.is_file() and source.suffix in {'.css', '.js', '.svg', '.png', '.jpg', '.jpeg', '.webp', '.ico'}:

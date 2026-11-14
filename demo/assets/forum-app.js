@@ -34,7 +34,7 @@
     return `
       <figure class="hw-intext-media" contenteditable="false" draggable="true" data-media-url="${esc(url)}" title="按住可拖拽调整段落位置">
         <div class="hw-intext-media-wrap">
-          <img src="${esc(url)}" alt="${esc(tag || '实测配图')}" class="hw-editor-body-img" loading="lazy" onerror="this.classList.add('hw-img-broken')" />
+          <img data-hw-src="${esc(url)}" alt="${esc(tag || '实测配图')}" class="hw-editor-body-img" loading="lazy" onerror="this.classList.add('hw-img-broken')" />
           <button type="button" class="hw-intext-del-btn" title="删除配图">✕</button>
         </div>
         <figcaption contenteditable="true" placeholder="点击添加配图说明或对比说明…">${esc(tag || "")}</figcaption>
@@ -58,7 +58,7 @@
            data-card-desc="${esc(card.desc || '')}"
            title="按住可拖拽调整段落位置">
         <div class="hw-intext-card-inner">
-          <img src="${esc(card.image)}" alt="${esc(card.title)}" class="hw-intext-card-thumb" />
+          <img data-hw-src="${esc(card.image)}" alt="${esc(card.title)}" class="hw-intext-card-thumb" />
           <div class="hw-intext-card-meta">
             <div class="hw-intext-card-badge ${badgeClass}">${badgeLabel}${card.authorName ? ` · @${esc(card.authorName)}` : ""}</div>
             <div class="hw-intext-card-title">${esc(card.title)}</div>
@@ -643,7 +643,7 @@
 
     return `
       <div class="smart-embed-card" style="margin:10px 0;">
-        <img src="${esc(card.image)}" alt="${esc(card.title)}" />
+        <img data-hw-src="${esc(card.image)}" alt="${esc(card.title)}" />
         <div style="flex:1;min-width:0;">
           <div style="display:flex;align-items:center;gap:6px;margin-bottom:4px;flex-wrap:wrap;">
             <span class="hw-honor-badge ${badgeClass}" style="font-size:11px;padding:2px 7px;">${badgeLabel}</span>
@@ -666,7 +666,7 @@
       html: `
         <div class="hw-modal-lightbox-container">
           <a href="${esc(src)}" target="_blank" rel="noopener noreferrer" title="点击查看原图" style="display:block;max-width:100%;">
-            <img class="hw-modal-lightbox-img" src="${esc(src)}" alt="${esc(caption)}" />
+            <img class="hw-modal-lightbox-img" data-hw-src="${esc(src)}" alt="${esc(caption)}" />
           </a>
           ${caption ? `<div style="font-size:13.5px;color:var(--ink-body);margin-top:12px;line-height:1.5;text-align:center;">${esc(caption)}</div>` : ""}
           <div style="display:flex;gap:10px;align-items:center;margin-top:10px;justify-content:center;flex-wrap:wrap;">
@@ -687,7 +687,7 @@
 
     if (hasInline) {
       const div = document.createElement("div");
-      div.innerHTML = rawBody;
+      div.innerHTML = window.HandrawImages?.prepareHtml(rawBody) || rawBody;
       div.querySelectorAll(".hw-intext-del-btn").forEach((btn) => btn.remove());
 
       // Transform any in-text card block to full interactive smart-embed-card
@@ -732,7 +732,7 @@
       mediaFlowHtml = `
         <figure class="hw-intext-media" style="margin:0 0 18px;">
           <div class="hw-intext-media-wrap">
-            <img src="${esc(im.url)}" data-zoom-img="${esc(im.url)}" alt="${esc(im.tag || topic.title)}" />
+            <img data-hw-src="${esc(im.url)}" data-zoom-img="${esc(im.url)}" alt="${esc(im.tag || topic.title)}" />
           </div>
           ${im.tag ? `<figcaption>${esc(im.tag)}</figcaption>` : ""}
         </figure>
@@ -742,7 +742,7 @@
         <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:12px;margin:0 0 20px;">
           ${imgs.map((im, idx) => `
             <div class="hw-intext-media-wrap" style="cursor:zoom-in;">
-              <img src="${esc(im.url)}" data-zoom-img="${esc(im.url)}" alt="P${idx + 1}" style="height:190px;width:100%;object-fit:cover;" />
+              <img data-hw-src="${esc(im.url)}" data-zoom-img="${esc(im.url)}" alt="P${idx + 1}" style="height:190px;width:100%;object-fit:cover;" />
               ${im.tag ? `<div style="font-size:11.5px;color:var(--ink-muted);padding:4px 8px;text-align:center;">${esc(im.tag)}</div>` : ""}
             </div>
           `).join("")}
@@ -964,7 +964,7 @@
         FUI.composeDraft.titleSource = "manual";
       }
     }
-    if (editorEl) FUI.composeDraft.bodyHtml = editorEl.innerHTML;
+    if (editorEl) FUI.composeDraft.bodyHtml = window.HandrawImages?.originalHtml(editorEl.innerHTML) || editorEl.innerHTML;
     if (modeEl) {
       FUI.composeDraft.publishMode = modeEl.value;
     }
@@ -1068,7 +1068,7 @@
             role="textbox"
             aria-multiline="true"
             data-placeholder="在此撰写帖子正文… 支持段落、大标题、引用，并随时从上方工具栏将配图、画风、图型、作品卡片或付费截断线插入到文字流中。"
-          >${d.bodyHtml || ""}</div>
+          >${window.HandrawImages?.prepareHtml(d.bodyHtml || "") || d.bodyHtml || ""}</div>
         </main>
 
         <!-- Bottom Post Action Footer (below editor text canvas) -->
@@ -1752,7 +1752,7 @@
       const mediaFigures = Array.from(editorEl.querySelectorAll(".hw-intext-media"));
       const extractedImages = mediaFigures
         .map((fig) => {
-          const url = fig.getAttribute("data-media-url") || fig.querySelector("img")?.src || "";
+          const url = fig.getAttribute("data-media-url") || window.HandrawImages?.original(fig.querySelector("img")) || fig.querySelector("img")?.src || "";
           const tag = fig.querySelector("figcaption")?.innerText?.trim() || "";
           return { url, tag };
         })
@@ -1775,7 +1775,7 @@
       const clone = editorEl.cloneNode(true);
       clone.querySelectorAll(".hw-intext-del-btn").forEach((btn) => btn.remove());
       clone.querySelectorAll("figcaption").forEach((fc) => fc.removeAttribute("contenteditable"));
-      const cleanHtml = clone.innerHTML.trim();
+      const cleanHtml = (window.HandrawImages?.originalHtml(clone.innerHTML) || clone.innerHTML).trim();
 
       const plainText = stripHtmlToSnippet(cleanHtml, 9999);
       if (plainText.length < 8 && extractedImages.length === 0 && extractedCards.length === 0) {
@@ -1836,7 +1836,7 @@
           return;
         }
 
-        summaryHtml = beforeWrap.innerHTML.trim() || cleanHtml;
+        summaryHtml = (window.HandrawImages?.originalHtml(beforeWrap.innerHTML) || beforeWrap.innerHTML).trim() || cleanHtml;
         lockedHtml = cleanHtml;
       }
 
@@ -2196,11 +2196,11 @@
         <div style="display:flex;gap:20px;align-items:flex-start;flex-wrap:wrap;margin-bottom:20px;">
           ${res.image ? `
             <div style="flex:0 0 240px;max-width:100%;">
-              <img src="${esc(res.image)}" alt="${esc(res.name)}" data-zoom-img="${esc(res.image)}" style="width:100%;border-radius:10px;border:1px solid var(--line-soft);cursor:zoom-in;display:block;" />
+              <img data-hw-src="${esc(res.image)}" alt="${esc(res.name)}" data-zoom-img="${esc(res.image)}" style="width:100%;border-radius:10px;border:1px solid var(--line-soft);cursor:zoom-in;display:block;" />
               ${Array.isArray(res.examples) && res.examples.length ? `
                 <div style="display:flex;gap:8px;margin-top:8px;flex-wrap:wrap;">
                   ${res.examples.map(ex => `
-                    <img src="${esc(ex)}" alt="示例图" data-zoom-img="${esc(ex)}" style="width:72px;height:72px;object-fit:cover;border-radius:6px;border:1px solid var(--line-soft);cursor:zoom-in;display:block;" />
+                    <img data-hw-src="${esc(ex)}" alt="示例图" data-zoom-img="${esc(ex)}" style="width:72px;height:72px;object-fit:cover;border-radius:6px;border:1px solid var(--line-soft);cursor:zoom-in;display:block;" />
                   `).join("")}
                 </div>
               ` : ""}
@@ -3373,7 +3373,7 @@
                   return `
                   <a href="${esc(S.channelUrl("main", { view: "work", id: w.id }))}" style="text-decoration:none;color:inherit;display:block;background:var(--paper-bg);border:1px solid var(--line-soft);border-radius:8px;overflow:hidden;min-width:0;max-width:100%;">
                     <div class="topic-related-work-media" style="${ar ? `aspect-ratio:${ar};` : ""}background:var(--paper-deep);overflow:hidden;position:relative;">
-                      <img src="${esc(firstImg)}" alt="${esc(w.title || "")}" style="width:100%;height:auto;display:block;object-fit:contain;" loading="lazy" />
+                      <img data-hw-src="${esc(firstImg)}" alt="${esc(w.title || "")}" style="width:100%;height:auto;display:block;object-fit:contain;" loading="lazy" />
                     </div>
                     <div style="padding:6px 8px;min-width:0;">
                       <div style="font-size:12px;font-weight:750;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;overflow-wrap:anywhere;">${esc(w.title || "作品")}</div>
@@ -3402,7 +3402,7 @@
             }
             pairedContainer.innerHTML = items.slice(0, 6).map((it) => `
               <a href="${esc(S.channelUrl("main", { view: "asset", id: it.id }))}" style="display:flex;align-items:center;gap:8px;padding:6px 8px;background:var(--paper-bg);border:1px solid var(--line-soft);border-radius:8px;text-decoration:none;color:inherit;min-width:0;max-width:100%;">
-                ${it.image ? `<img src="${esc(it.image)}" alt="${esc(it.name || it.title || it.id)}" style="width:36px;height:36px;border-radius:6px;object-fit:cover;flex-shrink:0;" />` : ""}
+                ${it.image ? `<img data-hw-src="${esc(it.image)}" alt="${esc(it.name || it.title || it.id)}" style="width:36px;height:36px;border-radius:6px;object-fit:cover;flex-shrink:0;" />` : ""}
                 <div style="min-width:0;flex:1;overflow:hidden;">
                   <div style="font-size:12.5px;font-weight:750;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;overflow-wrap:anywhere;">${esc(it.name || it.title || it.id)}</div>
                   <div style="font-size:11px;color:var(--vermilion);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">#${esc(it.id)}</div>

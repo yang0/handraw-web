@@ -185,11 +185,11 @@
       '<img data-hw-src="' + esc(photo) + '" alt="' + esc(titleOf(w)) + '" loading="lazy">' +
       '</a>' +
       '<div class="hw-mf-body">' +
-      '<a class="hw-mf-title" href="' + workDetailHref(w, st) + '"><img class="hw-mf-title-icon" src="/assets/feed-icons/work.png" alt="" aria-hidden="true" width="28" height="28" decoding="async">' + esc(titleOf(w)) + '</a>' +
+      '<a class="hw-mf-title" href="' + workDetailHref(w, st) + '"><img class="hw-mf-title-icon" data-hw-src="/assets/feed-icons/work.png" alt="" aria-hidden="true" width="28" height="28" decoding="async">' + esc(titleOf(w)) + '</a>' +
       (codes.length ? '<div class="hw-mf-codes">' + codes.map(function (s) {
         return '<span>' + esc(s) + '</span>';
       }).join("") + '</div>' : "") +
-      '<div class="hw-mf-footer"><span class="hw-mf-author">' + '<img class="hw-mf-author-avatar" alt="" src="' + esc(avatarFor(w, st)) + '">' + esc(authorOf(w)) + '</span>' +
+      '<div class="hw-mf-footer"><span class="hw-mf-author">' + '<img class="hw-mf-author-avatar" alt="" data-hw-src="' + esc(avatarFor(w, st)) + '">' + esc(authorOf(w)) + '</span>' +
       '<span class="hw-mf-stats">♡ ' + esc(likes) + (commentCount ? ' · 💬 ' + esc(commentCount) : "") + '</span></div>' +
       '</div></article>';
   }
@@ -206,7 +206,7 @@
       '<img data-hw-src="' + esc(img) + '" alt="' + esc(titleOf(r)) + '" loading="lazy">' +
       '</a>' +
       '<div class="hw-mf-body">' +
-      '<a class="hw-mf-title" href="' + href + '">' + (kind === "图型" ? '<img class="hw-mf-title-icon" src="/assets/feed-icons/layout.png" alt="" aria-hidden="true" width="28" height="28" decoding="async">' : '<img class="hw-mf-title-icon" src="/assets/feed-icons/style.png" alt="" aria-hidden="true" width="28" height="28" decoding="async">') + esc(S.resourceLabel ? S.resourceLabel(r) : titleOf(r)) + '</a>' +
+      '<a class="hw-mf-title" href="' + href + '">' + (kind === "图型" ? '<img class="hw-mf-title-icon" data-hw-src="/assets/feed-icons/layout.png" alt="" aria-hidden="true" width="28" height="28" decoding="async">' : '<img class="hw-mf-title-icon" data-hw-src="/assets/feed-icons/style.png" alt="" aria-hidden="true" width="28" height="28" decoding="async">') + esc(S.resourceLabel ? S.resourceLabel(r) : titleOf(r)) + '</a>' +
       '</div></article>';
   }
   function topicCard(t, st) {
@@ -224,9 +224,9 @@
         '<img data-hw-src="' + esc(img) + '" alt="' +
         esc(titleOf(t)) + '" loading="lazy"></span>' : "") +
       '<div class="hw-mf-body">' +
-      '<span class="hw-mf-title"><img class="hw-mf-title-icon" src="/assets/feed-icons/discussion.png" alt="" aria-hidden="true" width="28" height="28" decoding="async">' + esc(titleOf(t)) + '</span>' +
+      '<span class="hw-mf-title"><img class="hw-mf-title-icon" data-hw-src="/assets/feed-icons/discussion.png" alt="" aria-hidden="true" width="28" height="28" decoding="async">' + esc(titleOf(t)) + '</span>' +
       (abstract ? '<p class="hw-mf-excerpt">' + esc(abstract) + '</p>' : "") +
-      '<div class="hw-mf-footer"><span class="hw-mf-author">' + '<img class="hw-mf-author-avatar" alt="" src="' + esc(avatarFor(t, st)) + '">' + esc(authorOf(t)) + '</span>' +
+      '<div class="hw-mf-footer"><span class="hw-mf-author">' + '<img class="hw-mf-author-avatar" alt="" data-hw-src="' + esc(avatarFor(t, st)) + '">' + esc(authorOf(t)) + '</span>' +
       '<span class="hw-mf-stats">💬 ' + esc(replies) + '</span></div>' +
       '</div></a>';
   }
