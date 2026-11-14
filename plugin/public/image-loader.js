@@ -74,9 +74,11 @@
     const local = localMedia(raw);
     if (!local || /\.(?:svg|gif)(?:[?#]|$)/i.test(local)) return raw;
     const [path, fragment = ''] = local.split('#');
-    const clean = path.replace(/([?&])w=[^&]*&?/g, '$1').replace(/[?&]$/, '');
+    const [pathname, query = ''] = path.split('?');
+    const kept = query.split('&').filter(value => value && !/^(?:w|iv)=/.test(value)).join('&');
+    const clean = pathname + (kept ? '?' + kept : '');
     const base = window.HandrawImageConfig?.mediaOrigin || '';
-    return base + clean + (clean.includes('?') ? '&' : '?') + 'w=' + widthBucket(width) + (fragment ? '#' + fragment : '');
+    return base + clean + (clean.includes('?') ? '&' : '?') + 'w=' + widthBucket(width) + '&iv=webp-v2' + (fragment ? '#' + fragment : '');
   }
 
   /** Build a derivative URL without ever changing the original source receipt. */

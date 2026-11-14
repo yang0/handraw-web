@@ -1,13 +1,17 @@
 """Every cached private derivative must pass original-media authorization."""
 
 import http.client
+import hashlib
+import html
 import io
 import os
+import re
 import tempfile
 import threading
 import unittest
 from pathlib import Path
 from unittest.mock import patch
+from urllib.parse import parse_qs, urlsplit
 
 from PIL import Image
 from backend import server as web
@@ -91,6 +95,33 @@ class ImageVariantHttpTests(unittest.TestCase):
         self.assertNotEqual(headers["ETag"], etags[1])
         status, _, body = self.get("/images/source.jpg")
         self.assertEqual(body, self.public.read_bytes())
+
+    def test_every_entrypoint_uses_current_asset_bytes_and_matching_preloads(self):
+        for route in ("/", "/studio/", "/forum/", "/admin/", "/checkout/"):
+            status, headers, body = self.get(route)
+            self.assertEqual(status, 200)
+            self.assertIn("no-cache", headers["Cache-Control"])
+            urls = re.findall(
+                r"""(?:src|href)=["'](/assets/[^"']+\.(?:js|css)(?:\?[^"']*)?)["']""",
+                body.decode(),
+            )
+            self.assertTrue(urls, route)
+            identities = {}
+            for url in urls:
+                parsed = urlsplit(html.unescape(url))
+                expected = hashlib.sha256(
+                    (web.DEMO_DIR / parsed.path.lstrip("/")).read_bytes()
+                ).hexdigest()[:24]
+                self.assertEqual(parse_qs(parsed.query)["v"], [expected], route + url)
+                self.assertEqual(identities.setdefault(parsed.path, url), url)
+        # A CDN-versioned derivative still follows public revalidation semantics.
+        status, headers, body = self.get("/images/source.jpg?w=160&iv=webp-v2")
+        self.assertEqual(status, 200)
+        self.assertEqual(Image.open(io.BytesIO(body)).width, 160)
+        self.assertEqual(
+            self.get("/images/source.jpg?w=160&iv=webp-v2", etag=headers["ETag"])[0],
+            304,
+        )
 
     def test_cached_private_sizes_remain_owner_only_and_do_not_escape_by_query_or_etag(
         self,

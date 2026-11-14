@@ -24,19 +24,20 @@ vm.runInNewContext(fs.readFileSync('demo/assets/image-loader.js','utf8'),{window
  Date:{now:()=>now},setTimeout(fn,ms){const id=++seq;timers.set(id,{fn,at:now+ms});return id;},clearTimeout:id=>timers.delete(id)});
 const component=window.HandrawImages;
 const avatar=new Img();component.set(avatar,'/avatars/u1-01234567890123456789.webp');advance(100);
-assert.equal(avatar.src,'/avatars/u1-01234567890123456789.webp?w=96');avatar.finish();
-avatar.clientWidth=240;ro([{target:avatar}]);advance(100);assert(avatar.src.endsWith('?w=480'));avatar.finish();
+assert.equal(avatar.src,'/avatars/u1-01234567890123456789.webp?w=96&iv=webp-v2');avatar.finish();
+avatar.clientWidth=240;ro([{target:avatar}]);advance(100);assert(avatar.src.endsWith('?w=480&iv=webp-v2'));avatar.finish();
 const count=requests.length;ro([{target:avatar}]);advance(100);assert.equal(requests.length,count,'same size does not refetch');
 avatar.clientWidth=32;ro([{target:avatar}]);advance(100);assert.equal(requests.length,count,'shrinking reuses sharper decoded image');
 assert.equal(component.original(avatar),'/avatars/u1-01234567890123456789.webp');
-const card=new Img(320);component.set(card,'/images/portrait.jpg?version=one&w=1280#focus');advance(100);assert.equal(card.src,'/images/portrait.jpg?version=one&w=640#focus');card.finish();
-const detail=new Img(1000);component.set(detail,'/images/portrait.jpg');advance(100);assert.equal(detail.src,'/images/portrait.jpg?w=2560');detail.finish();
-const changing=new Img(200);component.set(changing,'/generated/old.png');advance(100);component.set(changing,'/generated/new.png');advance(100);assert.equal(changing.src,'/generated/new.png?w=480');changing.finish();assert.equal(changing.dataset.hwLoaded,changing.src);
+const card=new Img(320);component.set(card,'/images/portrait.jpg?version=one&w=1280&iv=webp-v2#focus');advance(100);assert.equal(card.src,'/images/portrait.jpg?version=one&w=640&iv=webp-v2#focus');card.finish();
+const detail=new Img(1000);component.set(detail,'/images/portrait.jpg');advance(100);assert.equal(detail.src,'/images/portrait.jpg?w=2560&iv=webp-v2');detail.finish();
+assert.equal(component.url('/images/p.jpg?w=160&iv=old&token=keep#focus',320),'/images/p.jpg?token=keep&w=320&iv=webp-v2#focus');
+const changing=new Img(200);component.set(changing,'/generated/old.png');advance(100);component.set(changing,'/generated/new.png');advance(100);assert.equal(changing.src,'/generated/new.png?w=480&iv=webp-v2');changing.finish();assert.equal(changing.dataset.hwLoaded,changing.src);
 const retry=new Img(200);component.set(retry,'/uploads/retry.png');advance(100);const retryUrl=retry.src;retry.fail();advance(500);assert.equal(requests.filter(url=>url===retryUrl).length,2,'identical failed URL is reassigned for a real retry');retry.finish();
 for(const raw of ['data:image/png;base64,AA','blob:https://handraw-style.com/id','/assets/avatar-default.svg','/images/animated.gif','https://third.example/signed.jpg?w=7&signature=keep']){
  const img=new Img(200);component.set(img,raw);advance(100);assert.equal(img.src,raw);img.finish();
 }
-const dynamic=new Img(200);dynamic.dataset.hwSrc='/images/before.jpg';component.scan(dynamic);io([{target:dynamic,isIntersecting:true}]);advance(100);dynamic.finish();dynamic.dataset.hwSrc='/images/after.jpg';mutation([{type:'attributes',attributeName:'data-hw-src',target:dynamic}]);advance(100);assert.equal(dynamic.src,'/images/after.jpg?w=480');dynamic.finish();
+const dynamic=new Img(200);dynamic.dataset.hwSrc='/images/before.jpg';component.scan(dynamic);io([{target:dynamic,isIntersecting:true}]);advance(100);dynamic.finish();dynamic.dataset.hwSrc='/images/after.jpg';mutation([{type:'attributes',attributeName:'data-hw-src',target:dynamic}]);advance(100);assert.equal(dynamic.src,'/images/after.jpg?w=480&iv=webp-v2');dynamic.finish();
 for(const path of fs.readdirSync('demo/assets').filter(name=>name.endsWith('.js')&&name!=='image-loader.js')){
  const source=fs.readFileSync('demo/assets/'+path,'utf8');
  for(const tag of source.match(/<img\b[^>]*>/g)||[])assert(!/(?<![\w-])src=/.test(tag),path+' renders an eager unmanaged original');

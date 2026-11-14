@@ -2,8 +2,63 @@
 
 import gzip
 import hashlib
+import html
+import re
 from functools import lru_cache
 from pathlib import Path
+from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
+
+
+@lru_cache(maxsize=128)
+def _content_digest(path: str, modified_ns: int, changed_ns: int, size: int):
+    return hashlib.sha256(Path(path).read_bytes()).hexdigest()[:24]
+
+
+def version_frontend_html(raw: bytes, root: Path) -> bytes:
+    """Give local code its content identity, including matching preload URLs."""
+    root = root.resolve()
+
+    def replace(match):
+        value = urlsplit(html.unescape(match.group(3)))
+        if value.scheme or value.netloc or not value.path.startswith("/assets/"):
+            return match.group(0)
+        target = (root / value.path.lstrip("/")).resolve()
+        if (
+            not target.is_relative_to(root)
+            or target.suffix not in (".js", ".css")
+            or not target.is_file()
+        ):
+            return match.group(0)
+        stat = target.stat()
+        digest = _content_digest(
+            str(target), stat.st_mtime_ns, stat.st_ctime_ns, stat.st_size
+        )
+        query = [
+            (key, val)
+            for key, val in parse_qsl(value.query, keep_blank_values=True)
+            if key != "v"
+        ]
+        query.append(("v", digest))
+        url = urlunsplit(("", "", value.path, urlencode(query), value.fragment))
+        return (
+            match.group(1)
+            + match.group(2)
+            + html.escape(url, quote=True)
+            + match.group(2)
+        )
+
+    # Match only actual script/link opening tags, never resource-like prose.
+    def tag(match):
+        return re.sub(
+            r"(\b(?:src|href)\s*=\s*)([\"'])(.*?)\2",
+            replace,
+            match.group(0),
+            flags=re.I,
+        )
+
+    return re.sub(
+        r"<(?:script|link)\b[^>]*>", tag, raw.decode("utf-8"), flags=re.I
+    ).encode("utf-8")
 
 
 def accepts_gzip(value: str) -> bool:

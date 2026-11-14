@@ -3466,8 +3466,9 @@ class HandrawRequestHandler(BaseHTTPRequestHandler):
                     return
 
         if file_path == DEMO_DIR / "index.html":
+            from .static_assets import version_frontend_html
             raw_tpl = file_path.read_text(encoding="utf-8")
-            self._send_bytes(render_seo_portal_html(self.db, raw_tpl, origin, qs), "text/html; charset=utf-8", cache="no-cache")
+            self._send_bytes(version_frontend_html(render_seo_portal_html(self.db, raw_tpl, origin, qs), DEMO_DIR), "text/html; charset=utf-8", cache="no-cache")
             return
 
         ctype = mimetypes.guess_type(str(file_path))[0] or "text/html"
@@ -3482,7 +3483,11 @@ class HandrawRequestHandler(BaseHTTPRequestHandler):
             from .static_assets import file_representation
             self._send_public_representation(file_representation(file_path, self.headers.get("Accept-Encoding", "")), ctype, "public, max-age=3600" if q1("v") else "public, no-cache")
             return
-        self._send_bytes(file_path.read_bytes(), ctype, cache="no-cache")
+        payload = file_path.read_bytes()
+        if file_path.suffix.lower() == ".html":
+            from .static_assets import version_frontend_html
+            payload = version_frontend_html(payload, DEMO_DIR)
+        self._send_bytes(payload, ctype, cache="no-cache")
 
     def do_POST(self) -> None:
         self._dispatch_request(self._handle_post)

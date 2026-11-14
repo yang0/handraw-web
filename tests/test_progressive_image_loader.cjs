@@ -97,12 +97,12 @@ assert.ok(!mainBox.classList.contains("hw-preview-ready"));
 
 io.show([first]);
 assert.equal(previews.length,1);
-assert.equal(previews[0].src,"/images/sample.webp?w=48");
+assert.equal(previews[0].src,"/images/sample.webp?w=48&iv=webp-v2");
 assert.equal(fullRequests.length,1,"full image requests are not blocked on blur");
 assert.ok(!first.classList.contains("hw-img-ready"));
 previews[0].finish(48,32);
 assert.equal(mainBox.style.aspectRatio,"48 / 32","preview dimensions correct geometry before clear image");
-assert.equal(mainBox.style["--hw-preview-image"],'url("/images/sample.webp?w=48")');
+assert.equal(mainBox.style["--hw-preview-image"],'url("/images/sample.webp?w=48&iv=webp-v2")');
 assert.ok(mainBox.classList.contains("hw-preview-ready"));
 
 // A repeat card reuses the tiny preview while its sharp bitmap is pending.
